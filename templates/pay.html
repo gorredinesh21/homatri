@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Homaatri Secure Payment Portal</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #0b0f19;
+      --bg-card: #161f30;
+      --border-color: #22324f;
+      --text-primary: #f3f4f6;
+      --text-secondary: #9ca3af;
+      --accent: #ff6b35;
+      --success: #10b981;
+    }
+    
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    
+    body {
+      font-family: 'Outfit', 'Inter', sans-serif;
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      min-height: 100vh;
+      padding: 1rem;
+    }
+    
+    .checkout-card {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 12px;
+      padding: 2rem;
+      width: 100%;
+      max-width: 450px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+      text-align: center;
+      transition: all 0.3s ease;
+    }
+    
+    .brand-logo {
+      width: 50px;
+      height: 50px;
+      background: linear-gradient(135deg, var(--accent), #ff8c42);
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: 800;
+      font-size: 1.5rem;
+      margin: 0 auto 1rem auto;
+      box-shadow: 0 4px 10px rgba(255, 107, 53, 0.3);
+    }
+    
+    h2 {
+      font-size: 1.5rem;
+      margin-bottom: 0.5rem;
+    }
+    
+    .order-id {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      font-family: monospace;
+      margin-bottom: 1.5rem;
+      display: inline-block;
+      background-color: rgba(255, 255, 255, 0.05);
+      padding: 0.2rem 0.6rem;
+      border-radius: 4px;
+    }
+    
+    .price-box {
+      border: 1px solid var(--border-color);
+      background-color: rgba(0, 0, 0, 0.2);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 1.5rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    
+    .price-label {
+      font-weight: 600;
+      color: var(--text-secondary);
+    }
+    
+    .price-val {
+      font-size: 1.75rem;
+      font-weight: 800;
+      color: var(--accent);
+    }
+    
+    .details-list {
+      text-align: left;
+      margin-bottom: 2rem;
+      font-size: 0.9rem;
+    }
+    
+    .details-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 0.4rem 0;
+      border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
+    }
+    
+    .pay-btn {
+      width: 100%;
+      background-color: var(--accent);
+      color: white;
+      border: none;
+      padding: 1rem;
+      font-size: 1.1rem;
+      font-weight: 700;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background-color 0.2s, transform 0.1s;
+    }
+    
+    .pay-btn:hover {
+      background-color: #ff8c42;
+    }
+    
+    .pay-btn:active {
+      transform: scale(0.98);
+    }
+    
+    /* Success Screen */
+    .success-container {
+      display: none;
+      animation: fadeIn 0.4s ease forwards;
+    }
+    
+    .success-icon {
+      width: 60px;
+      height: 60px;
+      background-color: var(--success);
+      color: white;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 1.5rem auto;
+      font-size: 2.5rem;
+      box-shadow: 0 4px 15px rgba(16, 185, 129, 0.4);
+    }
+    
+    .success-msg {
+      font-size: 1.25rem;
+      font-weight: 700;
+      color: var(--success);
+      margin-bottom: 0.5rem;
+    }
+    
+    .success-sub {
+      font-size: 0.9rem;
+      color: var(--text-secondary);
+      margin-bottom: 2rem;
+    }
+    
+    .back-btn {
+      display: inline-block;
+      width: 100%;
+      background-color: transparent;
+      border: 1px solid var(--border-color);
+      color: var(--text-primary);
+      text-decoration: none;
+      padding: 0.8rem;
+      border-radius: 8px;
+      font-weight: 600;
+      transition: background-color 0.2s;
+    }
+    
+    .back-btn:hover {
+      background-color: rgba(255, 255, 255, 0.05);
+    }
+    
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(10px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="checkout-card" id="payment-box">
+    <div class="brand-logo">H</div>
+    <h2>Homaatri Kitchens</h2>
+    <span class="order-id">Order Ref: {{ order.id }}</span>
+    
+    <div class="price-box">
+      <span class="price-label">Amount Due:</span>
+      <span class="price-val">₹{{ order.amount }}</span>
+    </div>
+    
+    <div class="details-list">
+      <div class="details-item">
+        <span style="color: var(--text-secondary);">Items:</span>
+        <span style="font-weight:600;">
+          {% for item in order['items'] %}
+            {{ item.qty }}x {{ item.item }}{% if not loop.last %}, {% endif %}
+          {% endfor %}
+        </span>
+      </div>
+      <div class="details-item">
+        <span style="color: var(--text-secondary);">Delivery Address:</span>
+        <span style="font-weight:600;">{{ order.address }}</span>
+      </div>
+      <div class="details-item">
+        <span style="color: var(--text-secondary);">Delivery Time:</span>
+        <span style="font-weight:600;">{{ order.delivery_time }}</span>
+      </div>
+    </div>
+    
+    <button class="pay-btn" id="pay-button" onclick="submitPayment()">Secure Pay with UPI / Card</button>
+  </div>
+
+  <div class="checkout-card success-container" id="success-box">
+    <div class="success-icon">✓</div>
+    <div class="success-msg">Payment Confirmed!</div>
+    <div class="success-sub">A success webhook has been sent to the backend. You can close this tab and check your simulated WhatsApp screen.</div>
+    <a href="javascript:window.close();" class="back-btn">Close Page</a>
+  </div>
+
+  <script>
+    function submitPayment() {
+      const payBtn = document.getElementById('pay-button');
+      payBtn.disabled = true;
+      payBtn.textContent = 'Processing Transaction...';
+      
+      // Post to our simulated payment webhook
+      fetch('/webhook/payment', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          order_id: "{{ order.id }}"
+        })
+      })
+      .then(res => res.json())
+      .then(data => {
+        if (data.status === 'success') {
+          document.getElementById('payment-box').style.display = 'none';
+          document.getElementById('success-box').style.display = 'block';
+        } else {
+          alert('Payment Failed: ' + data.message);
+          payBtn.disabled = false;
+          payBtn.textContent = 'Secure Pay with UPI / Card';
+        }
+      })
+      .catch(err => {
+        console.error(err);
+        alert('Error connecting to backend payment webhook.');
+        payBtn.disabled = false;
+        payBtn.textContent = 'Secure Pay with UPI / Card';
+      });
+    }
+  </script>
+</body>
+</html>

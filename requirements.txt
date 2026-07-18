@@ -1,0 +1,8 @@
+fastapi
+uvicorn
+langchain
+langchain-huggingface
+pydantic
+jinja2
+httpx
+python-dotenv
