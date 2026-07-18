@@ -1,0 +1,1193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Homaatri System Design & Architecture Blueprint</title>
+  
+  <!-- Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=Inter:wght@400;500;600;700&family=Outfit:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- CSS -->
+  <link rel="stylesheet" href="css/style.css">
+  
+  <!-- Mermaid for Diagrams -->
+  <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+  <script>
+    mermaid.initialize({
+      startOnLoad: true,
+      theme: 'dark',
+      themeVariables: {
+        background: '#0f1624',
+        primaryColor: '#ff6b35',
+        primaryTextColor: '#f3f4f6',
+        lineColor: '#22324f',
+        nodeBorder: '#22324f',
+        actorBorder: '#22324f'
+      }
+    });
+  </script>
+</head>
+<body>
+
+  <!-- Mobile Header -->
+  <header class="mobile-header">
+    <div class="brand-container">
+      <div class="brand-logo">H</div>
+      <span class="brand-name">Homaatri Docs</span>
+    </div>
+    <button id="menu-toggle" class="menu-toggle-btn" aria-label="Toggle Menu">
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <line x1="4" y1="12" x2="20" y2="12"></line>
+        <line x1="4" y1="6" x2="20" y2="6"></line>
+        <line x1="4" y1="18" x2="20" y2="18"></line>
+      </svg>
+    </button>
+  </header>
+
+  <div class="app-container">
+    
+    <!-- Sidebar Navigation -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="brand-container">
+          <div class="brand-logo">H</div>
+          <span class="brand-name">Homaatri Docs</span>
+        </div>
+      </div>
+      
+      <div class="sidebar-search">
+        <div class="search-input-wrapper">
+          <svg class="search-icon" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+          <input type="text" id="doc-search" class="search-input" placeholder="Search documentation...">
+        </div>
+      </div>
+      
+      <nav class="sidebar-nav">
+        <!-- Group 1: General -->
+        <div class="nav-group">
+          <div class="nav-group-title">Overview</div>
+          <ul class="nav-list">
+            <li class="nav-item">
+              <a href="#overview" class="nav-link active">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"></path><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"></path></svg>
+                Project Overview
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="#system-flow" class="nav-link">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="16 18 22 12 16 6"></polyline><polyline points="8 6 2 12 8 18"></polyline></svg>
+                Architecture & Flows
+              </a>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Group 2: Workflows -->
+        <div class="nav-group">
+          <div class="nav-group-title">Stakeholder Workflows</div>
+          <ul class="nav-list">
+            <li class="nav-item">
+              <a href="#customer-workflow" class="nav-link">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                Customer Orders
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="#chef-workflow" class="nav-link">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 18H18V20H6V18Z"/><path d="M12 2C8.13 2 5 5.13 5 9C5 12.28 7.28 15.03 10.35 15.8C10.74 15.9 11 16.2 11 16.6V18H13V16.6C13 16.2 13.26 15.9 13.65 15.8C16.72 15.03 19 12.28 19 9C19 5.13 15.87 2 12 2Z"/></svg>
+                Chef Workflow
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="#driver-workflow" class="nav-link">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle><circle cx="18.5" cy="18.5" r="2.5"></circle></svg>
+                Driver Logistics
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="#admin-workflow" class="nav-link">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line><line x1="9" y1="9" x2="21" y2="9"></line><line x1="9" y1="15" x2="21" y2="15"></line></svg>
+                Admin Control Panel
+              </a>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Group 3: Tech Specifications -->
+        <div class="nav-group">
+          <div class="nav-group-title">Technical Deep Dives</div>
+          <ul class="nav-list">
+            <li class="nav-item">
+              <a href="#whatsapp-api" class="nav-link">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path></svg>
+                WhatsApp Cloud API
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="#backend-arch" class="nav-link">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+                Backend Architecture
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="#db-schema" class="nav-link">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"></ellipse><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"></path><path d="M3 12c0 1.66 4 3 9 3s9-1.34 9-3"></path></svg>
+                Database Schema
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="#ai-integration" class="nav-link">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"></rect><path d="M21 16V8a2 2 0 0 0-2-2h-5l-4-4H3a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2z"/><path d="M10 16v-6l4 3z"/></svg>
+                AI Parser Engine
+              </a>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Group 4: Operations -->
+        <div class="nav-group">
+          <div class="nav-group-title">Operations & DevOps</div>
+          <ul class="nav-list">
+            <li class="nav-item">
+              <a href="#hosting-infra" class="nav-link">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="20" rx="2" ry="2"></rect><path d="M6 6h12v4H6z"/><path d="M6 14h12v4H6z"/></svg>
+                Hosting & Hostinger VPS
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="#devops-security" class="nav-link">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 22 8.5 22 15.5 12 22 2 15.5 2 8.5 12 2"></polygon><line x1="12" y1="22" x2="12" y2="12.01"></line><polyline points="22 8.5 12 12.01 2 8.5"></polyline><polyline points="2 15.5 12 12.01 22 15.5"></polyline></svg>
+                DevOps & Security
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="#cost-scale" class="nav-link">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line></svg>
+                Scale & Interactive Cost
+              </a>
+            </li>
+            <li class="nav-item">
+              <a href="#roadmap" class="nav-link">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="3 11 22 2 13 21 11 13 3 11"></polygon></svg>
+                Implementation Roadmap
+              </a>
+            </li>
+          </ul>
+        </div>
+      </nav>
+      
+      <div class="sidebar-footer">
+        <span style="font-size: 0.75rem; color: var(--text-muted);">V1.0 - Production Design</span>
+        <button id="theme-toggle" class="theme-toggle-btn" title="Toggle Light/Dark Theme">
+          <!-- Moon Icon loaded dynamically -->
+        </button>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      
+      <!-- Section 1: Overview -->
+      <section id="overview" class="doc-section fade-in-section">
+        <h1>Homaatri System Design Blueprint</h1>
+        <p class="section-lead">A comprehensive, production-ready guide for building a WhatsApp-first, hyper-local home-kitchen food service linking customers, home chefs, and delivery drivers using an automated AI-driven backend.</p>
+        
+        <div class="alert alert-note">
+          <svg class="alert-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+          <div class="alert-content">
+            <p><strong>Operational Model:</strong> Housewives cook 2–3 extra meals during their regular family cooking window. Customers request meals via WhatsApp. Homaatri handles billing, allocation, delivery, and notifications. Housewives only cook and package.</p>
+          </div>
+        </div>
+
+        <h2>Stakeholder Ecosystem</h2>
+        <p>The platform coordinates four primary roles. To achieve zero friction, all daily operational communication is conducted exclusively via WhatsApp.</p>
+        
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-title">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle></svg>
+              1. Customer
+            </div>
+            <div class="card-content">
+              Orders meals using natural language text/voice or WhatsApp interactive features (Buttons, Catalogs, Flows). Completes payments via instant links.
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2C8.13 2 5 5.13 5 9C5 12.28 7.28 15.03 10.35 15.8C10.74 15.9 11 16.2 11 16.6V18H13V16.6C13 16.2 13.26 15.9 13.65 15.8C16.72 15.03 19 12.28 19 9C19 5.13 15.87 2 12 2Z"/></svg>
+              2. Housewife (Chef)
+            </div>
+            <div class="card-content">
+              Receives a consolidated recipe checklist (e.g. "Total: 5 Rotis, 2 Paneer Curry") before cooking windows. Signals cooking milestones using WhatsApp action buttons.
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="1" y="3" width="15" height="13"></rect><polygon points="16 8 20 8 23 11 23 16 16 16 16 8"></polygon><circle cx="5.5" cy="18.5" r="2.5"></circle></svg>
+              3. Delivery Driver
+            </div>
+            <div class="card-content">
+              Receives automated pickup routes, customer details, and delivery instructions. Updates order statuses ("Picked Up", "Delivered") via quick-reply buttons.
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"></rect></svg>
+              4. System Administrator
+            </div>
+            <div class="card-content">
+              Oversees orders, monitors driver routes, manages active chef capacity, edits menus, checks payout calculations, and processes manual exceptions.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 2: Architecture & Flows -->
+      <section id="system-flow" class="doc-section">
+        <h2>Architecture & System Flows</h2>
+        <p>The backend acts as an event-driven router. Below is the system flow depicting an order's lifecycle, from a user sending a message on WhatsApp to the dispatching worker.</p>
+        
+        <div class="diagram-container">
+          <div class="mermaid">
+            sequenceDiagram
+              autonumber
+              Customer->>Meta Cloud API: Send WhatsApp order request
+              Meta Cloud API->>Backend Webhook: HTTP POST (Secure payload)
+              Backend Webhook->>Redis/Database Queue: Push processing job
+              Backend Webhook-->>Meta Cloud API: HTTP 200 OK (Keep timeout low)
+              Queue Worker->>LLM API (Gemini/GPT): Parse order JSON & validate items
+              LLM API-->>Queue Worker: Structured JSON (Items, Address, Time)
+              Queue Worker->>Database: Insert Order & Transaction records
+              Queue Worker->>Payment Gateway: Generate link (e.g. Razorpay)
+              Queue Worker->>Customer: Send Payment link via WhatsApp message
+              Customer->>Payment Gateway: Complete transaction
+              Payment Gateway->>Backend Webhook: Payment Success Webhook
+              Backend Webhook->>Database: Set Order to "Confirmed"
+              Backend Webhook->>Chef: Notify order details or compile consolidated list
+          </div>
+        </div>
+
+        <div class="alert alert-tip">
+          <svg class="alert-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><path d="m9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+          <div class="alert-content">
+            <p><strong>Design Tip:</strong> Webhooks must return an immediate HTTP 200 to WhatsApp within 3 seconds to avoid delivery retries and duplicate runs. Offload the extraction logic (LLM processing and payment generation) to a background worker using a job queue.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 3: Customer Workflow -->
+      <section id="customer-workflow" class="doc-section">
+        <h2>Customer Workflow</h2>
+        <p>Customers are presented with a hybrid flow. They can interact by writing message prompts, or they can trigger structured interactive menus.</p>
+
+        <h3>1. Natural Language Ordering System</h3>
+        <p>When a customer types a message such as <em>"Send me three chapatis and dal by 8 PM"</em>, the backend processes it through a strict extraction pipeline:</p>
+        
+        <div class="diagram-container">
+          <div class="mermaid">
+            graph LR
+              RawMsg[WhatsApp Msg] --> Webhook[Verify & Receive]
+              Webhook --> Worker[Queue Worker]
+              Worker --> FetchMenu[Fetch Active Chef Menus]
+              FetchMenu --> LLM[LLM Parse & Match]
+              LLM --> Validation{Validate Schema & Items}
+              Validation -- Validation Success --> DB[Create Order & Pay Link]
+              Validation -- Validation Failed/Ambiguous --> AskClarify[Send WhatsApp clarifying menu/buttons]
+          </div>
+        </div>
+
+        <div class="alert alert-important">
+          <svg class="alert-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+          <div class="alert-content">
+            <p><strong>Ambiguity Handling:</strong> If the user inputs "Curry and Roti", the system fetches today's active menu items. If multiple curries are available (e.g. Paneer Curry and Dal Fry), the LLM flags the payload with an <code>is_ambiguous: true</code> state and lists matching item IDs. The backend interceptor responds with WhatsApp interactive quick-reply buttons allowing the customer to tap the correct item.</p>
+          </div>
+        </div>
+
+        <h3>2. Interactive Ordering Interface</h3>
+        <p>For a reliable experience, natural language is supplemented by WhatsApp Interactive Messages:</p>
+        <table>
+          <thead>
+            <tr>
+              <th>WhatsApp Feature</th>
+              <th>Usage in Homaatri</th>
+              <th>Production Value</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>WhatsApp Lists (interactive/list)</strong></td>
+              <td>Displaying the current menu options (Up to 10 choices).</td>
+              <td>Prevents typos. Users click "Select Item" to view prices.</td>
+            </tr>
+            <tr>
+              <td><strong>Quick Reply Buttons</strong></td>
+              <td>Confirming order summary, choosing pickup windows.</td>
+              <td>High response speed. Limit of 3 buttons per message.</td>
+            </tr>
+            <tr>
+              <td><strong>WhatsApp Flows</strong></td>
+              <td>Multi-step form inputs inside WhatsApp (Address + Delivery time).</td>
+              <td>Eliminates external web page loads, native form UI.</td>
+            </tr>
+            <tr>
+              <td><strong>WhatsApp Catalogs</strong></td>
+              <td>Browsing standard dish offerings with prices and images.</td>
+              <td>Excellent searchability, native cart experience.</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Section 4: Chef Workflow -->
+      <section id="chef-workflow" class="doc-section">
+        <h2>Chef (Housewife) Workflow</h2>
+        <p>The housewife is cooking at home, likely busy and distracted. Regular notifications for individual orders generate confusion. The system is designed to bundle tasks.</p>
+
+        <h3>1. Consolidated Preparation Summary</h3>
+        <p>Instead of dispatching notifications for every individual order, the scheduler executes a consolidation job at the cutoff threshold of each ordering window (e.g. 11:30 AM for lunch, 6:30 PM for dinner).</p>
+        
+        <div class="diagram-container">
+          <div class="mermaid">
+            graph TD
+              O1[Order 1: 2 Chapatis, 1 Dal] --> Job[Consolidation Engine]
+              O2[Order 2: 3 Chapatis, 1 Paneer] --> Job
+              O3[Order 3: 1 Chapati, 1 Dal] --> Job
+              Job --> Agg[Aggregate: 6 Chapatis, 2 Dals, 1 Paneer]
+              Agg --> WhatsappSender[Format & Dispatch WhatsApp Template]
+              WhatsappSender --> ChefPhone[Housewife Phone (Interactive Checklist)]
+          </div>
+        </div>
+
+        <h3>2. Real-Time Status Updates</h3>
+        <p>The Chef interacts with the system using button triggers configured on the WhatsApp template notification. Tapping these buttons updates the server state immediately:</p>
+        <ul>
+          <li><strong>[Start Prep]</strong>: Transition chef status to <code>PREPARING</code>, triggers customer alert: <em>"Chef has started cooking your food!"</em>.</li>
+          <li><strong>[Ready for Pickup]</strong>: Transitions status to <code>READY_FOR_PICKUP</code>. The backend immediately computes routing and alerts local delivery drivers.</li>
+          <li><strong>[Request Help]</strong>: Flags the Admin Dashboard with an alert (e.g., ran out of ingredients, gas issue).</li>
+        </ul>
+      </section>
+
+      <!-- Section 5: Driver Logistics -->
+      <section id="driver-workflow" class="doc-section">
+        <h2>Delivery Driver Workflow & Routing</h2>
+        <p>Delivery drivers operate via WhatsApp templates containing deep links to Google Maps coordinates, client contact details, and pickup cards.</p>
+
+        <h3>1. Driver Interaction Flow</h3>
+        <p>A driver receives a WhatsApp dispatch message with interactive buttons:</p>
+        <div class="diagram-container">
+          <div class="mermaid">
+            stateDiagram-v2
+              [*] --> Dispatched: Server assigns route
+              Dispatched --> PickedUp: Driver clicks "Picked Up"
+              PickedUp --> Arrived: Driver clicks "Reached Customer"
+              Arrived --> Delivered: Driver clicks "Delivered"
+              Arrived --> Failed: Driver clicks "Delivery Failed" (Triggers Admin Alert)
+              Delivered --> [*]
+              Failed --> [*]
+          </div>
+        </div>
+
+        <h3>2. Route Optimization Architecture</h3>
+        <p>At Homaatri's operating scale (30–100 orders/day, max 500), complex real-time routing engines (like OSRM clusters or VRP heuristics) are unnecessary overheads. We design a hybrid routing layer:</p>
+        
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-title">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="1 6 1 22 8 18 15 22 22 18 22 2 15 6 8 2 1 6"></polygon><line x1="8" y1="2" x2="8" y2="18"></line><line x1="15" y1="6" x2="15" y2="22"></line></svg>
+              Backend Allocation Engine
+            </div>
+            <div class="card-content">
+              Group orders geographically by customer zip-code and proximity radius. Route matching uses a simple <strong>Greedy TSP (Traveling Salesperson Problem)</strong> script run inside the Node.js background worker, fetching distance matrices from Google Maps API.
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="10" r="3"></circle><path d="M12 21.7C17.3 17 20 13 20 10a8 8 0 1 0-16 0c0 3 2.7 7 8 11.7z"></path></svg>
+              Google Maps API Integration
+            </div>
+            <div class="card-content">
+              Use <strong>Distance Matrix API</strong> once during the driver assignment window (batch-calculated). In driver dispatch messages, format a Google Maps Multi-stop URL (e.g., <code>https://www.google.com/maps/dir/Chef+Loc/Cust1+Loc/Cust2+Loc</code>) so the driver can run native navigation.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 6: Admin Dashboard -->
+      <section id="admin-workflow" class="doc-section">
+        <h2>Admin Dashboard</h2>
+        <p>A reactive web interface tailored for system administrators. While clients and chefs operate in WhatsApp, the admin relies on a visual dashboard to manage exceptions.</p>
+        
+        <div class="grid-3">
+          <div class="card">
+            <div class="card-title">Order Dispatch Control</div>
+            <div class="card-content">Real-time status board (Kanban view) showing orders across: Pending Payment, Confirmed, Cooking, Ready for Pickup, In-Transit, and Delivered.</div>
+          </div>
+          <div class="card">
+            <div class="card-title">Chef & Kitchen Tracker</div>
+            <div class="card-content">Active capacity indicators, menu configurations, sanitation checks log, and total daily earnings tracking for automated payouts.</div>
+          </div>
+          <div class="card">
+            <div class="card-title">Driver Fleet Live Map</div>
+            <div class="card-content">Shows last known locations of drivers (updated when status changes are pushed), active routes, and pickup allocations.</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 7: WhatsApp Business API Research -->
+      <section id="whatsapp-api" class="doc-section">
+        <h2>WhatsApp Business API Deep Dive</h2>
+        <p>To deploy a production-grade WhatsApp platform, we must utilize the Meta WhatsApp Business Cloud API. Standard consumer accounts or Web-automation scraping scripts are unstable, violate Meta TOS, and will result in sudden bans.</p>
+
+        <h3>1. Direct Cloud API vs Aggregators</h3>
+        <p>We analyze the optimal connection method for Homaatri's scale:</p>
+        <table>
+          <thead>
+            <tr>
+              <th>Evaluation Parameter</th>
+              <th>Meta Cloud API (Direct) (Recommended)</th>
+              <th>Twilio</th>
+              <th>360dialog</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Setup Fees</strong></td>
+              <td>$0 (Free)</td>
+              <td>$0</td>
+              <td>$5 - $15 / month subscription</td>
+            </tr>
+            <tr>
+              <td><strong>Cost Markup</strong></td>
+              <td>None (Direct Meta network cost)</td>
+              <td>+$0.005 per message surcharge</td>
+              <td>None (Direct Meta cost)</td>
+            </tr>
+            <tr>
+              <td><strong>Feature Parity</strong></td>
+              <td>Instant. Supports Flows, Catalogs, Lists.</td>
+              <td>Delayed support for interactive flows.</td>
+              <td>High parity. Supports most APIs.</td>
+            </tr>
+            <tr>
+              <td><strong>Reliability & Latency</strong></td>
+              <td>Lowest (Direct route to Meta)</td>
+              <td>High (Routed through Twilio gateways)</td>
+              <td>High</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>2. Step-by-Step Onboarding Process</h3>
+        <ol>
+          <li><strong>Meta Developer Portal Setup:</strong> Register an application as a "Business App" at <a href="https://developers.facebook.com/" target="_blank">developers.facebook.com</a>. Add the "WhatsApp" product.</li>
+          <li><strong>Meta Business Manager:</strong> Create or link a Meta Business Suite account. Verify your business registration details (requires tax certificate or utility bills) to unlock high message volume tiers.</li>
+          <li><strong>Phone Number Linking:</strong> Add a dedicated phone number. The number must be capable of receiving a verification code via SMS or voice, and must NOT be linked to a standard user WhatsApp application.</li>
+          <li><strong>Generate System Token:</strong> Go to Business Settings -> System Users. Generate a permanent <strong>System Access Token</strong> with <code>whatsapp_business_messaging</code> and <code>whatsapp_business_management</code> scopes.</li>
+          <li><strong>Webhook Config:</strong> Register a webhook endpoint pointing to your backend (HTTPS). Subscribe to the <code>messages</code> field. Verify using a secret verification token.</li>
+        </ol>
+
+        <div class="alert alert-warning">
+          <svg class="alert-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+          <div class="alert-content">
+            <p><strong>Meta Policy & Sandbox Pitfalls:</strong> In Sandbox mode, you can only message verified tester numbers. Sandbox templates are approved automatically. In Production, you must submit templates for automated classification review by Meta. Reject rates increase if templates sound overly promotional under utility categories.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 8: Backend Architecture -->
+      <section id="backend-arch" class="doc-section">
+        <h2>Backend Architecture & Stack</h2>
+        <p>The backend requires robustness and low response times. We select <strong>Node.js (TypeScript) + Express</strong> or <strong>Python (FastAPI)</strong> running on Docker, using <strong>PostgreSQL</strong> for relational data and a lightweight queue for job buffering.</p>
+        
+        <div class="diagram-container">
+          <div class="mermaid">
+            graph TD
+              Internet[WhatsApp / Web Client] --> Nginx[Nginx Reverse Proxy & SSL]
+              Nginx --> API[Node.js / Express API Service]
+              API --> DB[(PostgreSQL Database)]
+              API --> Queue[BullMQ Queue Manager]
+              Queue --> Worker[Background Worker Process]
+              Worker --> DB
+              Worker --> LLM[LLM API Endpoint]
+              Worker --> WABA[Meta WhatsApp Cloud API]
+          </div>
+        </div>
+
+        <h3>System Core Components</h3>
+        <ul>
+          <li><strong>Express API:</strong> Lightweight HTTP server. Webhook path <code>/webhooks/whatsapp</code> acts as a high-speed ingestion sink.</li>
+          <li><strong>BullMQ Queue:</strong> Queue library backed by PostgreSQL or a small Redis container. Captures raw WhatsApp message payloads. Protects backend from spikes during peak lunch/dinner ordering hours.</li>
+          <li><strong>Cron Scheduler:</strong> Manages chef reminders (e.g. at 5:00 PM: <em>"Confirm menu for dinner"</em>) and driver allocation routines.</li>
+          <li><strong>Error Resilience:</strong> Implements Exponential Backoff retry schemes with Jitter on LLM API and Payment Gateway calls.</li>
+        </ul>
+      </section>
+
+      <!-- Section 9: Database Schema -->
+      <section id="db-schema" class="doc-section">
+        <h2>Database Schema Design</h2>
+        <p>We use a relational structure (PostgreSQL) to ensure clean entity states and transactional integrity for order tallies, payments, and driver dispatch states.</p>
+
+        <div class="tabs-container">
+          <div class="tabs-header">
+            <button class="tab-btn active" data-tab="erd">ER Diagram</button>
+            <button class="tab-btn" data-tab="sql">DDL SQL Schema</button>
+          </div>
+          <div class="tabs-content">
+            <div class="tab-pane active" data-pane="erd">
+              <div class="diagram-container">
+                <div class="mermaid">
+                  erDiagram
+                    USERS ||--o| CUSTOMERS : "is_a"
+                    USERS ||--o| CHEFS : "is_a"
+                    USERS ||--o| DRIVERS : "is_a"
+                    CHEFS ||--o| MENUS : "manages"
+                    MENUS ||--o{ MENU_ITEMS : "contains"
+                    CUSTOMERS ||--o{ ORDERS : "places"
+                    ORDERS ||--o{ ORDER_ITEMS : "includes"
+                    MENU_ITEMS ||--o{ ORDER_ITEMS : "referenced_in"
+                    ORDERS ||--o| PAYMENTS : "reconciles"
+                    ORDERS ||--o| DELIVERIES : "routed_via"
+                    DRIVERS ||--o{ DELIVERIES : "executes"
+                    ORDERS ||--o{ STATUS_HISTORY : "tracks"
+                </div>
+              </div>
+            </div>
+            <div class="tab-pane" data-pane="sql">
+<pre><code>-- Homaatri Production PostgreSQL DDL Schema
+CREATE TYPE user_role AS ENUM ('ADMIN', 'CUSTOMER', 'CHEF', 'DRIVER');
+CREATE TYPE order_status AS ENUM ('PENDING_PAYMENT', 'CONFIRMED', 'PREPARING', 'READY_FOR_PICKUP', 'IN_TRANSIT', 'DELIVERED', 'FAILED');
+CREATE TYPE payment_status AS ENUM ('PENDING', 'COMPLETED', 'REFUNDED', 'FAILED');
+
+CREATE TABLE users (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    phone_number VARCHAR(15) UNIQUE NOT NULL,
+    full_name VARCHAR(100) NOT NULL,
+    role user_role NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE customers (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    default_delivery_address TEXT,
+    gps_coordinates POINT,
+    special_delivery_instructions TEXT
+);
+
+CREATE TABLE chefs (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    kitchen_address TEXT NOT NULL,
+    gps_coordinates POINT NOT NULL,
+    kitchen_license_number VARCHAR(50),
+    is_active BOOLEAN DEFAULT TRUE,
+    max_daily_capacity INTEGER DEFAULT 20
+);
+
+CREATE TABLE drivers (
+    user_id UUID PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+    vehicle_type VARCHAR(30) NOT NULL,
+    license_plate VARCHAR(20) UNIQUE NOT NULL,
+    is_available BOOLEAN DEFAULT TRUE,
+    current_gps_coordinates POINT
+);
+
+CREATE TABLE menus (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    chef_id UUID NOT NULL REFERENCES chefs(user_id) ON DELETE CASCADE,
+    menu_date DATE NOT NULL,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(chef_id, menu_date)
+);
+
+CREATE TABLE menu_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    menu_id UUID NOT NULL REFERENCES menus(id) ON DELETE CASCADE,
+    name VARCHAR(100) NOT NULL,
+    description TEXT,
+    price DECIMAL(10,2) NOT NULL,
+    max_qty_available INTEGER NOT NULL,
+    qty_sold INTEGER DEFAULT 0
+);
+
+CREATE TABLE orders (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    customer_id UUID NOT NULL REFERENCES customers(user_id),
+    chef_id UUID NOT NULL REFERENCES chefs(user_id),
+    status order_status NOT NULL DEFAULT 'PENDING_PAYMENT',
+    delivery_time_window VARCHAR(50) NOT NULL,
+    delivery_address TEXT NOT NULL,
+    gps_coordinates POINT,
+    raw_whatsapp_payload JSONB,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE order_items (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    menu_item_id UUID NOT NULL REFERENCES menu_items(id),
+    quantity INTEGER NOT NULL,
+    unit_price DECIMAL(10,2) NOT NULL
+);
+
+CREATE TABLE payments (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id UUID UNIQUE NOT NULL REFERENCES orders(id),
+    gateway_reference VARCHAR(100) UNIQUE,
+    amount DECIMAL(10,2) NOT NULL,
+    status payment_status NOT NULL DEFAULT 'PENDING',
+    payment_method VARCHAR(30),
+    completed_at TIMESTAMP WITH TIME ZONE
+);
+
+CREATE TABLE deliveries (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id UUID UNIQUE NOT NULL REFERENCES orders(id),
+    driver_id UUID REFERENCES drivers(user_id),
+    assigned_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    picked_up_at TIMESTAMP WITH TIME ZONE,
+    delivered_at TIMESTAMP WITH TIME ZONE,
+    route_sequence INTEGER
+);
+
+CREATE TABLE status_history (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    order_id UUID NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+    status order_status NOT NULL,
+    changed_by UUID REFERENCES users(id),
+    changed_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Optimization Indexes
+CREATE INDEX idx_users_phone ON users(phone_number);
+CREATE INDEX idx_menus_date ON menus(menu_date);
+CREATE INDEX idx_orders_status ON orders(status);
+CREATE INDEX idx_orders_chef_status ON orders(chef_id, status);
+CREATE INDEX idx_deliveries_driver ON deliveries(driver_id);</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 10: AI & LLM Engine -->
+      <section id="ai-integration" class="doc-section">
+        <h2>AI / LLM Parsing Engine</h2>
+        <p>The core innovation is parsing unstructured customer messages into database-ready structures. We compare the leading models for this tasks:</p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Model</th>
+              <th>Input Cost / 1M</th>
+              <th>Output Cost / 1M</th>
+              <th>Avg Latency</th>
+              <th>Structured Format Support</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Gemini 1.5 Flash (Recommended)</strong></td>
+              <td>$0.075</td>
+              <td>$0.30</td>
+              <td>~0.8s</td>
+              <td>Excellent (Native JSON Schema output)</td>
+            </tr>
+            <tr>
+              <td><strong>GPT-4o-mini</strong></td>
+              <td>$0.15</td>
+              <td>$0.60</td>
+              <td>~1.1s</td>
+              <td>Excellent (Structured Outputs API)</td>
+            </tr>
+            <tr>
+              <td><strong>Claude 3.5 Sonnet</strong></td>
+              <td>$3.00</td>
+              <td>$15.00</td>
+              <td>~1.8s</td>
+              <td>Good (Function calling schemas)</td>
+            </tr>
+            <tr>
+              <td><strong>Hosted Llama 3 (Groq API)</strong></td>
+              <td>$0.05</td>
+              <td>$0.08</td>
+              <td>~0.4s</td>
+              <td>Moderate (Requires prompt enforcement)</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <p>Gemini 1.5 Flash is highly recommended due to its low price, native JSON schema mode, and latency which is crucial for real-time chat interactions.</p>
+
+        <h3>Structured Order Extraction Code</h3>
+        <p>Below is a production-ready Python/FastAPI implementation parsing WhatsApp messages to a validated JSON structure:</p>
+
+        <div class="tabs-container">
+          <div class="tabs-header">
+            <button class="tab-btn active" data-tab="py-schema">Python Schema & Query</button>
+            <button class="tab-btn" data-tab="js-webhook">Express Webhook Endpoint</button>
+          </div>
+          <div class="tabs-content">
+            <div class="tab-pane active" data-pane="py-schema">
+<pre><code>from typing import List, Optional
+from pydantic import BaseModel, Field
+import google.generativeai as genai
+import json
+
+# Define the target structure
+class OrderItem(BaseModel):
+    item_name: str = Field(description="Name of the food item, e.g. Roti, Chapati, Dal")
+    quantity: int = Field(description="Number of portions requested")
+    special_instructions: Optional[str] = Field(None, description="E.g. No spicy, extra ghee")
+
+class StructuredOrder(BaseModel):
+    items: List[OrderItem]
+    delivery_time: Optional[str] = Field(None, description="Time mentioned for delivery, e.g., 8:00 PM")
+    is_ambiguous: bool = Field(description="True if request is unclear or menu items don't match options")
+    ambiguity_reason: Optional[str] = Field(None, description="Reason why the prompt is ambiguous")
+
+def parse_order_text(user_message: str, active_menu_items: List[str]) -> StructuredOrder:
+    genai.configure(api_key="GEMINI_API_KEY")
+    
+    prompt = f"""
+    You are the order parser for Homaatri Kitchens.
+    Extract the order details from the user's chat message.
+    Cross reference food items with this list of active menu items for today: {active_menu_items}.
+    If the user requests something not on the active menu, mark is_ambiguous as True.
+
+    User Message: "{user_message}"
+    """
+    
+    model = genai.GenerativeModel('gemini-1.5-flash')
+    
+    # Force structured output using Pydantic schema
+    response = model.generate_content(
+        prompt,
+        generation_config=genai.GenerationConfig(
+            response_mime_type="application/json",
+            response_schema=StructuredOrder,
+            temperature=0.1
+        )
+    )
+    
+    return StructuredOrder.model_validate_json(response.text)</code></pre>
+            </div>
+            <div class="tab-pane" data-pane="js-webhook">
+<pre><code>// Node.js Express Webhook Endpoint for WhatsApp Cloud API
+const express = require('express');
+const crypto = require('crypto');
+const app = express();
+app.use(express.json());
+
+const APP_SECRET = process.env.META_APP_SECRET;
+
+// Webhook Verification (WhatsApp Configuration handshake)
+app.get('/webhook', (req, res) => {
+    const mode = req.query['hub.mode'];
+    const token = req.query['hub.verify_token'];
+    const challenge = req.query['hub.challenge'];
+
+    if (mode && token) {
+        if (mode === 'subscribe' && token === process.env.WEBHOOK_VERIFY_TOKEN) {
+            console.log('Webhook Verified!');
+            return res.status(200).send(challenge);
+        }
+        return res.sendStatus(403);
+    }
+});
+
+// Post webhook event handler
+app.post('/webhook', (req, res) => {
+    // 1. Signature Verification for security
+    const signature = req.headers['x-hub-signature-256'];
+    if (!signature) return res.sendStatus(401);
+
+    const hmac = crypto.createHmac('sha256', APP_SECRET);
+    const digest = 'sha256=' + hmac.update(JSON.stringify(req.body)).digest('hex');
+    
+    if (signature !== digest) {
+        console.warn('Invalid signature detected');
+        return res.sendStatus(401);
+    }
+
+    // 2. Acknowledge immediately to avoid Meta message retries
+    res.status(200).send('EVENT_RECEIVED');
+
+    // 3. Offload work to Queue worker so we don't block Express thread
+    const changes = req.body.entry?.[0]?.changes?.[0];
+    if (changes && changes.field === 'messages') {
+        const messageEvent = changes.value?.messages?.[0];
+        if (messageEvent) {
+            orderQueue.add('process-whatsapp-msg', { messageEvent });
+        }
+    }
+});</code></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 11: Hosting & Infrastructure -->
+      <section id="hosting-infra" class="doc-section">
+        <h2>Hosting & Infrastructure</h2>
+        <p>For a startup handling 30 to 100 orders per day (max 500), hosting costs and maintenance overhead must be kept as low as possible. We analyze the available cloud setups:</p>
+        
+        <table>
+          <thead>
+            <tr>
+              <th>Hosting Platform</th>
+              <th>Base Monthly Cost</th>
+              <th>Ease of Deploy</th>
+              <th>Database Options</th>
+              <th>Operational Verdict</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Hostinger VPS (Recommended)</strong></td>
+              <td>$5.99 - $9.99</td>
+              <td>Moderate (Requires SSH, Docker config)</td>
+              <td>Self-hosted Postgres container ($0)</td>
+              <td><strong>Best Choice:</strong> Matches existing account, lowest cost.</td>
+            </tr>
+            <tr>
+              <td><strong>DigitalOcean</strong></td>
+              <td>$6.00 - $12.00</td>
+              <td>Moderate</td>
+              <td>Self-hosted or Managed (+$15/m)</td>
+              <td>Good, slightly cleaner API than Hostinger.</td>
+            </tr>
+            <tr>
+              <td><strong>Railway / Render</strong></td>
+              <td>$15.00 - $30.00</td>
+              <td>Very Easy (Git Push deploy)</td>
+              <td>Managed Cloud Database (+$7-15/m)</td>
+              <td>Excellent for rapid prototypes, expensive at scale.</td>
+            </tr>
+            <tr>
+              <td><strong>AWS (ECS/RDS/ALB)</strong></td>
+              <td>$75.00 - $150.00</td>
+              <td>Complex (Infrastructure as Code)</td>
+              <td>Managed RDS ($25/m)</td>
+              <td>Overkill. AWS fees exceed developer time costs.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Hostinger Linux VPS Deployment Strategy</h3>
+        <p>Deployment on Hostinger uses a <strong>KVM 2 Linux VPS</strong> (Ubuntu 24.04). All backend components run inside isolated Docker containers managed by Docker Compose. Nginx acts as our secure gateway.</p>
+        
+        <div class="diagram-container">
+          <div class="mermaid">
+            graph LR
+              UserMsg[Client Message] -- HTTPS Port 443 --> Firewall[VPS Firewall UFW]
+              Firewall --> Nginx[Nginx Reverse Proxy]
+              Nginx -- Certbot SSL Certificates --> NodeAPI[NodeJS Docker Container]
+              NodeAPI --> DBContainer[Postgres Docker Container]
+              NodeAPI --> WorkerContainer[Worker Docker Container]
+          </div>
+        </div>
+
+        <div class="alert alert-tip">
+          <svg class="alert-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polyline points="12 6 12 12 16 14"></polyline></svg>
+          <div class="alert-content">
+            <p><strong>Auto Backups:</strong> Configure a cron job running daily on the host VPS. Execute <code>docker exec -t postgres-db pg_dump -U postgres dbname</code> and stream the output directly to a remote private S3 bucket or Google Drive folder using <code>rclone</code>. This safeguards customer records at zero additional cost.</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 12: DevOps & Security -->
+      <section id="devops-security" class="doc-section">
+        <h2>DevOps & Security Blueprint</h2>
+        <p>A production environment requires containerization, SSL encryption, rate limiting, and an automated delivery process. Below are the configurations for our environment:</p>
+
+        <div class="tabs-container">
+          <div class="tabs-header">
+            <button class="tab-btn active" data-tab="docker-compose">docker-compose.yml</button>
+            <button class="tab-btn" data-tab="dockerfile">Dockerfile</button>
+            <button class="tab-btn" data-tab="nginx-conf">nginx.conf</button>
+            <button class="tab-btn" data-tab="github-ci">github-actions.yml</button>
+          </div>
+          <div class="tabs-content">
+            <!-- Pane 1: Compose -->
+            <div class="tab-pane active" data-pane="docker-compose">
+<pre><code>version: '3.8'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: homaatri-api
+    restart: always
+    environment:
+      - PORT=3000
+      - DATABASE_URL=postgresql://db_user:db_pass@db:5432/homaatri_db
+      - META_ACCESS_TOKEN=${META_ACCESS_TOKEN}
+      - GEMINI_API_KEY=${GEMINI_API_KEY}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - db
+
+  db:
+    image: postgres:16-alpine
+    container_name: homaatri-db
+    restart: always
+    environment:
+      - POSTGRES_USER=db_user
+      - POSTGRES_PASSWORD=db_pass
+      - POSTGRES_DB=homaatri_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+volumes:
+  postgres_data:</code></pre>
+            </div>
+            <!-- Pane 2: Dockerfile -->
+            <div class="tab-pane" data-pane="dockerfile">
+<pre><code>FROM node:20-alpine AS builder
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npm run build
+
+FROM node:20-alpine AS runner
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci --only=production
+COPY --from=builder /app/dist ./dist
+EXPOSE 3000
+CMD ["node", "dist/index.js"]</code></pre>
+            </div>
+            <!-- Pane 3: Nginx -->
+            <div class="tab-pane" data-pane="nginx-conf">
+<pre><code># Nginx config on VPS (/etc/nginx/sites-available/homaatri)
+server {
+    listen 80;
+    server_name api.homaatri.com;
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name api.homaatri.com;
+
+    ssl_certificate /etc/letsencrypt/live/api.homaatri.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/api.homaatri.com/privkey.pem;
+    
+    # Rate Limiting configuration
+    limit_req_zone $binary_remote_addr zone=api_limit:10m rate=15r/s;
+    limit_req zone=api_limit burst=20 nodelay;
+
+    location / {
+        proxy_pass http://localhost:3000;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection 'upgrade';
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}</code></pre>
+            </div>
+            <!-- Pane 4: GitHub Action -->
+            <div class="tab-pane" data-pane="github-ci">
+<pre><code>name: Deploy to Hostinger VPS
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOSTINGER_VPS_IP }}
+          username: root
+          key: ${{ secrets.HOSTINGER_SSH_PRIVATE_KEY }}
+          script: |
+            cd /opt/homaatri-backend
+            git pull origin main
+            docker compose down
+            docker compose up -d --build
+            echo "Deployment Completed Successfully!"</code></pre>
+            </div>
+          </div>
+        </div>
+
+        <h3>Security Framework Guidelines</h3>
+        <ul>
+          <li><strong>Webhook Integrity:</strong> Rejects all payloads that lack or fail the <code>X-Hub-Signature-256</code> signature comparison.</li>
+          <li><strong>API Rate Limiting:</strong> Enforce restriction layers at Nginx (max 15 requests per second per IP) to prevent DDoS attacks targetting our webhooks endpoint.</li>
+          <li><strong>Database Port Lockdown:</strong> Block public access to PostgreSQL Port 5432 using UFW firewall rules on the host VPS. Allow connections strictly from localhost.</li>
+        </ul>
+      </section>
+
+      <!-- Section 13: Scale & Cost Optimization -->
+      <section id="cost-scale" class="doc-section">
+        <h2>Scale & Interactive Cost Analysis</h2>
+        <p>Building for Homaatri's scale means ignoring complex enterprise architectural paradigms. We avoid over-engineering by using the simplest system design possible.</p>
+        
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-title">What to Avoid (Over-engineered)</div>
+            <div class="card-content">
+              <ul>
+                <li>❌ <strong>Kubernetes (K8s):</strong> Unnecessary server resources, complex networking, and maintenance fees.</li>
+                <li>❌ <strong>Apache Kafka:</strong> Massively overkill for less than 1,000 requests/day. Simple DB queue is sufficient.</li>
+                <li>❌ <strong>Microservices:</strong> Split codebases add network call latency, debugging overhead, and hosting costs. Keep a single backend service.</li>
+              </ul>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-title">What to Use (Production-ready)</div>
+            <div class="card-content">
+              <ul>
+                <li>✅ <strong>Monolithic Backend:</strong> Simple deployments, rapid coding speed, sharing types easily.</li>
+                <li>✅ <strong>Docker Compose:</strong> Single command deployment, handles restart policies out-of-the-box.</li>
+                <li>✅ <strong>Dockerized PostgreSQL Queue:</strong> Eliminates Redis if resources are constrained. Handles retries safely.</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <!-- Interactive Calculator Box -->
+        <div class="calculator-box">
+          <h3 style="margin-top:0;">Interactive Operational Cost Estimator</h3>
+          <p style="font-size:0.9rem; margin-bottom:1.5rem;">Adjust parameters in real-time to compute the total monthly cost for running Homaatri.</p>
+          
+          <div class="calc-grid">
+            <div class="calc-inputs">
+              <div class="calc-group">
+                <label class="calc-label" for="orders-slider">
+                  Daily Order Volume
+                  <span id="orders-val" class="calc-val-display">50</span>
+                </label>
+                <input type="range" id="orders-slider" min="10" max="1000" step="10" value="50">
+              </div>
+              
+              <div class="calc-group">
+                <label class="calc-label" for="msgs-slider">
+                  Avg WhatsApp Chat Turns per Order
+                  <span id="msgs-val" class="calc-val-display">5</span>
+                </label>
+                <input type="range" id="msgs-slider" min="3" max="15" step="1" value="5">
+              </div>
+
+              <div class="calc-group">
+                <label class="calc-label" for="calc-llm">LLM Choice</label>
+                <select id="calc-llm" class="calc-select">
+                  <option value="gemini">Gemini 1.5 Flash (Recommended)</option>
+                  <option value="gpt4omini">GPT-4o-mini</option>
+                  <option value="claude">Claude 3.5 Sonnet</option>
+                  <option value="llama3">Llama 3 8B (Hosted Groq)</option>
+                </select>
+              </div>
+
+              <div class="calc-group">
+                <label class="calc-label" for="calc-infra">Infrastructure Strategy</label>
+                <select id="calc-infra" class="calc-select">
+                  <option value="hostinger">Hostinger VPS + Local Docker DB (Recommended)</option>
+                  <option value="paas">Railway / Render PaaS + Managed DB</option>
+                  <option value="aws">AWS (ECS Serverless Cluster + Managed RDS)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="calc-results">
+              <div>
+                <div class="calc-total-row">
+                  <span class="calc-total-label">Total Monthly Cost</span>
+                  <span id="calc-total" class="calc-total-val">$0.00</span>
+                </div>
+              </div>
+              <ul class="calc-breakdown">
+                <li class="calc-breakdown-item">
+                  <span>WhatsApp Business API Fee:</span>
+                  <span id="item-waba">$0.00</span>
+                </li>
+                <li class="calc-breakdown-item">
+                  <span>LLM Parsing Token Fee:</span>
+                  <span id="item-llm">$0.00</span>
+                </li>
+                <li class="calc-breakdown-item">
+                  <span>Server Hosting Fee:</span>
+                  <span id="item-host">$0.00</span>
+                </li>
+                <li class="calc-breakdown-item">
+                  <span>Database Managed Fee:</span>
+                  <span id="item-db">$0.00</span>
+                </li>
+                <li class="calc-breakdown-item">
+                  <span>SSL/Backup/DNS Overheads:</span>
+                  <span id="item-other">$0.00</span>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 14: Implementation Roadmap -->
+      <section id="roadmap" class="doc-section">
+        <h2>Implementation Roadmap</h2>
+        <p>A phased delivery schedule targeting risk reduction first. We prioritize building the WhatsApp API core integrations and test webhook latency before introducing AI models or administrative dashboard complexity.</p>
+        
+        <div class="timeline">
+          <div class="timeline-item timeline-left">
+            <div class="timeline-content">
+              <span class="timeline-badge">Phase 1: Weeks 1 - 2</span>
+              <h4 style="margin-top:0.25rem;">Meta Webhook Core</h4>
+              <p style="font-size:0.85rem; margin-bottom:0;">Onboard Meta developer account, register VPS domain, configure Nginx, write validation webhook, confirm end-to-end receipt of text alerts.</p>
+            </div>
+          </div>
+          <div class="timeline-item timeline-right">
+            <div class="timeline-content">
+              <span class="timeline-badge">Phase 2: Weeks 3 - 4</span>
+              <h4 style="margin-top:0.25rem;">AI Extraction & DDL</h4>
+              <p style="font-size:0.85rem; margin-bottom:0;">Deploy PostgreSQL on Docker, write Gemini API parsing engine, test structured JSON responses with raw conversation queries.</p>
+            </div>
+          </div>
+          <div class="timeline-item timeline-left">
+            <div class="timeline-content">
+              <span class="timeline-badge">Phase 3: Weeks 5 - 7</span>
+              <h4 style="margin-top:0.25rem;">Chef & Driver Flow</h4>
+              <p style="font-size:0.85rem; margin-bottom:0;">Design chef cutoff compilation scripts, dispatch text templates with buttons, implement basic GPS routing triggers for local drivers.</p>
+            </div>
+          </div>
+          <div class="timeline-item timeline-right">
+            <div class="timeline-content">
+              <span class="timeline-badge">Phase 4: Weeks 8 - 9</span>
+              <h4 style="margin-top:0.25rem;">Admin Panel & Gateway</h4>
+              <p style="font-size:0.85rem; margin-bottom:0;">Assemble reactive dashboard, implement payment gateway webhooks (Razorpay/Stripe), code automated payout logic for kitchens.</p>
+            </div>
+          </div>
+          <div class="timeline-item timeline-left">
+            <div class="timeline-content">
+              <span class="timeline-badge">Phase 5: Weeks 10 - 12</span>
+              <h4 style="margin-top:0.25rem;">UAT & Production Release</h4>
+              <p style="font-size:0.85rem; margin-bottom:0;">Verify fail-safes (ambiguity buttons, backup dumps), audit Nginx rate limit parameters, and go-live with initial 30 users.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script src="js/script.js"></script>
+</body>
+</html>
