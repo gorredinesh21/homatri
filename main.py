@@ -31,7 +31,12 @@ if os.path.exists(".env"):
                 k, v = line.strip().split("=", 1)
                 os.environ[k.strip()] = v.strip()
 
-HF_TOKEN = os.getenv("HF_TOKEN", "")
+part1 = os.getenv("HF_TOKEN_PART1", "")
+part2 = os.getenv("HF_TOKEN_PART2", "")
+HF_TOKEN = part1 + part2
+if not HF_TOKEN:
+    HF_TOKEN = os.getenv("HF_TOKEN", "")
+
 os.environ["HUGGINGFACEHUB_API_TOKEN"] = HF_TOKEN
 os.environ["HF_TOKEN"] = HF_TOKEN
 
