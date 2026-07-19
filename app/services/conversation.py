@@ -568,6 +568,20 @@ async def _run_staff_agent(
     async def tool_get_order() -> str:
         return context
 
+    async def tool_send_message_to_customer(message: str) -> str:
+        from app.models.entities import User
+        from sqlalchemy import select
+        cust = (
+            await session.execute(
+                select(User).where(User.id == order.customer_id)
+            )
+        ).scalar_one_or_none()
+        if not cust:
+            return "Customer account not found."
+        await wa.send_text(cust.phone, message)
+        await _remember(session, order, f"{user.role.value}_TO_CUSTOMER", message)
+        return f"Message sent to customer {cust.name} on WhatsApp: '{message}'"
+
     if user.role == UserRole.CHEF:
         tools = [
             Tool("start_cooking", "Mark that the chef has started cooking the order.",
@@ -578,6 +592,8 @@ async def _run_staff_agent(
                  {"type": "object", "properties": {}}, lambda: _wrap(_act_accept_food)),
             Tool("reject_food_change", "Reject the customer's pending food-change request.",
                  {"type": "object", "properties": {}}, lambda: _wrap(_act_reject_food)),
+            Tool("send_message_to_customer", "Send a message or question directly to the customer on WhatsApp (e.g. ask about food allergies, dietary restrictions, address confirmation).",
+                 {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]}, tool_send_message_to_customer),
             Tool("get_order", "Get the current order details.",
                  {"type": "object", "properties": {}}, tool_get_order, is_action=False),
         ]
@@ -590,6 +606,8 @@ async def _run_staff_agent(
                  {"type": "object", "properties": {}}, lambda: _wrap(_act_driver_delivered)),
             Tool("accept_delivery_change", "Accept the customer's pending delivery change.",
                  {"type": "object", "properties": {}}, lambda: _wrap(_act_accept_change)),
+            Tool("send_message_to_customer", "Send a message or question directly to the customer on WhatsApp (e.g. ask about food allergies, delivery timing).",
+                 {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]}, tool_send_message_to_customer),
             Tool("get_order", "Get the current order/delivery details.",
                  {"type": "object", "properties": {}}, tool_get_order, is_action=False),
         ]
@@ -599,10 +617,11 @@ async def _run_staff_agent(
     system = (
         f"{persona}\n{context}\n"
         + (f"{shared}\n" if shared else "")
-        + "\nUse a tool to update the order when the staff member says something "
-        "happened (e.g. cooking started, food ready, picked up, delivered, or "
-        "accepting a change). If they're just chatting or asking, reply briefly "
-        "WITHOUT calling a tool."
+        + "\nYou are Homaatri's 3-way mediator assistant. If the staff member asks to "
+        "communicate with or ask something to the customer (e.g. 'ask if they have any "
+        "allergies' or 'tell them I am 5 minutes away'), ALWAYS call the "
+        "send_message_to_customer tool. Do NOT output customer-facing text in your reply to "
+        "the staff member — use the tool so it reaches the customer's WhatsApp!"
     )
     result = await run_agent(system, text, tools)
     reply = result.text.strip() if result.text else ("Updated." if result.acted else "Okay.")
