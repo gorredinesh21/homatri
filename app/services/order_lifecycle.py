@@ -64,9 +64,11 @@ def generate_order_code() -> str:
 
 # ── Queries ──────────────────────────────────────────────────────────────────
 async def get_order_by_code(session: AsyncSession, code: str) -> Order | None:
+    code_clean = (code or "").strip().upper()
+    from sqlalchemy import func
     stmt = (
         select(Order)
-        .where(Order.code == code)
+        .where(func.upper(Order.code) == code_clean)
         .options(
             selectinload(Order.items),
             selectinload(Order.payment),

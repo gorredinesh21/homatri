@@ -97,8 +97,17 @@ async def sim_pay(code: str) -> dict:
     to our own ``/webhook/payment`` — same path real Razorpay would hit."""
     async with SessionLocal() as session:
         order = await lc.get_order_by_code(session, code)
-        if order is None or order.payment is None:
-            raise HTTPException(404, "order/payment not found")
+        if order is None:
+            raise HTTPException(404, "order not found")
+        if order.payment is None:
+            provider = get_payment_provider()
+            intent = await provider.create_payment(
+                order_code=order.code, amount=order.total, currency="INR"
+            )
+            from app.services.conversation import _new_payment_row
+            order.payment = _new_payment_row(order, intent)
+            await session.commit()
+            await session.refresh(order, ["payment"])
         provider_order_id = order.payment.provider_order_id
 
     payment_id = "pay_" + code.replace("-", "")
