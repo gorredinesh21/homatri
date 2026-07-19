@@ -30,14 +30,15 @@ This repository is a **production-ready platform build**. Everything is real —
                        └──────────────────────────────────────────────────┘
 ```
 
-**Stack:** FastAPI · SQLAlchemy 2.0 (async) + asyncpg · PostgreSQL 16 + **pgvector** · Alembic · Hugging Face Inference Router (Llama-3.1-8B primary / Qwen3-8B fallback, OpenAI-compatible) · Razorpay · Server-Sent Events · Docker Compose.
+**Stack:** FastAPI · SQLAlchemy 2.0 (async) + asyncpg · PostgreSQL 16 + **pgvector** · Alembic · **AWS Bedrock via LangChain** (`amazon.nova-lite-v1:0` primary / `amazon.nova-micro-v1:0` fallback) · **AWS Titan Embeddings** (`amazon.titan-embed-text-v2:0`, 384-dim normalized) · **FastMCP Server** (`app/mcp_server.py`) · Razorpay · Server-Sent Events · Docker Compose.
 
 ### Provider swap (the key design decision)
 | Concern | Demo default | Production | Switch |
 |---|---|---|---|
 | WhatsApp | `MockWhatsAppProvider` (Meta-faithful, in-process) | `MetaCloudProvider` (graph.facebook.com) | `WHATSAPP_PROVIDER=meta` |
 | Payments | `DemoGateway` (self-signed webhook) | `RazorpayGateway` (real orders + signatures) | `PAYMENT_PROVIDER=razorpay` |
-| LLM | HF Router (Llama-3.1-8B) | same, or `LLM_ENABLED=false` for deterministic offline parsing | env |
+| LLM | AWS Bedrock (`amazon.nova-lite-v1:0` via LangChain) | same, or `LLM_ENABLED=false` for deterministic offline parsing | `AWS_REGION` / `BEDROCK_MODEL_ID` env |
+| MCP | `FastMCP` Server (`app/mcp_server.py`) | Exposes Homaatri tools (`create_order`, `list_menu`, etc.) to LLMs | `python -m app.mcp_server` |
 
 Both mock providers produce and verify the **exact wire formats** of the real services (Meta `X-Hub-Signature-256` HMAC, interactive buttons/lists/location; Razorpay HMAC webhooks), so the production path is exercised end-to-end today. See [docs/whatsapp_cloud_api_reference.md](docs/whatsapp_cloud_api_reference.md).
 
