@@ -525,8 +525,8 @@ async def _run_customer_agent(
         "Never invent menu items or fake order codes/links. Keep replies WhatsApp-short. "
         "Do NOT write URLs yourself — official payment links are appended automatically."
     )
-    result = await run_agent(system, text, tools)
-    reply = result.text.strip() if result.text else ""
+    from app.services.llm import clean_llm_response
+    reply = clean_llm_response(result.text)
     if not reply:
         reply = "Done!" if result.acted else "How can I help with your order today?"
     
@@ -623,8 +623,8 @@ async def _run_staff_agent(
         "send_message_to_customer tool. Do NOT output customer-facing text in your reply to "
         "the staff member — use the tool so it reaches the customer's WhatsApp!"
     )
-    result = await run_agent(system, text, tools)
-    reply = result.text.strip() if result.text else ("Updated." if result.acted else "Okay.")
+    from app.services.llm import clean_llm_response
+    reply = clean_llm_response(result.text) if result.text else ("Updated." if result.acted else "Okay.")
     await wa.send_text(user.phone, reply)
     await _remember(session, order, user.role.value, text)
     await _remember(session, order, "ASSISTANT", reply)
@@ -839,18 +839,36 @@ async def _act_accept_food(session, wa, order: Order) -> None:
     menu = chef.menu_items if chef else []
     pending = [c for c in order.change_requests
                if c.status == ChangeStatus.PENDING and c.change_type == ChangeType.FOOD]
+    added_names = []
     for cr in pending:
         resolved = []
         for entry in cr.payload.get("add", []):
             mm = match_item(entry["name"], menu)
             if mm.matched:
-                resolved.append(ResolvedItem(menu_item=mm.menu_item, quantity=entry.get("qty", 1)))
+                qty = entry.get("qty", 1)
+                resolved.append(ResolvedItem(menu_item=mm.menu_item, quantity=qty))
+                added_names.append(f"{qty}x {mm.menu_item.name}")
         lc.add_food_items(order, resolved)
         cr.status = ChangeStatus.ACCEPTED
     await session.flush()
+
+    topup_text = ""
+    paid_amount = order.payment.amount if (order.payment and order.payment.amount) else 0.0
+    if order.total > paid_amount:
+        delta = order.total - paid_amount
+        pay = get_payment_provider()
+        intent = await pay.create_payment(
+            order_code=order.code, amount=delta, currency="INR"
+        )
+        if order.payment:
+            order.payment.provider_order_id = intent.provider_order_id
+        topup_link = _pay_link(order)
+        topup_text = f"\n\nTap to pay the additional balance of ₹{delta:g}: {topup_link}"
+
+    item_desc = ", ".join(added_names) if added_names else "items"
     await _notify_customer(
         session, wa, order,
-        f"👍 The chef accepted your change. Updated total: ₹{order.total:g}.",
+        f"👍 The chef accepted your addition ({item_desc}). Updated total: ₹{order.total:g}.{topup_text}",
     )
 
 

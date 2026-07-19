@@ -126,10 +126,7 @@ class LLMClient:
         content = resp.content
         if isinstance(content, list):
             content = " ".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content])
-        content = str(content).strip()
-        if "</think>" in content:
-            content = content.split("</think>", 1)[1].strip()
-        return content
+        return clean_llm_response(str(content or ""))
 
     async def chat(
         self,
@@ -197,6 +194,8 @@ class LLMClient:
                 else:
                     out_content = str(out_content or "")
 
+                out_content = clean_llm_response(out_content)
+
                 res_dict: dict[str, Any] = {
                     "role": "assistant",
                     "content": out_content,
@@ -249,9 +248,23 @@ class LLMClient:
         return report
 
 
+def clean_llm_response(text: str) -> str:
+    """Programmatically strip <think>...</think> or <thinking>...</thinking> tags and broken markdown link placeholders."""
+    if not text:
+        return ""
+    import re
+    # 1. Strip complete <thinking>...</thinking> and <think>...</think> blocks including linebreaks
+    cleaned = re.sub(r"<think(?:ing)?>.*?</think(?:ing)?>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # 2. Strip any leftover orphaned tags like <thinking> or </thinking>
+    cleaned = re.sub(r"</?think(?:ing)?>", "", cleaned, flags=re.IGNORECASE)
+    # 3. Strip broken markdown link placeholders like [Payment Link]( or empty brackets
+    cleaned = re.sub(r"\[[^\]]*\]\([^)]*", "", cleaned)
+    return cleaned.strip()
+
+
 def _extract_json(raw: str) -> dict[str, Any]:
     """Parse a JSON object, tolerating code fences or leading prose."""
-    raw = raw.strip()
+    raw = clean_llm_response(raw)
     if raw.startswith("```"):
         raw = raw.strip("`")
         if raw.lower().startswith("json"):
