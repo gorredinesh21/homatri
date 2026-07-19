@@ -1,0 +1,49 @@
+# ── Homaatri full stack ────────────────────────────────────────────────────
+#   docker compose up --build   ->   http://localhost:8000
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: homatri
+      POSTGRES_PASSWORD: homatri
+      POSTGRES_DB: homatri
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U homatri -d homatri"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://homatri:homatri@db:5432/homatri
+      PUBLIC_BASE_URL: http://localhost:8000
+      APP_ENV: production
+      DEBUG: "false"
+      # Providers (demo/mock by default; override for real Meta + Razorpay)
+      WHATSAPP_PROVIDER: mock
+      PAYMENT_PROVIDER: demo
+      # LLM: read the token from your .env (git-ignored). Falls back to offline
+      # deterministic parsing if unset.
+      HF_TOKEN: ${HF_TOKEN:-}
+      HF_TOKEN_PART1: ${HF_TOKEN_PART1:-}
+      HF_TOKEN_PART2: ${HF_TOKEN_PART2:-}
+      LLM_ENABLED: ${LLM_ENABLED:-true}
+      LLM_PRIMARY_MODEL: meta-llama/Llama-3.1-8B-Instruct
+      LLM_FALLBACK_MODEL: Qwen/Qwen3-8B
+      WEB_CONCURRENCY: "1"
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

@@ -3,1135 +3,716 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Homaatri Working POC & Telemetry Console</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&family=Fira+Code:wght@400;500;600&display=swap" rel="stylesheet">
+  <title>Homaatri — WhatsApp Food Ordering Demo</title>
   <style>
+    /* ============================================================
+       Homaatri demo simulator — self-contained, zero external deps.
+       Three WhatsApp phones talking to the Homaatri business number.
+       Realtime via SSE (/api/stream). WhatsApp-like aesthetic.
+       ============================================================ */
     :root {
-      --bg-primary: #080c14;
-      --bg-secondary: #0f1624;
-      --bg-tertiary: #172237;
-      --border-color: #22324f;
-      --text-primary: #f3f4f6;
-      --text-secondary: #9ca3af;
-      --text-muted: #6b7280;
-      
-      --accent: #ff6b35;
-      --accent-glow: rgba(255, 107, 53, 0.15);
-      
-      --wa-bg: #e5ddd5;
-      --wa-header: #075e54;
-      --wa-chat-bg: #efeae2;
-      --wa-bubble-in: #ffffff;
-      --wa-bubble-out: #d9fdd3;
-      
-      --success: #10b981;
-      --error: #ef4444;
-      --warning: #f59e0b;
-      --info: #3b82f6;
+      --wa-green-dark: #075E54;   /* header / brand green */
+      --wa-green-teal: #128C7E;
+      --wa-green-light: #25D366;  /* bright accent */
+      --wa-chat-bg: #efeae2;      /* chat wallpaper base */
+      --wa-bubble-in: #ffffff;    /* incoming (business -> phone) */
+      --wa-bubble-out: #d9fdd3;   /* outgoing (phone -> business) */
+      --page-bg: #0b141a;
+      --panel-bg: #111b21;
+      --panel-border: #22323c;
+      --text-light: #e9edef;
+      --text-dim: #8696a0;
+      --link: #027eb5;
+      --tick-blue: #53bdeb;
     }
-    
-    * {
-      box-sizing: border-box;
-      margin: 0;
-      padding: 0;
-    }
-    
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
     body {
-      font-family: 'Outfit', 'Inter', sans-serif;
-      background-color: var(--bg-primary);
-      color: var(--text-primary);
-      line-height: 1.5;
-      overflow-x: hidden;
-      padding: 1rem;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--page-bg);
+      color: var(--text-light);
+      min-height: 100vh;
+      padding: 16px;
     }
-    
+
+    /* ---------- Top header bar ---------- */
     header {
-      background-color: var(--bg-secondary);
-      border: 1px solid var(--border-color);
-      border-radius: 8px;
-      padding: 1rem 1.5rem;
-      margin-bottom: 1rem;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 12px;
+      padding: 14px 20px;
+      margin-bottom: 16px;
       display: flex;
-      justify-content: space-between;
       align-items: center;
+      gap: 16px;
       flex-wrap: wrap;
-      gap: 1rem;
     }
-    
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 0.75rem;
-    }
-    
+    .brand { display: flex; align-items: center; gap: 12px; flex: 1; min-width: 220px; }
     .brand-logo {
-      width: 36px;
-      height: 36px;
-      background: linear-gradient(135deg, var(--accent), #ff8c42);
-      border-radius: 8px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: white;
-      font-weight: 800;
-      font-size: 1.25rem;
-      box-shadow: 0 4px 10px rgba(255, 107, 53, 0.3);
+      width: 44px; height: 44px; flex-shrink: 0;
+      background: linear-gradient(135deg, var(--wa-green-dark), var(--wa-green-light));
+      border-radius: 12px;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 800; font-size: 1.5rem; color: #fff;
+      box-shadow: 0 4px 12px rgba(37, 211, 102, 0.3);
     }
-    
-    .brand-name {
-      font-size: 1.25rem;
-      font-weight: 800;
-      letter-spacing: -0.025em;
+    .brand-title { font-size: 1.35rem; font-weight: 800; letter-spacing: -0.02em; }
+    .brand-sub { font-size: 0.78rem; color: var(--text-dim); }
+
+    .header-controls { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+
+    /* connection status pill */
+    .status-pill {
+      display: inline-flex; align-items: center; gap: 7px;
+      font-size: 0.8rem; font-weight: 600;
+      padding: 6px 12px; border-radius: 999px;
+      background: rgba(255,255,255,0.05);
+      border: 1px solid var(--panel-border);
     }
-    
-    /* Config Panel */
-    .controls {
-      display: flex;
-      align-items: center;
-      gap: 1.5rem;
-      flex-wrap: wrap;
-    }
-    
-    .control-group {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      font-size: 0.9rem;
-    }
-    
+    .status-dot { width: 9px; height: 9px; border-radius: 50%; background: #f0b429; transition: background .3s; }
+    .status-pill.connected .status-dot { background: var(--wa-green-light); box-shadow: 0 0 8px var(--wa-green-light); }
+    .status-pill.disconnected .status-dot { background: #ef4444; }
+
     .btn {
-      padding: 0.5rem 1rem;
-      background-color: var(--border-color);
-      color: var(--text-primary);
-      border: 1px solid transparent;
-      border-radius: 6px;
-      cursor: pointer;
-      font-weight: 600;
-      transition: all 0.2s;
+      font-family: inherit; font-weight: 600; font-size: 0.85rem;
+      padding: 8px 16px; border-radius: 8px; cursor: pointer;
+      border: 1px solid transparent; transition: all .15s;
     }
-    
-    .btn-accent {
-      background-color: var(--accent);
-      color: white;
-    }
-    
-    .btn-accent:hover {
-      background-color: #ff8c42;
-    }
-    
-    .btn:hover {
-      border-color: var(--text-secondary);
-    }
-    
-    /* Switch */
-    .switch {
-      position: relative;
-      display: inline-block;
-      width: 46px;
-      height: 24px;
-    }
-    
-    .switch input { 
-      opacity: 0;
-      width: 0;
-      height: 0;
-    }
-    
-    .slider {
-      position: absolute;
-      cursor: pointer;
-      top: 0; left: 0; right: 0; bottom: 0;
-      background-color: var(--border-color);
-      transition: .4s;
-      border-radius: 24px;
-    }
-    
-    .slider:before {
-      position: absolute;
-      content: "";
-      height: 16px;
-      width: 16px;
-      left: 4px;
-      bottom: 4px;
-      background-color: white;
-      transition: .4s;
-      border-radius: 50%;
-    }
-    
-    input:checked + .slider {
-      background-color: var(--success);
-    }
-    
-    input:checked + .slider:before {
-      transform: translateX(22px);
-    }
-    
-    /* Main Layout Grid */
-    .main-grid {
+    .btn-reset { background: var(--wa-green-light); color: #04352a; }
+    .btn-reset:hover { background: #1fce5c; }
+    .btn-ghost { background: transparent; color: var(--text-light); border-color: var(--panel-border); }
+    .btn-ghost:hover { background: rgba(255,255,255,0.06); }
+
+    /* ---------- Main layout ---------- */
+    .layout {
       display: grid;
-      grid-template-columns: 1.2fr 1fr;
-      gap: 1.25rem;
-      height: calc(100vh - 130px);
-      min-height: 700px;
+      grid-template-columns: 1fr 320px;
+      gap: 16px;
+      align-items: start;
     }
-    
-    @media (max-width: 1200px) {
-      .main-grid {
-        grid-template-columns: 1fr;
-        height: auto;
-      }
-    }
-    
-    /* Phones Container */
-    .phones-panel {
+    @media (max-width: 1100px) { .layout { grid-template-columns: 1fr; } }
+
+    .phones {
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      gap: 0.75rem;
-      height: 100%;
+      gap: 14px;
     }
-    
-    @media (max-width: 768px) {
-      .phones-panel {
-        grid-template-columns: 1fr;
-      }
+    @media (max-width: 900px) { .phones { grid-template-columns: 1fr; } }
+
+    /* ---------- Phone frame ---------- */
+    .phone {
+      background: #000;
+      border-radius: 26px;
+      padding: 8px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+      display: flex; flex-direction: column;
+      height: 640px;
     }
-    
-    /* WhatsApp Phone Simulation */
-    .mock-phone {
-      background-color: var(--bg-secondary);
-      border: 1px solid var(--border-color);
-      border-radius: 16px;
-      overflow: hidden;
-      display: flex;
-      flex-direction: column;
-      height: 100%;
-      box-shadow: 0 4px 15px rgba(0,0,0,0.2);
-    }
-    
-    .phone-header {
-      background-color: var(--wa-header);
-      padding: 0.75rem;
-      color: white;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-    
-    .phone-avatar {
-      width: 32px;
-      height: 32px;
-      background-color: rgba(255,255,255,0.2);
-      border-radius: 50%;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      font-weight: 700;
-      font-size: 0.9rem;
-    }
-    
-    .phone-user-details {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-    }
-    
-    .phone-user-name {
-      font-weight: 600;
-      font-size: 0.9rem;
-    }
-    
-    .phone-user-status {
-      font-size: 0.7rem;
-      opacity: 0.8;
-    }
-    
-    .chat-area {
-      flex: 1;
-      background-color: var(--wa-chat-bg);
-      background-image: radial-gradient(rgba(0,0,0,0.04) 1px, transparent 0);
-      background-size: 16px 16px;
-      padding: 0.75rem;
-      overflow-y: auto;
-      display: flex;
-      flex-direction: column;
-      gap: 0.6rem;
-    }
-    
-    /* Chat Bubbles */
-    .bubble {
-      max-width: 85%;
-      padding: 0.5rem 0.75rem;
-      border-radius: 8px;
-      font-size: 0.825rem;
-      position: relative;
-      word-wrap: break-word;
-      color: #303030;
-      box-shadow: 0 1px 2px rgba(0,0,0,0.1);
-    }
-    
-    .bubble-in {
-      background-color: var(--wa-bubble-in);
-      align-self: flex-start;
-      border-top-left-radius: 0;
-    }
-    
-    .bubble-out {
-      background-color: var(--wa-bubble-out);
-      align-self: flex-end;
-      border-top-right-radius: 0;
-    }
-    
-    .bubble-time {
-      font-size: 0.65rem;
-      color: var(--text-muted);
-      text-align: right;
-      margin-top: 0.2rem;
-    }
-    
-    .bubble a {
-      color: #0066cc;
-      text-decoration: underline;
-      font-weight: 600;
-    }
-    
-    /* Interactive Quick Reply Buttons on WhatsApp */
-    .bubble-buttons {
-      display: flex;
-      flex-direction: column;
-      gap: 0.25rem;
-      margin-top: 0.5rem;
-      border-top: 1px solid rgba(0,0,0,0.05);
-      padding-top: 0.4rem;
-    }
-    
-    .wa-action-btn {
-      background-color: white;
-      border: 1px solid rgba(0,0,0,0.1);
-      color: #0076ff;
-      padding: 0.4rem;
-      font-size: 0.75rem;
-      font-weight: 600;
-      border-radius: 4px;
-      cursor: pointer;
-      text-align: center;
-      transition: background-color 0.2s;
-    }
-    
-    .wa-action-btn:hover {
-      background-color: rgba(0, 118, 255, 0.05);
-    }
-    
-    /* Input footer */
-    .phone-footer {
-      padding: 0.5rem;
-      background-color: #f0f0f0;
-      display: flex;
-      gap: 0.5rem;
-      align-items: center;
-    }
-    
-    .phone-input {
-      flex: 1;
-      border: none;
-      padding: 0.6rem;
+    .phone-screen {
+      background: var(--wa-chat-bg);
       border-radius: 20px;
-      font-family: inherit;
-      font-size: 0.85rem;
-      outline: none;
-      background-color: white;
-      color: #303030;
-    }
-    
-    .phone-send-btn {
-      width: 32px;
-      height: 32px;
-      border: none;
-      background-color: var(--wa-header);
-      color: white;
-      border-radius: 50%;
-      cursor: pointer;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    
-    /* Telemetry Board */
-    .telemetry-panel {
-      background-color: var(--bg-secondary);
-      border: 1px solid var(--border-color);
-      border-radius: 16px;
-      display: flex;
-      flex-direction: column;
-      height: 100%;
       overflow: hidden;
-    }
-    
-    .telemetry-header {
-      border-bottom: 1px solid var(--border-color);
-      padding: 0.5rem 1rem;
-      display: flex;
-      background-color: rgba(0, 0, 0, 0.2);
-    }
-    
-    .tab-btn {
-      padding: 0.75rem 1rem;
-      background: none;
-      border: none;
-      color: var(--text-secondary);
-      font-weight: 600;
-      cursor: pointer;
-      font-size: 0.85rem;
-      border-bottom: 2px solid transparent;
-      transition: all 0.2s;
-    }
-    
-    .tab-btn.active {
-      color: var(--accent);
-      border-bottom-color: var(--accent);
-    }
-    
-    .telemetry-content {
+      display: flex; flex-direction: column;
       flex: 1;
-      padding: 1rem;
-      overflow-y: auto;
     }
-    
-    .telemetry-pane {
-      display: none;
-      height: 100%;
+    .phone-topbar {
+      background: var(--wa-green-dark);
+      color: #fff;
+      padding: 10px 12px;
+      display: flex; align-items: center; gap: 10px;
+      flex-shrink: 0;
     }
-    
-    .telemetry-pane.active {
-      display: block;
+    .avatar {
+      width: 36px; height: 36px; border-radius: 50%;
+      background: rgba(255,255,255,0.2);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.1rem; flex-shrink: 0;
     }
-    
-    /* Log Outputs */
-    .code-log {
-      font-family: 'Fira Code', monospace;
-      font-size: 0.8rem;
-      background-color: var(--bg-primary);
-      border: 1px solid var(--border-color);
+    .peer-name { font-weight: 600; font-size: 0.9rem; line-height: 1.1; }
+    .peer-sub { font-size: 0.68rem; opacity: 0.85; }
+    .peer-role-tag {
+      margin-left: auto; font-size: 0.62rem; font-weight: 700;
+      padding: 3px 7px; border-radius: 6px;
+      background: rgba(255,255,255,0.18); text-transform: uppercase; letter-spacing: .04em;
+    }
+
+    /* chat scroll area */
+    .chat {
+      flex: 1; overflow-y: auto;
+      padding: 12px 10px;
+      display: flex; flex-direction: column; gap: 6px;
+      /* subtle WhatsApp doodle-ish texture using layered gradients (no external image) */
+      background-image:
+        radial-gradient(rgba(0,0,0,0.03) 1px, transparent 1px);
+      background-size: 18px 18px;
+    }
+    .chat::-webkit-scrollbar { width: 6px; }
+    .chat::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.2); border-radius: 3px; }
+
+    .day-sep {
+      align-self: center;
+      background: #d6e4ce; color: #4a5a4a;
+      font-size: 0.68rem; font-weight: 600;
+      padding: 4px 10px; border-radius: 8px; margin: 4px 0;
+    }
+
+    /* bubbles */
+    .bubble {
+      max-width: 82%;
+      padding: 6px 9px 4px;
       border-radius: 8px;
-      padding: 0.75rem;
-      height: 100%;
-      overflow: auto;
-      white-space: pre-wrap;
-      color: #92d0ff;
+      font-size: 0.82rem; line-height: 1.35;
+      color: #111b21;
+      position: relative;
+      box-shadow: 0 1px 0.5px rgba(0,0,0,0.13);
+      word-wrap: break-word; white-space: pre-wrap;
     }
-    
-    /* Database tables simulation layout */
-    .db-table-section {
-      margin-bottom: 1.5rem;
+    .bubble.in  { background: var(--wa-bubble-in);  align-self: flex-start; border-top-left-radius: 0; }
+    .bubble.out { background: var(--wa-bubble-out); align-self: flex-end;   border-top-right-radius: 0; }
+    .bubble a { color: var(--link); text-decoration: none; font-weight: 600; }
+    .bubble a:hover { text-decoration: underline; }
+    .bubble-meta {
+      display: flex; align-items: center; justify-content: flex-end; gap: 3px;
+      font-size: 0.62rem; color: #667781; margin-top: 2px;
     }
-    
-    .db-title {
-      font-size: 0.85rem;
-      font-weight: 700;
-      text-transform: uppercase;
-      color: var(--accent);
-      margin-bottom: 0.4rem;
-      display: flex;
-      justify-content: space-between;
+    .tick { font-size: 0.7rem; color: #667781; }
+    .tick.read { color: var(--tick-blue); }
+
+    /* interactive buttons inside a bubble */
+    .wa-buttons { display: flex; flex-direction: column; gap: 5px; margin-top: 6px; }
+    .wa-btn {
+      background: #fff; color: #027eb5;
+      border: 1px solid #d5dbdd;
+      border-radius: 7px; padding: 8px;
+      font-size: 0.8rem; font-weight: 600; cursor: pointer;
+      text-align: center; font-family: inherit;
+      transition: background .15s;
     }
-    
-    .db-badge {
-      font-size: 0.7rem;
-      padding: 0.1rem 0.4rem;
-      background-color: var(--border-color);
-      color: var(--text-secondary);
-      border-radius: 4px;
+    .wa-btn:hover { background: #f0f6f9; }
+    .wa-btn:disabled { opacity: .5; cursor: default; }
+    .wa-btn .ico { margin-right: 5px; }
+
+    /* location card */
+    .loc-card {
+      margin-top: 4px; border-radius: 8px; overflow: hidden;
+      border: 1px solid #d5dbdd; background: #f5f6f6;
     }
-    
-    .db-grid {
-      width: 100%;
-      border-collapse: collapse;
-      font-size: 0.775rem;
+    .loc-map {
+      height: 70px;
+      background: linear-gradient(135deg, #cfe8d4, #a8d5b5);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.6rem;
     }
-    
-    .db-grid th, .db-grid td {
-      border: 1px solid var(--border-color);
-      padding: 0.4rem 0.6rem;
-      text-align: left;
+    .loc-body { padding: 6px 8px; }
+    .loc-name { font-weight: 700; font-size: 0.78rem; }
+    .loc-addr { font-size: 0.7rem; color: #667781; }
+
+    /* footer input */
+    .composer {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px; background: #f0f2f5; flex-shrink: 0;
     }
-    
-    .db-grid th {
-      background-color: rgba(0, 0, 0, 0.3);
-      color: var(--text-primary);
+    .composer input {
+      flex: 1; border: none; outline: none;
+      background: #fff; border-radius: 20px;
+      padding: 9px 14px; font-size: 0.83rem; font-family: inherit; color: #111b21;
     }
-    
-    .db-grid tr:nth-child(even) {
-      background-color: rgba(255,255,255,0.01);
+    .icon-btn {
+      width: 38px; height: 38px; border: none; border-radius: 50%;
+      background: var(--wa-green-teal); color: #fff; cursor: pointer;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 1.1rem; flex-shrink: 0;
     }
-    
-    .db-grid tr:hover {
-      background-color: rgba(255,255,255,0.03);
+    .icon-btn.loc { background: #6b7d86; font-size: 1rem; }
+    .icon-btn:hover { filter: brightness(1.08); }
+
+    /* ---------- Order state panel ---------- */
+    .order-panel {
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      border-radius: 14px;
+      padding: 16px;
+      position: sticky; top: 16px;
     }
-    
-    .status-badge {
-      padding: 0.15rem 0.3rem;
-      border-radius: 4px;
-      font-weight: 700;
-      font-size: 0.7rem;
+    .order-panel h3 { font-size: 0.95rem; margin-bottom: 4px; }
+    .order-panel .hint { font-size: 0.72rem; color: var(--text-dim); margin-bottom: 12px; }
+
+    .badge {
+      display: inline-block; font-size: 0.7rem; font-weight: 700;
+      padding: 4px 10px; border-radius: 999px; text-transform: uppercase; letter-spacing: .03em;
     }
-    
-    .status-pending { background-color: rgba(245, 158, 11, 0.2); color: var(--warning); }
-    .status-confirmed { background-color: rgba(16, 185, 129, 0.2); color: var(--success); }
-    .status-cooking { background-color: rgba(59, 130, 246, 0.2); color: var(--info); }
-    .status-ready { background-color: rgba(139, 92, 246, 0.2); color: #a78bfa; }
-    .status-transit { background-color: rgba(236, 72, 153, 0.2); color: #f472b6; }
-    .status-completed { background-color: rgba(16, 185, 129, 0.3); color: #34d399; }
-    .status-failed { background-color: rgba(239, 68, 68, 0.2); color: var(--error); }
-    
-    .waba-tag {
-      font-size: 0.7rem;
-      padding: 0.1rem 0.3rem;
-      border-radius: 4px;
-      font-weight: 600;
-      margin-left: 0.5rem;
+    .b-PENDING          { background: rgba(240,180,41,.18); color: #f0b429; }
+    .b-AWAITING_PAYMENT { background: rgba(245,158,11,.18); color: #f59e0b; }
+    .b-CONFIRMED        { background: rgba(37,211,102,.18); color: #25d366; }
+    .b-PREPARING        { background: rgba(59,130,246,.18); color: #60a5fa; }
+    .b-READY_FOR_PICKUP { background: rgba(139,92,246,.18); color: #a78bfa; }
+    .b-OUT_FOR_DELIVERY { background: rgba(236,72,153,.18); color: #f472b6; }
+    .b-DELIVERED        { background: rgba(16,185,129,.28); color: #34d399; }
+    .b-CANCELLED        { background: rgba(239,68,68,.18); color: #f87171; }
+
+    .order-code { font-family: ui-monospace, monospace; font-size: 0.85rem; color: var(--text-light); }
+
+    /* status timeline */
+    .timeline { margin: 14px 0; display: flex; flex-direction: column; gap: 0; }
+    .tl-step { display: flex; align-items: center; gap: 8px; font-size: 0.74rem; color: var(--text-dim); position: relative; padding: 3px 0; }
+    .tl-dot {
+      width: 12px; height: 12px; border-radius: 50%;
+      border: 2px solid var(--panel-border); background: var(--panel-bg); flex-shrink: 0;
     }
-    
-    .waba-inbound { background-color: rgba(16, 185, 129, 0.15); color: var(--success); }
-    .waba-outbound { background-color: rgba(59, 130, 246, 0.15); color: var(--info); }
+    .tl-step.done .tl-dot   { background: var(--wa-green-light); border-color: var(--wa-green-light); }
+    .tl-step.done           { color: var(--text-light); }
+    .tl-step.current .tl-dot{ background: #f0b429; border-color: #f0b429; box-shadow: 0 0 8px #f0b429; }
+    .tl-step.current        { color: #f0b429; font-weight: 700; }
+
+    .items-list { margin: 12px 0; }
+    .item-row { display: flex; justify-content: space-between; font-size: 0.78rem; padding: 4px 0; border-bottom: 1px dashed rgba(255,255,255,0.06); }
+    .item-row .q { color: var(--text-dim); }
+    .totals { margin-top: 8px; font-size: 0.78rem; }
+    .totals .row { display: flex; justify-content: space-between; padding: 2px 0; color: var(--text-dim); }
+    .totals .row.grand { color: var(--text-light); font-weight: 800; font-size: 0.95rem; border-top: 1px solid var(--panel-border); margin-top: 5px; padding-top: 7px; }
+
+    .kv { font-size: 0.74rem; color: var(--text-dim); margin-top: 8px; }
+    .kv b { color: var(--text-light); font-weight: 600; }
+    .empty-state { font-size: 0.8rem; color: var(--text-dim); text-align: center; padding: 24px 8px; }
+    .change-req { font-size: 0.72rem; margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: rgba(255,255,255,0.04); border-left: 3px solid #f0b429; }
   </style>
 </head>
 <body>
 
-  <!-- Dashboard Header -->
+  <!-- ===================== Header ===================== -->
   <header>
     <div class="brand">
       <div class="brand-logo">H</div>
       <div>
-        <span class="brand-name">Homaatri Prototype Board</span>
-        <div style="font-size:0.7rem; color:var(--text-secondary)">Working LangChain & Simulated WhatsApp Webhooks Console</div>
+        <div class="brand-title">Homaatri</div>
+        <div class="brand-sub">WhatsApp-first home-food ordering — live demo simulator</div>
       </div>
     </div>
-    
-    <div class="controls">
-      <div class="control-group">
-        <span>Async Workers Queue:</span>
-        <label class="switch">
-          <input type="checkbox" id="toggle-queue" checked onchange="updateSettings()">
-          <span class="slider"></span>
-        </label>
-      </div>
-      
-      <div class="control-group">
-        <label for="latency-range">Network Latency:</label>
-        <input type="range" id="latency-range" min="0" max="5" step="0.5" value="1.5" style="width: 80px;" onchange="updateSettings()">
-        <span id="latency-val" style="color:var(--accent); font-family:monospace;">1.5s</span>
-      </div>
-      
-      <button class="btn" onclick="triggerChefConsolidation()" title="Simulate the cutoff cron scheduling job to send aggregated cooking checks to housewife">Run Cutoff Cron</button>
-      <button class="btn btn-accent" onclick="resetDatabase()">Reset POC Database</button>
+    <div class="header-controls">
+      <span class="status-pill disconnected" id="statusPill">
+        <span class="status-dot"></span>
+        <span id="statusText">Connecting…</span>
+      </span>
+      <button class="btn btn-reset" id="resetBtn">Reset Demo</button>
     </div>
   </header>
 
-  <!-- Interactive Grid -->
-  <div class="main-grid">
-    
-    <!-- Left Column: WhatsApp Screens -->
-    <div class="phones-panel">
-      
-      <!-- Phone 1: Customer -->
-      <div class="mock-phone">
-        <div class="phone-header">
-          <div class="phone-avatar">C</div>
-          <div class="phone-user-details">
-            <span class="phone-user-name">Homaatri Bot (Customer)</span>
-            <span class="phone-user-status">Online • WhatsApp Business</span>
-          </div>
-        </div>
-        <div class="chat-area" id="chat-customer">
-          <!-- Populated dynamically -->
-        </div>
-        <div class="phone-footer">
-          <input type="text" id="input-customer" class="phone-input" placeholder="Type food order (e.g. 2 butter roti & dal)..." onkeydown="if(event.key==='Enter') sendMockMessage('+919876543210', 'input-customer')">
-          <button class="phone-send-btn" onclick="sendMockMessage('+919876543210', 'input-customer')">➔</button>
-        </div>
-      </div>
+  <!-- ===================== Main ===================== -->
+  <div class="layout">
+    <div class="phones" id="phones"><!-- phone frames injected by JS --></div>
 
-      <!-- Phone 2: Chef (Housewife) -->
-      <div class="mock-phone">
-        <div class="phone-header" style="background-color: #9a3412;">
-          <div class="phone-avatar" style="background-color:rgba(255,255,255,0.15)">👩‍🍳</div>
-          <div class="phone-user-details">
-            <span class="phone-user-name">Chef Kiran Sharma</span>
-            <span class="phone-user-status">Online • Homaatri Kitchen</span>
-          </div>
-        </div>
-        <div class="chat-area" id="chat-chef">
-          <!-- Populated dynamically -->
-        </div>
-        <div class="phone-footer">
-          <input type="text" id="input-chef" class="phone-input" placeholder="Type to server..." onkeydown="if(event.key==='Enter') sendMockMessage('+919999888877', 'input-chef')">
-          <button class="phone-send-btn" onclick="sendMockMessage('+919999888877', 'input-chef')" style="background-color: #9a3412;">➔</button>
-        </div>
+    <!-- Live order state -->
+    <aside class="order-panel">
+      <h3>Live Order</h3>
+      <div class="hint">Most recent order, updated in realtime.</div>
+      <div id="orderState">
+        <div class="empty-state">No active orders yet.<br>Start by ordering from the Customer phone.</div>
       </div>
-
-      <!-- Phone 3: Delivery Driver -->
-      <div class="mock-phone">
-        <div class="phone-header" style="background-color: #065f46;">
-          <div class="phone-avatar" style="background-color:rgba(255,255,255,0.15)">🏍️</div>
-          <div class="phone-user-details">
-            <span class="phone-user-name">Driver Suresh Kumar</span>
-            <span class="phone-user-status">Online • Dispatched</span>
-          </div>
-        </div>
-        <div class="chat-area" id="chat-driver">
-          <!-- Populated dynamically -->
-        </div>
-        <div class="phone-footer">
-          <input type="text" id="input-driver" class="phone-input" placeholder="Type to server..." onkeydown="if(event.key==='Enter') sendMockMessage('+918888777766', 'input-driver')">
-          <button class="phone-send-btn" onclick="sendMockMessage('+918888777766', 'input-driver')" style="background-color: #065f46;">➔</button>
-        </div>
-      </div>
-      
-    </div>
-    
-    <!-- Right Column: Telemetry logs -->
-    <div class="telemetry-panel">
-      <div class="telemetry-header">
-        <button class="tab-btn active" onclick="switchTab('tab-webhooks', this)">Webhook Monitor</button>
-        <button class="tab-btn" onclick="switchTab('tab-ai', this)">LangChain Engine</button>
-        <button class="tab-btn" onclick="switchTab('tab-rag', this)">RAG Vector KB</button>
-        <button class="tab-btn" onclick="switchTab('tab-db', this)">Database States</button>
-        <button class="tab-btn" onclick="switchTab('tab-queue', this)">Queue Workers</button>
-      </div>
-      
-      <div class="telemetry-content">
-        <!-- Webhooks Tab -->
-        <div class="telemetry-pane active" id="tab-webhooks">
-          <div class="code-log" id="log-webhooks">Awaiting webhook payload arrivals...</div>
-        </div>
-        
-        <!-- AI parsing Tab -->
-        <div class="telemetry-pane" id="tab-ai">
-          <div class="code-log" id="log-ai">No active LangChain parsing queries captured yet. Try sending an order message from the Customer WhatsApp panel.</div>
-        </div>
-        
-        <!-- RAG Tab -->
-        <div class="telemetry-pane" id="tab-rag">
-          <div class="code-log" id="log-rag">Awaiting RAG lookup data... Sent messages will update the client's vector knowledge base.</div>
-        </div>
-        
-        <!-- Database State Tab -->
-        <div class="telemetry-pane" id="tab-db">
-          <div style="overflow-y:auto; height:100%;">
-            
-            <!-- Orders DB -->
-            <div class="db-table-section">
-              <div class="db-title">
-                <span>Orders Table (PostgreSQL)</span>
-                <span class="db-badge">orders</span>
-              </div>
-              <table class="db-grid" id="db-orders">
-                <thead>
-                  <tr>
-                    <th>Order ID</th>
-                    <th>Customer</th>
-                    <th>Items</th>
-                    <th>Amount</th>
-                    <th>Time</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Table Empty</td></tr>
-                </tbody>
-              </table>
-            </div>
-            
-            <!-- Deliveries DB -->
-            <div class="db-table-section">
-              <div class="db-title">
-                <span>Deliveries Table (PostgreSQL)</span>
-                <span class="db-badge">deliveries</span>
-              </div>
-              <table class="db-grid" id="db-deliveries">
-                <thead>
-                  <tr>
-                    <th>Delivery ID</th>
-                    <th>Order ID</th>
-                    <th>Rider</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Table Empty</td></tr>
-                </tbody>
-              </table>
-            </div>
-
-            <!-- Users Database Seed -->
-            <div class="db-table-section">
-              <div class="db-title">
-                <span>Users Table (Core Identity)</span>
-                <span class="db-badge">users</span>
-              </div>
-              <table class="db-grid" id="db-users">
-                <thead>
-                  <tr>
-                    <th>User ID</th>
-                    <th>Phone</th>
-                    <th>Name</th>
-                    <th>Role</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <!-- Populated dynamically -->
-                </tbody>
-              </table>
-            </div>
-
-            <!-- RAG Knowledge Base Database -->
-            <div class="db-table-section">
-              <div class="db-title">
-                <span>RAG Memory Index Table (Vector Embeddings)</span>
-                <span class="db-badge">knowledge_bases</span>
-              </div>
-              <table class="db-grid" id="db-kb">
-                <thead>
-                  <tr>
-                    <th>Phone / Owner</th>
-                    <th>Saved Memory Snippets</th>
-                    <th>Dimensions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Vector Index Empty. Send chat messages to build memories!</td></tr>
-                </tbody>
-              </table>
-            </div>
-
-          </div>
-        </div>
-        
-        <!-- Queue Worker Logs -->
-        <div class="telemetry-pane" id="tab-queue">
-          <div class="code-log" id="log-queue">Awaiting queue operations...</div>
-        </div>
-      </div>
-    </div>
-    
+    </aside>
   </div>
 
-  <!-- Javascript Core -->
   <script>
-    // State Tracking
-    let activeTab = 'tab-webhooks';
-    let currentConversationLogs = [];
+  /* =====================================================================
+     Homaatri simulator front-end logic.
+     - Three known phones; each is a WhatsApp chat with the business number.
+     - SSE (/api/stream) delivers full state snapshots + wa_message + wa_status.
+     - We render outbound-business messages as INCOMING (left) bubbles,
+       and locally-sent user text/taps as OUTGOING (right) bubbles.
+     ===================================================================== */
 
-    // Switch Panel Tabs
-    function switchTab(tabId, btn) {
-      document.querySelectorAll('.telemetry-pane').forEach(p => p.classList.remove('active'));
-      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-      
-      document.getElementById(tabId).classList.add('active');
-      btn.classList.add('active');
-      activeTab = tabId;
-    }
+  // ---- The three hardcoded phones -----------------------------------
+  const PHONES = [
+    { phone: "+919876543210", name: "Dinesh (Customer)", sub: "Homaatri Business", role: "Customer", avatar: "🧑", isCustomer: true },
+    { phone: "+919999888877", name: "Kiran Sharma",      sub: "Sharma's Kitchen",  role: "Chef",     avatar: "👩‍🍳", isCustomer: false },
+    { phone: "+918888777766", name: "Suresh Kumar",      sub: "Delivery Partner",  role: "Driver",   avatar: "🏍️", isCustomer: false },
+  ];
+  // profile_name sent to backend with each send/tap (used for wa profile)
+  const PROFILE_NAME = {
+    "+919876543210": "Dinesh/Customer",
+    "+919999888877": "Kiran Sharma",
+    "+918888777766": "Suresh Kumar",
+  };
+  const KNOWN = new Set(PHONES.map(p => p.phone));
 
-    // Refresh state from server
-    function fetchState() {
-      fetch('/api/state')
-        .then(res => res.json())
-        .then(state => {
-          updateWhatsAppScreens(state);
-          updateTelemetryLogs(state);
-          updateDatabaseView(state);
-        })
-        .catch(err => console.error("Error polling state:", err));
-    }
+  // De-dupe map so the same wamid is never rendered twice, and so we can
+  // update ticks on already-rendered outgoing messages.
+  const seenWamids = new Set();        // rendered inbound wamids
+  const outgoingByWamid = new Map();   // wamid -> bubble element (for tick updates)
 
-    function updateWhatsAppScreens(state) {
-      // 1. Customer
-      renderConversation(
-        document.getElementById('chat-customer'), 
-        state.webhook_logs, 
-        '+919876543210',
-        'Customer'
-      );
-      
-      // 2. Chef
-      renderConversation(
-        document.getElementById('chat-chef'), 
-        state.webhook_logs, 
-        '+919999888877',
-        'Chef'
-      );
-      
-      // 3. Driver
-      renderConversation(
-        document.getElementById('chat-driver'), 
-        state.webhook_logs, 
-        '+918888777766',
-        'Driver'
-      );
-    }
+  const chatEls = {};   // phone -> chat scroll element
 
-    function renderConversation(element, logs, phone, label) {
-      // Filter logs for this specific phone
-      const conversationLogs = logs.filter(l => l.from === phone || l.to === phone);
-      
-      // Detect if we need to scroll to bottom (new message check)
-      const shouldScroll = element.scrollHeight - element.scrollTop <= element.clientHeight + 40;
-      
-      // Render
-      let html = '';
-      
-      // Add default welcome message
-      if (label === 'Customer') {
-        html += `
-          <div class="bubble bubble-in">
-            <strong>Homaatri Kitchens</strong>
-            <p>Welcome! Order natural healthy food directly through chat! Today's specials are <strong>Butter Roti, Paneer Butter Masala, Dal Fry,</strong> and <strong>Jeera Rice</strong>.</p>
-            <p>Type your request (e.g. <em>"Give me 2 butter rotis and 1 paneer curry by 8 PM"</em>).</p>
-            <div class="bubble-time">System</div>
-          </div>
-        `;
-      } else if (label === 'Chef') {
-        html += `
-          <div class="bubble bubble-in">
-            <strong>System Alerts</strong>
-            <p>Ready for shifts. Confirm orders here. Consolidated lists are sent at ordering cutoff times.</p>
-            <div class="bubble-time">System</div>
-          </div>
-        `;
-      } else if (label === 'Driver') {
-        html += `
-          <div class="bubble bubble-in">
-            <strong>Dispatch Center</strong>
-            <p>Active shifts status. Pickup assignments and routes will show up here.</p>
-            <div class="bubble-time">System</div>
-          </div>
-        `;
-      }
-      
-      conversationLogs.forEach(log => {
-        const isOutbound = log.direction.includes('OUTBOUND'); // Server -> User (WhatsApp message delivered to phone)
-        const bubbleClass = isOutbound ? 'bubble-in' : 'bubble-out';
-        
-        let textContent = log.content;
-        
-        // Make links clickable
-        textContent = textContent.replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank">$1</a>');
-        textContent = textContent.replace(/\n/g, '<br>');
-        
-        // Parse custom interactive actions if present
-        let buttonsHtml = '';
-        if (isOutbound && label === 'Chef' && textContent.includes('New Order Received!')) {
-          buttonsHtml = `
-            <div class="bubble-buttons">
-              <button class="wa-action-btn" onclick="chefAction('start')">Cooking Started</button>
-              <button class="wa-action-btn" onclick="chefAction('ready')">Ready for Pickup</button>
+  // ---------------- Build phone frames --------------------------------
+  function buildPhones() {
+    const wrap = document.getElementById("phones");
+    wrap.innerHTML = "";
+    PHONES.forEach(p => {
+      const frame = document.createElement("div");
+      frame.className = "phone";
+      frame.innerHTML = `
+        <div class="phone-screen">
+          <div class="phone-topbar">
+            <div class="avatar">${p.avatar}</div>
+            <div>
+              <div class="peer-name">${p.name}</div>
+              <div class="peer-sub">${p.sub}</div>
             </div>
-          `;
-        } else if (isOutbound && label === 'Chef' && textContent.includes('⚠️ CHANGE REQUEST')) {
-          buttonsHtml = `
-            <div class="bubble-buttons">
-              <button class="wa-action-btn" onclick="chefChangeResponse('accept')" style="background-color:#10b981; color:white; border:none; margin-bottom:4px; font-weight:700;">Accept Food Change</button>
-              <button class="wa-action-btn" onclick="chefChangeResponse('reject')" style="background-color:#ef4444; color:white; border:none; font-weight:700;">Reject (Too Late)</button>
-            </div>
-          `;
-        } else if (isOutbound && label === 'Driver' && textContent.includes('New Delivery Assigned!')) {
-          buttonsHtml = `
-            <div class="bubble-buttons">
-              <button class="wa-action-btn" onclick="driverAction('pickup')">Accept & Picked Up</button>
-              <button class="wa-action-btn" onclick="driverAction('deliver')">Mark Delivered</button>
-            </div>
-          `;
-        } else if (isOutbound && label === 'Driver' && textContent.includes('⚠️ DELIVERY CHANGE')) {
-          let btnText = "Accept Route Change";
-          if (textContent.includes("delivery time")) {
-            btnText = "Accept Time Change";
-          } else if (textContent.includes("coordinates")) {
-            btnText = "Accept Coordinates Change";
-          }
-          buttonsHtml = `
-            <div class="bubble-buttons">
-              <button class="wa-action-btn" onclick="driverChangeResponse('accept')" style="background-color:#10b981; color:white; border:none; margin-bottom:4px; font-weight:700;">${btnText}</button>
-              <button class="wa-action-btn" onclick="driverChangeResponse('reject')" style="background-color:#ef4444; color:white; border:none; font-weight:700;">Reject Change</button>
-            </div>
-          `;
-        }
-        
-        html += `
-          <div class="bubble ${bubbleClass}">
-            <p>${textContent}</p>
-            ${buttonsHtml}
-            <div class="bubble-time">${log.timestamp.split('T')[1].substring(0,5)}</div>
+            <div class="peer-role-tag">${p.role}</div>
           </div>
-        `;
+          <div class="chat" id="chat-${p.phone}"></div>
+          <div class="composer">
+            ${p.isCustomer ? `<button class="icon-btn loc" title="Share location" data-loc="${p.phone}">📍</button>` : ""}
+            <input type="text" placeholder="Type a message" data-input="${p.phone}">
+            <button class="icon-btn" title="Send" data-send="${p.phone}">➤</button>
+          </div>
+        </div>`;
+      wrap.appendChild(frame);
+      chatEls[p.phone] = frame.querySelector(`#chat-${cssEsc(p.phone)}`);
+    });
+
+    // Wire composer events
+    wrap.querySelectorAll("[data-send]").forEach(btn =>
+      btn.addEventListener("click", () => sendFromInput(btn.getAttribute("data-send"))));
+    wrap.querySelectorAll("[data-input]").forEach(inp =>
+      inp.addEventListener("keydown", e => { if (e.key === "Enter") sendFromInput(inp.getAttribute("data-input")); }));
+    wrap.querySelectorAll("[data-loc]").forEach(btn =>
+      btn.addEventListener("click", () => shareLocation(btn.getAttribute("data-loc"))));
+  }
+  // "+" is valid in querySelector but be safe with escaping
+  function cssEsc(s) { return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/([^\w-])/g, "\\$1"); }
+
+  // ---------------- Rendering helpers ---------------------------------
+  function nowTime() {
+    return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  function tsTime(ts) {
+    if (!ts) return nowTime();
+    const d = new Date(ts * 1000);
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  // Turn plain text into HTML with clickable links, escaping everything else.
+  function linkify(text) {
+    const esc = String(text)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    return esc.replace(/(https?:\/\/[^\s]+)/g,
+      '<a href="$1" target="_blank" rel="noopener">$1</a>');
+  }
+  function scrollToBottom(phone) {
+    const el = chatEls[phone];
+    if (el) el.scrollTop = el.scrollHeight;
+  }
+
+  // Append a bubble; returns the bubble element.
+  function addBubble(phone, side, innerHtml, ts, wamid) {
+    const el = chatEls[phone];
+    if (!el) return null;
+    const b = document.createElement("div");
+    b.className = "bubble " + side;
+    b.innerHTML = innerHtml;
+    // meta (time + ticks for outgoing)
+    const meta = document.createElement("div");
+    meta.className = "bubble-meta";
+    meta.innerHTML = `<span>${tsTime(ts)}</span>` + (side === "out" ? ` <span class="tick">✓</span>` : "");
+    b.appendChild(meta);
+    if (wamid && side === "out") outgoingByWamid.set(wamid, b);
+    el.appendChild(b);
+    scrollToBottom(phone);
+    return b;
+  }
+
+  // Render an INCOMING WhatsApp Cloud API message payload onto `target` phone.
+  function renderIncoming(target, message, ts) {
+    const type = message.type;
+
+    if (type === "text") {
+      addBubble(target, "in", linkify(message.text?.body || ""), ts);
+      return;
+    }
+
+    if (type === "interactive") {
+      const it = message.interactive || {};
+      if (it.type === "button") {
+        const body = linkify(it.body?.text || "");
+        const buttons = (it.action?.buttons || []);
+        const b = addBubble(target, "in", body, ts);
+        appendButtons(b, target, buttons.map(x => ({ id: x.reply?.id, title: x.reply?.title })));
+        return;
+      }
+      if (it.type === "list") {
+        const body = linkify(it.body?.text || "");
+        const openLabel = it.action?.button || "View options";
+        const rows = [];
+        (it.action?.sections || []).forEach(sec =>
+          (sec.rows || []).forEach(r => rows.push({ id: r.id, title: r.title, description: r.description })));
+        const b = addBubble(target, "in", body, ts);
+        appendListButton(b, target, openLabel, rows);
+        return;
+      }
+      // unknown interactive subtype -> show body if any
+      addBubble(target, "in", linkify(it.body?.text || "[interactive]"), ts);
+      return;
+    }
+
+    if (type === "location") {
+      const loc = message.location || {};
+      const lat = loc.latitude, lng = loc.longitude;
+      const maps = `https://www.google.com/maps?q=${lat},${lng}`;
+      const html = `
+        <a class="loc-card" href="${maps}" target="_blank" rel="noopener" style="display:block;text-decoration:none;color:inherit;">
+          <div class="loc-map">📍</div>
+          <div class="loc-body">
+            <div class="loc-name">${escapeHtml(loc.name || "Shared location")}</div>
+            ${loc.address ? `<div class="loc-addr">${escapeHtml(loc.address)}</div>` : ``}
+            <div class="loc-addr">${lat}, ${lng}</div>
+          </div>
+        </a>`;
+      addBubble(target, "in", html, ts);
+      return;
+    }
+
+    // fallback
+    addBubble(target, "in", `[${escapeHtml(type || "message")}]`, ts);
+  }
+  function escapeHtml(s){ return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+
+  // Reply buttons under a bubble.
+  function appendButtons(bubble, phone, buttons) {
+    if (!bubble) return;
+    const wrap = document.createElement("div");
+    wrap.className = "wa-buttons";
+    buttons.forEach(btn => {
+      if (!btn.id) return;
+      const el = document.createElement("button");
+      el.className = "wa-btn";
+      el.innerHTML = `<span class="ico">↩</span>${escapeHtml(btn.title || btn.id)}`;
+      el.addEventListener("click", () => {
+        disableBubbleButtons(wrap);
+        tap(phone, btn.id, btn.title || btn.id);
       });
-      
-      element.innerHTML = html;
-      if (shouldScroll) {
-        element.scrollTop = element.scrollHeight;
-      }
-    }
+      wrap.appendChild(el);
+    });
+    bubble.insertBefore(wrap, bubble.querySelector(".bubble-meta"));
+  }
 
-    function updateTelemetryLogs(state) {
-      // 1. Webhooks Monitor
-      const webhookLogEl = document.getElementById('log-webhooks');
-      if (state.webhook_logs.length === 0) {
-        webhookLogEl.innerHTML = "Awaiting webhook arrivals...";
-      } else {
-        let text = '';
-        state.webhook_logs.slice().reverse().forEach(log => {
-          const typeTag = log.direction.includes('INBOUND') ? 'INBOUND' : 'OUTBOUND';
-          const tagClass = log.direction.includes('INBOUND') ? 'waba-inbound' : 'waba-outbound';
-          
-          text += `[${log.timestamp}] <span class="waba-tag ${tagClass}">${typeTag}</span> Phone: ${log.from || log.to} (${log.role})\n`;
-          text += `Content: "${log.content}"\n`;
-          if (log.headers) {
-            text += `HTTP Headers:\n`;
-            text += `  X-Hub-Signature-256: ${log.headers['x-hub-signature-256'] || 'None (SIMULATED_HANDSHAKE)'}\n`;
-            text += `  User-Agent: ${log.headers['user-agent'] || 'Meta-WhatsApp-Server'}\n`;
-          }
-          text += `Status: ${log.status || 'PROCESSED'}\n`;
-          text += `--------------------------------------------------------------------------------\n\n`;
+  // A single "list" button that expands rows on click.
+  function appendListButton(bubble, phone, openLabel, rows) {
+    if (!bubble) return;
+    const wrap = document.createElement("div");
+    wrap.className = "wa-buttons";
+    const opener = document.createElement("button");
+    opener.className = "wa-btn";
+    opener.innerHTML = `<span class="ico">☰</span>${escapeHtml(openLabel)}`;
+    wrap.appendChild(opener);
+    opener.addEventListener("click", () => {
+      if (wrap.dataset.open === "1") return;
+      wrap.dataset.open = "1";
+      opener.disabled = true;
+      rows.forEach(r => {
+        if (!r.id) return;
+        const el = document.createElement("button");
+        el.className = "wa-btn";
+        el.style.textAlign = "left";
+        el.innerHTML = `<b>${escapeHtml(r.title || r.id)}</b>` +
+                       (r.description ? `<br><span style="font-weight:400;color:#667781;font-size:.72rem">${escapeHtml(r.description)}</span>` : "");
+        el.addEventListener("click", () => {
+          disableBubbleButtons(wrap);
+          tap(phone, r.id, r.title || r.id);
         });
-        webhookLogEl.innerHTML = text;
-      }
-
-      // 2. AI LangChain Engine Parser
-      const aiLogEl = document.getElementById('log-ai');
-      if (state.llm_logs.length === 0) {
-        aiLogEl.innerHTML = "No active LangChain parsing queries captured yet. Try sending an order message from the Customer WhatsApp panel.";
-      } else {
-        let text = '';
-        state.llm_logs.slice().reverse().forEach(log => {
-          text += `[${log.timestamp}] Call Status: ${log.status} (Model: ${log.model_used})\n`;
-          text += `Latency: ${log.latency.toFixed(3)}s\n\n`;
-          text += `--- PROMPT SENT TO HUGGING FACE ---\n${log.prompt}\n\n`;
-          text += `--- PARSED OUTPUT JSON ---\n${log.response}\n`;
-          text += `================================================================================\n\n`;
-        });
-        aiLogEl.innerHTML = text;
-      }
-
-      // RAG Vector KB monitor rendering
-      const ragLogEl = document.getElementById('log-rag');
-      if (!state.rag_logs || state.rag_logs.length === 0) {
-        ragLogEl.innerHTML = "Awaiting RAG lookup data... Sent messages will update the client's vector knowledge base.";
-      } else {
-        let text = '';
-        state.rag_logs.slice().reverse().forEach(log => {
-          text += `[${log.timestamp}] RAG Context Search for ${log.phone}\n`;
-          text += `Query: "${log.query}"\n`;
-          text += `Query Vector Embeddings Preview (MiniLM L6): [${log.vector_preview.join(', ')}]\n\n`;
-          text += `--- TOP MATCHES RETRIEVED (COSINE SIMILARITY MATRIX) ---\n`;
-          log.matches.forEach((match, idx) => {
-            text += `  #${idx + 1} [Score: ${match.similarity.toFixed(4)}] [Time: ${match.timestamp}]\n`;
-            text += `     Message: "${match.text}"\n`;
-          });
-          text += `================================================================================\n\n`;
-        });
-        ragLogEl.innerHTML = text;
-      }
-
-      // 3. Queue Workers logs
-      const queueLogEl = document.getElementById('log-queue');
-      if (state.queue_logs.length === 0) {
-        queueLogEl.innerHTML = "Awaiting queue operations...";
-      } else {
-        let text = '';
-        state.queue_logs.slice().reverse().forEach(log => {
-          text += `[${log.timestamp}] ${log.message}\n`;
-        });
-        queueLogEl.innerHTML = text;
-      }
-    }
-
-    function updateDatabaseView(state) {
-      // 1. Orders table
-      const ordersBody = document.querySelector('#db-orders tbody');
-      if (state.orders.length === 0) {
-        ordersBody.innerHTML = `<tr><td colspan="6" style="text-align:center; color:var(--text-muted);">Table Empty</td></tr>`;
-      } else {
-        ordersBody.innerHTML = state.orders.map(o => {
-          const itemsStr = o.items.map(i => `${i.qty}x ${i.item}`).join(', ');
-          const statusClass = 'status-' + o.status.toLowerCase().replace('_for_', '').replace('_', '');
-          return `
-            <tr>
-              <td><strong>${o.id}</strong></td>
-              <td>${o.customer_phone}</td>
-              <td>${itemsStr}</td>
-              <td>₹${o.amount}</td>
-              <td>${o.delivery_time}</td>
-              <td><span class="status-badge ${statusClass}">${o.status}</span></td>
-            </tr>
-          `;
-        }).join('');
-      }
-
-      // 2. Deliveries table
-      const deliveriesBody = document.querySelector('#db-deliveries tbody');
-      if (state.deliveries.length === 0) {
-        deliveriesBody.innerHTML = `<tr><td colspan="4" style="text-align:center; color:var(--text-muted);">Table Empty</td></tr>`;
-      } else {
-        deliveriesBody.innerHTML = state.deliveries.map(d => {
-          const statusClass = 'status-' + d.status.toLowerCase().replace('_', '');
-          return `
-            <tr>
-              <td><strong>${d.id}</strong></td>
-              <td>${d.order_id}</td>
-              <td>${d.driver_id}</td>
-              <td><span class="status-badge ${statusClass}">${d.status}</span></td>
-            </tr>
-          `;
-        }).join('');
-      }
-
-      // 3. Users Table
-      const usersBody = document.querySelector('#db-users tbody');
-      usersBody.innerHTML = state.users.map(u => `
-        <tr>
-          <td>${u.id}</td>
-          <td>${u.phone}</td>
-          <td>${u.name}</td>
-          <td><span style="font-weight:700; color:var(--accent);">${u.role}</span></td>
-        </tr>
-      `).join('');
-
-      // 4. Knowledge Base Table
-      const kbBody = document.querySelector('#db-kb tbody');
-      if (!state.knowledge_bases || Object.keys(state.knowledge_bases).length === 0) {
-        kbBody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-muted);">Vector Index Empty. Send chat messages to build memories!</td></tr>`;
-      } else {
-        let html = '';
-        Object.entries(state.knowledge_bases).forEach(([phone, list]) => {
-          const user = state.users.find(u => u.phone === phone);
-          const name = user ? `${user.name} (${user.role})` : phone;
-          const snippets = list.map(item => `• "${item.text}"`).join('<br>');
-          html += `
-            <tr>
-              <td><strong>${name}</strong></td>
-              <td style="font-size: 0.85rem; color: var(--text-secondary); max-width: 400px; word-wrap: break-word;">${snippets}</td>
-              <td><span class="status-badge status-preparing" style="background-color: #3b82f6;">384 dimensions</span></td>
-            </tr>
-          `;
-        });
-        kbBody.innerHTML = html;
-      }
-    }
-
-    // Interactive Actions
-    function sendMockMessage(phone, inputId) {
-      const input = document.getElementById(inputId);
-      const text = input.value.trim();
-      if (!text) return;
-      
-      input.value = '';
-      
-      // Simulate WhatsApp HTTP Hook Request
-      fetch('/webhook/whatsapp', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Hub-Signature-256': 'sha256=MOCK_ENCRYPTED_SIGNATURE_VERIFIED_HOMAATRI_2026'
-        },
-        body: JSON.stringify({
-          phone: phone,
-          message: text
-        })
-      })
-      .then(res => {
-        if (!res.ok) {
-          // Webhook timeout warning
-          return res.json().then(err => {
-            alert(`WhatsApp Webhook Warning:\n${err.detail}`);
-          });
-        }
-      })
-      .catch(err => console.error("Error executing mock hook:", err));
-    }
-
-    function chefAction(action) {
-      fetch('/api/driver/action', { method: 'POST' }) // Flush check
-      fetch('/api/chef/action', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: action })
+        wrap.appendChild(el);
       });
-    }
+    });
+    bubble.insertBefore(wrap, bubble.querySelector(".bubble-meta"));
+  }
+  function disableBubbleButtons(wrap) {
+    wrap.querySelectorAll("button").forEach(b => b.disabled = true);
+  }
 
-    function driverAction(action) {
-      fetch('/api/driver/action', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: action })
+  // ---------------- Outbound actions (POST) ---------------------------
+  async function postJSON(url, body) {
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: body ? JSON.stringify(body) : undefined,
       });
+      return res.ok ? await res.json().catch(() => ({})) : null;
+    } catch (e) {
+      console.error("POST failed", url, e);
+      return null;
+    }
+  }
+
+  function sendFromInput(phone) {
+    const inp = document.querySelector(`[data-input="${cssEsc(phone)}"]`);
+    if (!inp) return;
+    const text = inp.value.trim();
+    if (!text) return;
+    inp.value = "";
+    // optimistic outgoing bubble
+    addBubble(phone, "out", linkify(text), Date.now() / 1000);
+    postJSON("/api/sim/send", { phone, text, profile_name: PROFILE_NAME[phone] || "" });
+  }
+
+  function tap(phone, replyId, title) {
+    // optimistic outgoing bubble of the tapped title
+    addBubble(phone, "out", escapeHtml(title), Date.now() / 1000);
+    postJSON("/api/sim/tap", { phone, reply_id: replyId, title });
+  }
+
+  function shareLocation(phone) {
+    // Fixed demo coordinate near Bengaluru (per spec).
+    const latitude = 12.9611, longitude = 77.6387;
+    addBubble(phone, "out",
+      `<a class="loc-card" href="https://www.google.com/maps?q=${latitude},${longitude}" target="_blank" rel="noopener" style="display:block;text-decoration:none;color:inherit;">
+        <div class="loc-map">📍</div>
+        <div class="loc-body"><div class="loc-name">My location</div><div class="loc-addr">${latitude}, ${longitude}</div></div>
+      </a>`, Date.now() / 1000);
+    postJSON("/api/sim/location", { phone, latitude, longitude });
+  }
+
+  async function resetDemo() {
+    const btn = document.getElementById("resetBtn");
+    btn.disabled = true; btn.textContent = "Resetting…";
+    await postJSON("/api/reset", null);
+    // Clear all chats + de-dupe caches (SSE will push fresh state next).
+    Object.keys(chatEls).forEach(p => { if (chatEls[p]) chatEls[p].innerHTML = ""; });
+    seenWamids.clear(); outgoingByWamid.clear();
+    btn.disabled = false; btn.textContent = "Reset Demo";
+  }
+  document.getElementById("resetBtn").addEventListener("click", resetDemo);
+
+  // ---------------- Order state panel ---------------------------------
+  const STATUS_FLOW = ["PENDING","AWAITING_PAYMENT","CONFIRMED","PREPARING","READY_FOR_PICKUP","OUT_FOR_DELIVERY","DELIVERED"];
+  const STATUS_LABEL = {
+    PENDING:"Placed", AWAITING_PAYMENT:"Awaiting payment", CONFIRMED:"Confirmed",
+    PREPARING:"Preparing", READY_FOR_PICKUP:"Ready for pickup",
+    OUT_FOR_DELIVERY:"Out for delivery", DELIVERED:"Delivered"
+  };
+
+  function renderOrderPanel(state) {
+    const host = document.getElementById("orderState");
+    const orders = (state && state.orders) || [];
+    if (!orders.length) {
+      host.innerHTML = `<div class="empty-state">No active orders yet.<br>Start by ordering from the Customer phone.</div>`;
+      return;
+    }
+    const o = orders[orders.length - 1]; // most recent
+    const cancelled = o.status === "CANCELLED";
+
+    // timeline
+    let timeline = "";
+    if (cancelled) {
+      timeline = `<div class="tl-step current"><span class="tl-dot"></span>Cancelled</div>`;
+    } else {
+      const curIdx = STATUS_FLOW.indexOf(o.status);
+      timeline = STATUS_FLOW.map((s, i) => {
+        const cls = i < curIdx ? "done" : (i === curIdx ? "current" : "");
+        return `<div class="tl-step ${cls}"><span class="tl-dot"></span>${STATUS_LABEL[s]}</div>`;
+      }).join("");
     }
 
-    function chefChangeResponse(action) {
-      fetch('/api/chef/change-response', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: action })
-      });
+    // items
+    const items = (o.items || []).map(it =>
+      `<div class="item-row"><span><span class="q">${it.quantity}× </span>${escapeHtml(it.name)}</span><span>₹${fmt(it.line_total)}</span></div>`
+    ).join("") || `<div class="empty-state" style="padding:8px">No items yet</div>`;
+
+    // change requests
+    const changes = (o.change_requests || []).map(c =>
+      `<div class="change-req"><b>${escapeHtml(c.type)}</b> · ${escapeHtml(c.status)}<br>${escapeHtml(c.description || "")}</div>`
+    ).join("");
+
+    const delivery = o.delivery || {};
+    const payment = o.payment || {};
+
+    host.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <span class="order-code">${escapeHtml(o.code || "")}</span>
+        <span class="badge b-${o.status}">${(o.status || "").replace(/_/g," ")}</span>
+      </div>
+      <div class="timeline">${timeline}</div>
+      <div class="items-list">${items}</div>
+      <div class="totals">
+        <div class="row"><span>Subtotal</span><span>₹${fmt(o.subtotal)}</span></div>
+        <div class="row"><span>Delivery fee</span><span>₹${fmt(o.delivery_fee)}</span></div>
+        <div class="row grand"><span>Total</span><span>₹${fmt(o.total)}</span></div>
+      </div>
+      ${o.customer_name ? `<div class="kv">Customer: <b>${escapeHtml(o.customer_name)}</b></div>` : ""}
+      ${o.delivery_address ? `<div class="kv">Address: <b>${escapeHtml(o.delivery_address)}</b></div>` : ""}
+      ${o.requested_delivery_time ? `<div class="kv">Delivery by: <b>${escapeHtml(o.requested_delivery_time)}</b></div>` : ""}
+      ${payment.status ? `<div class="kv">Payment: <b>${escapeHtml(payment.status)}</b>${payment.amount ? ` (₹${fmt(payment.amount)})` : ""}</div>` : ""}
+      ${delivery.status ? `<div class="kv">Delivery: <b>${escapeHtml(delivery.status)}</b>${delivery.route_url ? ` · <a href="${delivery.route_url}" target="_blank" rel="noopener" style="color:var(--wa-green-light)">route</a>` : ""}</div>` : ""}
+      ${changes ? `<div style="margin-top:10px">${changes}</div>` : ""}
+    `;
+  }
+  function fmt(n){ if (n == null || isNaN(n)) return "0"; return Number(n).toLocaleString("en-IN", { maximumFractionDigits: 2 }); }
+
+  // ---------------- SSE event handling --------------------------------
+  function handleEvent(payload) {
+    if (!payload || !payload.kind) return;
+
+    if (payload.kind === "state") {
+      renderOrderPanel(payload.state || {});
+      return;
     }
 
-    function driverChangeResponse(action) {
-      fetch('/api/driver/change-response', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: action })
-      });
+    if (payload.kind === "wa_message") {
+      const target = payload.target;
+      if (!KNOWN.has(target)) return;          // ignore unknown phones
+      if (payload.wamid && seenWamids.has(payload.wamid)) return; // de-dupe
+      if (payload.wamid) seenWamids.add(payload.wamid);
+      renderIncoming(target, payload.message || {}, payload.ts);
+      return;
     }
 
-    function triggerChefConsolidation() {
-      fetch('/api/chef/consolidate', { method: 'POST' })
-        .then(res => res.json())
-        .then(data => {
-          if (data.status === 'error') {
-            alert(data.message);
-          }
-        });
+    if (payload.kind === "wa_status") {
+      // Update tick marks on the matching outgoing bubble (nice-to-have).
+      const b = payload.wamid && outgoingByWamid.get(payload.wamid);
+      if (!b) return;
+      const tick = b.querySelector(".tick");
+      if (!tick) return;
+      if (payload.status === "sent")      { tick.textContent = "✓";  tick.classList.remove("read"); }
+      else if (payload.status === "delivered") { tick.textContent = "✓✓"; tick.classList.remove("read"); }
+      else if (payload.status === "read") { tick.textContent = "✓✓"; tick.classList.add("read"); }
+      return;
     }
+  }
 
-    function resetDatabase() {
-      if (confirm("Are you sure you want to reset all order lists and logs?")) {
-        fetch('/api/reset', { method: 'POST' })
-          .then(() => fetchState());
-      }
-    }
+  // ---------------- Connection status ---------------------------------
+  function setStatus(connected) {
+    const pill = document.getElementById("statusPill");
+    const txt = document.getElementById("statusText");
+    pill.classList.toggle("connected", connected);
+    pill.classList.toggle("disconnected", !connected);
+    txt.textContent = connected ? "Connected" : "Reconnecting…";
+  }
 
-    function updateSettings() {
-      const queueVal = document.getElementById('toggle-queue').checked;
-      const latencyRange = document.getElementById('latency-range');
-      const latencyVal = document.getElementById('latency-val');
-      
-      const latency = parseFloat(latencyRange.value);
-      latencyVal.textContent = latency.toFixed(1) + 's';
+  // ---------------- SSE with auto-reconnect ---------------------------
+  let es = null, reconnectTimer = null;
+  function connectStream() {
+    if (es) { try { es.close(); } catch(_){} }
+    es = new EventSource("/api/stream");
 
-      fetch('/api/settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          queue_enabled: queueVal,
-          simulate_latency: latency
-        })
-      });
-    }
+    es.onopen = () => setStatus(true);
+    es.onmessage = (ev) => {
+      setStatus(true);
+      try { handleEvent(JSON.parse(ev.data)); }
+      catch (e) { console.error("Bad SSE payload", e, ev.data); }
+    };
+    es.onerror = () => {
+      setStatus(false);
+      // EventSource retries automatically, but force a fresh connection
+      // after a short delay to recover from a broken stream.
+      try { es.close(); } catch(_){}
+      clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(connectStream, 2500);
+    };
+  }
 
-    // Settings sync on load
-    function loadSettings() {
-      fetch('/api/state')
-        .then(res => res.json())
-        .then(state => {
-          document.getElementById('toggle-queue').checked = state.settings.queue_enabled;
-          document.getElementById('latency-range').value = state.settings.simulate_latency;
-          document.getElementById('latency-val').textContent = state.settings.simulate_latency.toFixed(1) + 's';
-        });
-    }
-
-    // Startup Poll Loop
-    loadSettings();
-    setInterval(fetchState, 1000);
-    fetchState();
+  // ---------------- Init ----------------------------------------------
+  buildPhones();
+  // Optional initial paint before the first SSE tick.
+  fetch("/api/state").then(r => r.ok ? r.json() : null).then(s => { if (s) renderOrderPanel(s); }).catch(() => {});
+  connectStream();
   </script>
 </body>
 </html>

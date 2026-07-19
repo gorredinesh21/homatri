@@ -1,0 +1,17 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+.git/
+.gitignore
+*.db
+*.sqlite3
+_e2e_test.db
+.pytest_cache/
+.ruff_cache/
+tests/
+main.py
+run_poc.sh
+RESEARCH_NOTES.md
+*.md
+!README.md

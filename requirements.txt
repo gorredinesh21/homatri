@@ -1,8 +1,28 @@
-fastapi
-uvicorn
-langchain
-langchain-huggingface
-pydantic
-jinja2
-httpx
-python-dotenv
+# ── Homaatri production runtime dependencies ──
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# Database (async Postgres + pgvector)
+SQLAlchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+pgvector==0.3.6
+greenlet==3.1.1
+
+# HTTP / templating / realtime
+httpx==0.28.1
+jinja2==3.1.5
+sse-starlette==2.2.1
+python-multipart==0.0.20
+
+# Resilience + fuzzy menu matching
+tenacity==9.0.0
+rapidfuzz==3.11.0
+
+# Payments
+razorpay==1.4.2
+
+# Config
+python-dotenv==1.0.1

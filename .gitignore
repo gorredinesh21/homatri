@@ -19,3 +19,7 @@ ENV/
 *.log
 *.db
 *.sqlite3
+
+# Secrets
+.env
+.env.local
