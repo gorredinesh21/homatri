@@ -623,6 +623,7 @@ async def _run_staff_agent(
         "send_message_to_customer tool. Do NOT output customer-facing text in your reply to "
         "the staff member — use the tool so it reaches the customer's WhatsApp!"
     )
+    result = await run_agent(system, text, tools)
     from app.services.llm import clean_llm_response
     reply = clean_llm_response(result.text) if result.text else ("Updated." if result.acted else "Okay.")
     await wa.send_text(user.phone, reply)
