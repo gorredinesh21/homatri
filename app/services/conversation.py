@@ -520,11 +520,11 @@ async def _run_customer_agent(
         + (f"{mem}\n" if mem else "")
         + (f"{shared}\n" if shared else "")
         + f"\nMENU:\n{_menu_text(menu)}\n\n"
-        "Use tools to place orders or make changes. Only call place_order when the "
-        "customer clearly names dishes to order. For greetings, questions, or a "
+        "vague 'yes', just reply warmly WITHOUT calling a tool (offer the menu). "
         "Never invent menu items or fake order codes/links. Keep replies WhatsApp-short. "
         "Do NOT write URLs yourself — official payment links are appended automatically."
     )
+    result = await run_agent(system, text, tools)
     from app.services.llm import clean_llm_response
     reply = clean_llm_response(result.text)
     if not reply:
