@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Homaatri — Enable Claude on Bedrock (step-by-step)</title>
+<style>
+  :root{--green:#075E54;--green2:#128C7E;--green3:#25D366;--saffron:#E8A33D;
+    --ink:#1b2733;--muted:#5b6b7a;--line:#e4e9ee;--bg:#f7f5f0;--card:#fff;
+    --shadow:0 1px 3px rgba(16,40,60,.06),0 8px 24px rgba(16,40,60,.06)}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    color:var(--ink);background:var(--bg);line-height:1.6}
+  .wrap{max-width:820px;margin:0 auto;padding:40px 22px 100px}
+  .tag{display:inline-block;background:rgba(232,163,61,.16);color:#a4671a;font-weight:700;
+    font-size:.72rem;letter-spacing:.08em;text-transform:uppercase;padding:5px 11px;border-radius:20px}
+  h1{font-size:2rem;letter-spacing:-.02em;margin:16px 0 6px}
+  h1 span{color:var(--green2)}
+  .lede{color:var(--muted);font-size:1.08rem;margin:0 0 8px}
+  .meta{color:#9aa7b2;font-size:.85rem;margin-bottom:26px}
+  h2{font-size:1.25rem;margin:34px 0 10px;display:flex;align-items:center;gap:11px}
+  h2 .n{background:var(--green);color:#fff;width:28px;height:28px;border-radius:8px;
+    display:inline-flex;align-items:center;justify-content:center;font-size:.85rem;font-weight:800;flex:0 0 28px}
+  ol.steps{counter-reset:s;list-style:none;padding:0;margin:0}
+  ol.steps li{background:var(--card);border:1px solid var(--line);border-radius:12px;
+    padding:14px 18px 14px 52px;margin:10px 0;position:relative;box-shadow:var(--shadow)}
+  ol.steps li::before{counter-increment:s;content:counter(s);position:absolute;left:14px;top:14px;
+    width:26px;height:26px;background:var(--green2);color:#fff;border-radius:50%;
+    display:flex;align-items:center;justify-content:center;font-weight:700;font-size:.82rem}
+  code{background:#eef3f2;padding:.1em .4em;border-radius:5px;font-size:.9em;
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;color:#0f2e2a}
+  .field{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin:12px 0;box-shadow:var(--shadow)}
+  .field .lbl{font-size:.78rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--green);margin-bottom:5px}
+  .field .val{background:#f4f8f7;border:1px dashed #bcd6cf;border-radius:8px;padding:9px 12px;position:relative}
+  .field .val pre{margin:0;white-space:pre-wrap;font-family:inherit;font-size:.95rem}
+  .copy{position:absolute;top:8px;right:8px;background:var(--green);color:#fff;border:none;border-radius:6px;
+    padding:4px 10px;font-size:.72rem;font-weight:700;cursor:pointer}
+  .copy:hover{background:var(--green2)}
+  .callout{border-radius:12px;padding:14px 16px;margin:16px 0;font-size:.94rem;border:1px solid}
+  .info{background:#eff6ff;border-color:#cfe0fb;color:#1e40af}
+  .warn{background:#fff5f2;border-color:#f6d3c4;color:#7c2d12}
+  .good{background:#f0faf5;border-color:#c3ecd6;color:#0f5132}
+  b{color:var(--ink)}
+  .callout b{color:inherit}
+  .pathbar{background:#0c3b36;color:#dfefe9;border-radius:10px;padding:10px 14px;font-size:.9rem;
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;margin:8px 0}
+  .pathbar b{color:#8fe3c4}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <span class="tag">Action needed · ~3 minutes</span>
+  <h1>Enable <span>Claude</span> on your Amazon Bedrock account</h1>
+  <p class="lede">AWS <b>retired the Model access page</b> — serverless models now auto-enable the first time they're invoked in a region. For Anthropic, first-time users may still be asked to submit a one-time "use-case details" form, which now appears <b>when you first invoke the model</b>. Everything below is copy-paste ready.</p>
+  <p class="meta">Account 187516374608 · region <b>us-east-1 (N. Virginia)</b> · sign in as the account owner / an admin with Bedrock permissions</p>
+
+  <div class="callout warn"><b>What changed (July 2026):</b> there is no longer a <i>Model access</i> page or an "enable specific models" step. Just <i>invoke</i> Claude once (playground or API) and it turns on. If Anthropic requires the use-case form, that prompt appears at first invocation — fill it with the answers in Step&nbsp;2.</div>
+
+  <h2><span class="n">1</span> Invoke Claude once to trigger enablement</h2>
+  <ol class="steps">
+    <li>Sign in to the <a href="https://console.aws.amazon.com/">AWS Console</a> as an admin/IAM user with Bedrock access.</li>
+    <li>Top-right region selector → choose <b>US East (N. Virginia) / us-east-1</b>. (This is where we invoke the models.)</li>
+    <li>Open <b>Amazon Bedrock</b> → left sidebar → <b>Playgrounds → Chat / Text</b>. Direct link: <br><span class="pathbar">console.aws.amazon.com/bedrock/home?region=us-east-1#/text-generation-playground</span></li>
+    <li>Click <b>Select model</b> → <b>Anthropic</b> → pick <b>Claude Haiku 4.5</b>.</li>
+    <li>Send any test message (e.g. "hello"). If a use-case form appears, go to Step&nbsp;2. If it just replies, access is already on — skip to Step&nbsp;4.</li>
+  </ol>
+
+  <h2><span class="n">2</span> Fill the Anthropic use-case form (only if prompted)</h2>
+  <p>If Anthropic gates first use, a form titled roughly <i>"Anthropic — Submit use case details"</i> appears at invocation. Field names vary slightly; use these answers for whatever it shows.</p>
+
+  <div class="field"><div class="lbl">Company / Organization name</div>
+    <div class="val"><pre id="f1">Homaatri</pre><button class="copy" data-t="f1">Copy</button></div></div>
+
+  <div class="field"><div class="lbl">Company website URL</div>
+    <div class="val"><pre id="f2">https://github.com/gorredinesh21/homatri</pre><button class="copy" data-t="f2">Copy</button></div>
+    <div style="font-size:.82rem;color:var(--muted);margin-top:6px">Use your real domain if you have one; the repo URL is fine for a pre-launch pilot.</div></div>
+
+  <div class="field"><div class="lbl">Industry</div>
+    <div class="val"><pre id="f3">Food &amp; Beverage / Food delivery (pick the closest, e.g. "Retail &amp; eCommerce")</pre><button class="copy" data-t="f3">Copy</button></div></div>
+
+  <div class="field"><div class="lbl">Intended users of the model</div>
+    <div class="val"><pre id="f4">Both internal (home chefs &amp; delivery riders) and external end-users (customers)</pre><button class="copy" data-t="f4">Copy</button></div></div>
+
+  <div class="field"><div class="lbl">Will the model's responses be seen by people outside your company?</div>
+    <div class="val"><pre id="f5">Yes — the assistant replies to customers over WhatsApp</pre><button class="copy" data-t="f5">Copy</button></div></div>
+
+  <div class="field"><div class="lbl">Use-case description (the important free-text box)</div>
+    <div class="val"><pre id="f6">Homaatri is a WhatsApp-first hyper-local food ordering platform connecting customers, home-based cooks (chefs), and local delivery riders. We use Anthropic Claude via Amazon Bedrock as a conversational assistant that (1) takes and manages food orders from customers in natural language, (2) coordinates order changes and status updates between the customer, chef, and rider, and (3) answers customer-support questions. Claude uses tool-calling to update order state in our own database, and its replies are delivered to end-users over WhatsApp. Deployment is in India; volume is low during our current pilot. Usage is limited strictly to food-ordering conversations and complies with the AWS Acceptable Use Policy — no prohibited use cases.</pre><button class="copy" data-t="f6">Copy</button></div></div>
+
+  <div class="field"><div class="lbl">Country / region of deployment</div>
+    <div class="val"><pre id="f7">India</pre><button class="copy" data-t="f7">Copy</button></div></div>
+
+  <div class="field"><div class="lbl">Expected monthly volume (if asked)</div>
+    <div class="val"><pre id="f8">Low — pilot stage (a few thousand messages/month)</pre><button class="copy" data-t="f8">Copy</button></div></div>
+
+  <h2><span class="n">3</span> Submit &amp; wait</h2>
+  <ol class="steps">
+    <li>Review and <b>Submit</b> the use-case details.</li>
+    <li>Anthropic approval is usually <b>minutes to a few hours</b>. Once cleared, invoking Claude simply works — no separate "Access granted" page to watch anymore.</li>
+    <li>Re-try a message in the playground after ~15 minutes to confirm it responds.</li>
+  </ol>
+
+  <h2><span class="n">4</span> Flip Homaatri to Claude</h2>
+  <p>Once access is granted, in the project <code>.env</code> replace the two active model lines with:</p>
+  <div class="field"><div class="val"><pre id="f9">BEDROCK_MODEL_ID=us.anthropic.claude-haiku-4-5-20251001-v1:0
+BEDROCK_FALLBACK_MODEL_ID=us.anthropic.claude-sonnet-4-5-20250929-v1:0</pre><button class="copy" data-t="f9">Copy</button></div></div>
+  <p>…then restart the server. (These lines are already pre-written as a comment in your <code>.env</code>.) Or just tell me "Claude's approved" and I'll flip it and verify.</p>
+
+  <div class="callout good"><b>How to confirm it worked:</b> ask the bot something and watch the server logs — you'll see it calling Claude instead of Nova, with noticeably better context and tool use. I can also run a quick verification for you.</div>
+
+  <div class="callout info"><b>Cost note:</b> Claude Haiku 4.5 is inexpensive per token and draws from your AWS credits just like Nova — no separate signup or card needed. Set a Billing → Budgets alert so you're warned before credits run low.</div>
+</div>
+
+<script>
+  document.querySelectorAll('.copy').forEach(b=>{
+    b.addEventListener('click',()=>{
+      const t=document.getElementById(b.dataset.t).innerText;
+      navigator.clipboard.writeText(t).then(()=>{const o=b.textContent;b.textContent='Copied ✓';setTimeout(()=>b.textContent=o,1200);});
+    });
+  });
+</script>
+</body>
+</html>

@@ -151,7 +151,35 @@ def add_food_items(order: Order, resolved: Iterable[ResolvedItem]) -> None:
         else:
             order.items.append(new)
             by_name[new.name.lower()] = new
+    _drop_nonpositive(order)
     order.recompute_totals()
+
+
+def remove_food_items(order: Order, resolved: Iterable[ResolvedItem]) -> list[str]:
+    """Reduce quantities for the given items; drop any that reach zero.
+
+    Returns human labels of what was removed. Quantity in each ResolvedItem is
+    the amount to remove.
+    """
+    by_name = {i.name.lower(): i for i in order.items}
+    removed: list[str] = []
+    for ri in resolved:
+        name = (ri.menu_item["name"] if isinstance(ri.menu_item, dict) else ri.menu_item.name)
+        existing = by_name.get(name.lower())
+        if existing:
+            take = min(existing.quantity, ri.quantity)
+            existing.quantity -= ri.quantity
+            removed.append(f"{take}x {name}")
+    _drop_nonpositive(order)
+    order.recompute_totals()
+    return removed
+
+
+def _drop_nonpositive(order: Order) -> None:
+    """Remove any order items whose quantity fell to zero or below."""
+    for i in list(order.items):
+        if i.quantity <= 0:
+            order.items.remove(i)
 
 
 def create_change_request(

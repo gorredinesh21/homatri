@@ -122,7 +122,12 @@ class Order(Base, TimestampMixin):
     subtotal: Mapped[float] = mapped_column(Float, default=0.0)
     delivery_fee: Mapped[float] = mapped_column(Float, default=0.0)
     total: Mapped[float] = mapped_column(Float, default=0.0)
+    amount_paid: Mapped[float] = mapped_column(Float, default=0.0)  # cumulative paid (for top-ups)
     notes: Mapped[str] = mapped_column(Text, default="")
+
+    @property
+    def balance_due(self) -> float:
+        return round(max(0.0, self.total - self.amount_paid), 2)
 
     items: Mapped[list["OrderItem"]] = relationship(
         back_populates="order", cascade="all, delete-orphan"
@@ -236,6 +241,27 @@ class KnowledgeEmbedding(Base):
     created_at: Mapped[datetime] = mapped_column(
         default=datetime.utcnow, nullable=False
     )
+
+
+class ConversationState(Base, TimestampMixin):
+    """Per-order working memory for the Manager agent.
+
+    Holds a rolling natural-language ``summary`` (compacted only when the raw
+    transcript grows long) plus ``open_threads`` (unresolved items the manager
+    is tracking, e.g. "customer asked to add dal fry — awaiting chef"). Injected
+    into every prompt so context survives long conversations without blowing the
+    token budget.
+    """
+
+    __tablename__ = "conversation_state"
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=new_uuid)
+    order_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("orders.id"), unique=True, index=True
+    )
+    summary: Mapped[str] = mapped_column(Text, default="")
+    open_threads: Mapped[list] = mapped_column(JSON, default=list)
+    turn_count: Mapped[int] = mapped_column(Integer, default=0)
 
 
 class RelationshipMemory(Base):

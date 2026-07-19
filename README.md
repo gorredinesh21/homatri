@@ -6,6 +6,20 @@ This repository is a **production-ready platform build**. Everything is real —
 
 ---
 
+## ⚡ Current state — agent-first, on Amazon Bedrock (branch `aws-bedrock`)
+
+This branch inverts the design: **the AI is the runtime, the backend is its tool belt.** A single tool-calling **Manager agent** receives every message (customer, chef, or driver), assembles full context each turn, and acts through ~30 tools; a deterministic state machine remains only as a guardrail.
+
+- **LLM:** Amazon Bedrock — `Llama 4 Scout` (primary) → `Qwen3-Next 80B` (fallback), chosen via an empirical [model-eval dashboard](docs/report/model-eval.html). `Claude Haiku 4.5` is a one-line swap. `LLM_ENABLED=false` → deterministic offline parser.
+- **Context Assembler** ([context.py](app/services/context.py)): every prompt = policy + live order state + last-N transcript + trio memory (pgvector) + rolling summary — so the AI never loses context.
+- **Policy layer** ([policy.py](app/services/policy.py)): lifecycle × action rules enforced as tool pre-conditions.
+- **Tool belt** (~30): ordering, add/remove, **cancel/refund**, **top-up on mid-cooking additions**, delivery changes, dietary **preferences**, chef ops (sold-out, kitchen open/close, prep ETA), driver ops (delay, location, reassignment), cross-role **mediator** messaging, and **escalate-to-human**.
+- **Payments:** pay screen shows the **amount only**; the itemised bill arrives as a WhatsApp text **after** payment; add-ons trigger a **top-up** the customer pays before the chef gets the final summary.
+
+See **[HANDOVER.md](HANDOVER.md)** for the full current picture, run steps, and the fresh-dockerization brief. The design/QA and AWS self-host/fine-tune analysis is in [docs/report/index.html](docs/report/index.html).
+
+---
+
 ## Architecture
 
 ```

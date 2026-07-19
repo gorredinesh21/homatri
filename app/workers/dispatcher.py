@@ -26,3 +26,11 @@ async def handle_inbound_message(msg: InboundMessage) -> None:
             await process_inbound(session, wa, pay, msg)
     except Exception:  # noqa: BLE001
         log.exception("failed to process inbound from %s", msg.from_phone)
+        # Never leave the user staring at silence — send a graceful nudge.
+        try:
+            await wa.send_text(
+                msg.from_phone,
+                "Sorry, I hit a brief technical snag on that one — please send it again.",
+            )
+        except Exception:  # noqa: BLE001
+            pass

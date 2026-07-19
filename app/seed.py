@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.logging import get_logger
 from app.models.entities import (
     Chef,
+    ConversationState,
     Delivery,
     Driver,
     KnowledgeEmbedding,
@@ -46,8 +47,8 @@ async def seed_if_empty(session: AsyncSession) -> bool:
 async def reset_and_seed(session: AsyncSession) -> None:
     # order matters for FK integrity
     for model in (
-        KnowledgeEmbedding, RelationshipMemory, OrderChangeRequest, Payment, Delivery, OrderItem,
-        Order, MenuItem, Chef, Driver, User,
+        KnowledgeEmbedding, RelationshipMemory, ConversationState, OrderChangeRequest,
+        Payment, Delivery, OrderItem, Order, MenuItem, Chef, Driver, User,
     ):
         await session.execute(delete(model))
     await _seed(session)

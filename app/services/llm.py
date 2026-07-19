@@ -37,6 +37,31 @@ class LLMUnavailable(RuntimeError):
     """Raised when no Bedrock model could satisfy the request (network/auth/models)."""
 
 
+def _content_to_text(content: Any) -> str:
+    """Extract ONLY the natural-language text from a Bedrock/LangChain response.
+
+    Bedrock Converse returns ``content`` as a list of blocks that can include
+    ``tool_use`` blocks. We must keep only ``text`` blocks — never stringify a
+    tool_use dict, or the raw ``{'type':'tool_use',...}`` leaks to the user.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for c in content:
+            if isinstance(c, dict):
+                # a text block: {"type":"text","text":"..."} or {"text":"..."}
+                if isinstance(c.get("text"), str):
+                    parts.append(c["text"])
+                # ignore tool_use / toolUse / other block types
+            elif isinstance(c, str):
+                parts.append(c)
+        return " ".join(p for p in parts if p).strip()
+    return str(content)
+
+
 def _to_langchain_messages(messages: list[dict[str, Any]]) -> list[BaseMessage]:
     """Convert dict-style OpenAI message objects to LangChain BaseMessage objects."""
     result: list[BaseMessage] = []
@@ -65,7 +90,11 @@ def _to_langchain_messages(messages: list[dict[str, Any]]) -> list[BaseMessage]:
                             "id": tc.get("id", fn.get("name", "")),
                         }
                     )
-                result.append(AIMessage(content=content, tool_calls=tool_calls))
+                # IMPORTANT: when the assistant turn carries tool calls, send an
+                # empty text content. Bedrock's Converse API (Llama 4, Qwen, etc.)
+                # rejects a message that mixes text ("conversation") blocks with
+                # tool-use blocks in the same turn. The filler text is unused.
+                result.append(AIMessage(content="", tool_calls=tool_calls))
             else:
                 result.append(AIMessage(content=content))
         elif role == "tool":
@@ -123,10 +152,7 @@ class LLMClient:
                 lc_messages.insert(0, SystemMessage(content="Reply strictly in valid JSON format."))
         
         resp = await llm.ainvoke(lc_messages, max_tokens=max_tokens)
-        content = resp.content
-        if isinstance(content, list):
-            content = " ".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content])
-        return clean_llm_response(str(content or ""))
+        return clean_llm_response(_content_to_text(resp.content))
 
     async def chat(
         self,
@@ -188,13 +214,7 @@ class LLMClient:
                 else:
                     resp = await llm.ainvoke(lc_messages, max_tokens=max_tokens)
 
-                out_content = resp.content
-                if isinstance(out_content, list):
-                    out_content = " ".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in out_content])
-                else:
-                    out_content = str(out_content or "")
-
-                out_content = clean_llm_response(out_content)
+                out_content = clean_llm_response(_content_to_text(resp.content))
 
                 res_dict: dict[str, Any] = {
                     "role": "assistant",

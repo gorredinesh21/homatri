@@ -9,6 +9,7 @@ from app.models.enums import (  # noqa: F401
 )
 from app.models.entities import (  # noqa: F401
     Chef,
+    ConversationState,
     Delivery,
     Driver,
     KnowledgeEmbedding,
@@ -39,4 +40,5 @@ __all__ = [
     "OrderChangeRequest",
     "KnowledgeEmbedding",
     "RelationshipMemory",
+    "ConversationState",
 ]

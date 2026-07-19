@@ -27,6 +27,8 @@ async def pay_page(request: Request, code: str):
                 "code": order.code,
                 "customer_name": order.customer_name,
                 "total": order.total,
+                "due": order.balance_due,       # amount to pay NOW (delta for top-ups)
+                "is_topup": order.balance_due < order.total,
                 "subtotal": order.subtotal,
                 "delivery_fee": order.delivery_fee,
                 "status": order.status.value,

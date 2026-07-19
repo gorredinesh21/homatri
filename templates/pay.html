@@ -64,6 +64,8 @@
     }
 
     .status-note { font-size: 0.78rem; color: var(--dim); text-align: center; margin-bottom: 14px; }
+    .amount-label { font-size: 0.82rem; color: var(--dim); text-transform: uppercase; letter-spacing: .08em; margin: 8px 0 4px; }
+    .amount { font-size: 3rem; font-weight: 800; color: var(--wa-green-dark); margin-bottom: 22px; letter-spacing: -1px; }
 
     .pay-btn {
       width: 100%; border: none; cursor: pointer;
@@ -100,29 +102,14 @@
       <div class="sub">Secure checkout</div>
     </div>
 
-    <!-- Checkout view -->
-    <div class="body" id="checkout">
+    <!-- Checkout view — amount only. The itemised bill is sent to WhatsApp
+         AFTER payment as a text message. -->
+    <div class="body center" id="checkout">
       <span class="order-ref">Order {{ order['code'] }}</span>
-
-      <div class="items">
-        {% for item in order['items'] %}
-        <div class="item">
-          <span class="name">{{ item['name'] }} <span class="qty">×{{ item['quantity'] }}</span></span>
-          <span>&#8377;{{ '%.2f'|format(item['line_total']|float) }}</span>
-        </div>
-        {% endfor %}
-      </div>
-
-      <div class="totals">
-        <div class="row"><span>Subtotal</span><span>&#8377;{{ '%.2f'|format(order['subtotal']|float) }}</span></div>
-        <div class="row"><span>Delivery fee</span><span>&#8377;{{ '%.2f'|format(order['delivery_fee']|float) }}</span></div>
-        <div class="row grand"><span>Total</span><span>&#8377;{{ '%.2f'|format(order['total']|float) }}</span></div>
-      </div>
-
-      <div class="status-note">Order status: {{ order['status'] }}</div>
-
-      <button class="pay-btn" id="payBtn" onclick="pay()">Secure Pay &#8377;{{ '%.2f'|format(order['total']|float) }}</button>
-      <div class="secure">🔒 Demo payment · your data is safe</div>
+      <div class="amount-label">{{ 'Extra amount to pay' if order['is_topup'] else 'Amount to pay' }}</div>
+      <div class="amount">&#8377;{{ '%.2f'|format(order['due']|float) }}</div>
+      <button class="pay-btn" id="payBtn" onclick="pay()">Pay &#8377;{{ '%.2f'|format(order['due']|float) }}</button>
+      <div class="secure">🔒 Demo payment · your itemised bill arrives on WhatsApp after payment</div>
     </div>
 
     <!-- Success view (revealed after payment) -->
@@ -148,7 +135,7 @@
         console.error(e);
         alert("Payment could not be processed. Please try again.");
         btn.disabled = false;
-        btn.textContent = "Secure Pay ₹{{ '%.2f'|format(order['total']|float) }}";
+        btn.textContent = "Pay ₹{{ '%.2f'|format(order['due']|float) }}";
       }
     }
   </script>
