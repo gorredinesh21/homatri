@@ -1,8 +1,8 @@
 """Text embedding service using AWS Bedrock Titan Embeddings (with deterministic fallback).
 
 Uses ``BedrockEmbeddings`` from ``langchain_aws`` (model: ``amazon.titan-embed-text-v2:0``)
-producing 1024-dimensional vectors. Falls back gracefully to an offline token-bucket
-embedder if Bedrock is disabled or unreachable.
+normalized to 384 dimensions to align with pgvector schemas. Falls back gracefully to an
+offline token-bucket embedder if Bedrock is disabled or unreachable.
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from app.core.logging import get_logger
 
 log = get_logger("embeddings")
 
-DIM = 1024
+DIM = 384
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
 _bedrock_embedder = None
@@ -56,13 +56,17 @@ def _offline_embed(text: str) -> list[float]:
 
 
 def embed(text: str) -> list[float]:
-    """Return a 1024-dimensional embedding vector for text using Bedrock (or offline)."""
+    """Return a 384-dimensional embedding vector for text using Bedrock (or offline)."""
     if settings.llm_enabled:
         embedder = _get_bedrock_embedder()
         if embedder is not None:
             try:
                 v = embedder.embed_query(text)
-                if len(v) == DIM:
+                if len(v) >= DIM:
+                    v = v[:DIM]
+                    norm = math.sqrt(sum(x * x for x in v))
+                    if norm > 0:
+                        return [x / norm for x in v]
                     return v
             except Exception as e:  # noqa: BLE001
                 log.warning("Bedrock embed query failed, using offline embedder: %s", e)

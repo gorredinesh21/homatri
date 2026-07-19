@@ -34,7 +34,7 @@ from app.models.enums import (
     UserRole,
 )
 
-EMBEDDING_DIM = 1024
+EMBEDDING_DIM = 384
 
 
 def _enum(py_enum, name: str):

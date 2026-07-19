@@ -19,6 +19,7 @@ from app.models.entities import (
     OrderChangeRequest,
     OrderItem,
     Payment,
+    RelationshipMemory,
     User,
 )
 from app.models.enums import UserRole
@@ -45,7 +46,7 @@ async def seed_if_empty(session: AsyncSession) -> bool:
 async def reset_and_seed(session: AsyncSession) -> None:
     # order matters for FK integrity
     for model in (
-        KnowledgeEmbedding, OrderChangeRequest, Payment, Delivery, OrderItem,
+        KnowledgeEmbedding, RelationshipMemory, OrderChangeRequest, Payment, Delivery, OrderItem,
         Order, MenuItem, Chef, Driver, User,
     ):
         await session.execute(delete(model))
