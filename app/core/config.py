@@ -32,13 +32,17 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://homatri:homatri@localhost:5432/homatri"
     )
 
-    # ── LLM ──
+    # ── LLM & AWS Bedrock ──
+    aws_region: str = "us-east-1"
+    bedrock_model_id: str = "amazon.nova-lite-v1:0"
+    bedrock_fallback_model_id: str = "amazon.nova-micro-v1:0"
+    bedrock_embedding_model_id: str = "amazon.titan-embed-text-v2:0"
     hf_router_url: str = "https://router.huggingface.co/v1/chat/completions"
     hf_token: str = ""
     hf_token_part1: str = ""
     hf_token_part2: str = ""
-    llm_primary_model: str = "meta-llama/Llama-3.1-8B-Instruct"
-    llm_fallback_model: str = "Qwen/Qwen3-8B"
+    llm_primary_model: str = "amazon.nova-lite-v1:0"
+    llm_fallback_model: str = "amazon.nova-micro-v1:0"
     llm_enabled: bool = True
 
     # ── WhatsApp ──

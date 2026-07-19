@@ -1,18 +1,23 @@
-"""LLM access via the Hugging Face Inference Router (OpenAI-compatible).
+"""LLM access via LangChain AWS Bedrock (ChatBedrockConverse).
 
-Primary model ``meta-llama/Llama-3.1-8B-Instruct`` with ``Qwen/Qwen3-8B`` as an
-automatic failover — both verified to emit clean JSON via native
-``response_format={"type": "json_object"}``. Every call is bounded by a timeout
-and retried; callers always get a definitive success or a raised error so the
-deterministic offline path can take over.
+Primary model ``amazon.nova-lite-v1:0`` with ``amazon.nova-micro-v1:0`` as an
+automatic failover on AWS Bedrock. Every call is bounded by a timeout and retried;
+callers get a definitive result or an LLMUnavailable exception so the deterministic
+offline path can take over cleanly.
 """
 from __future__ import annotations
 
 import json
-import socket
 from typing import Any
 
-import httpx
+from langchain_aws import ChatBedrockConverse
+from langchain_core.messages import (
+    AIMessage,
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    ToolMessage,
+)
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -29,66 +34,102 @@ Message = dict[str, str]
 
 
 class LLMUnavailable(RuntimeError):
-    """Raised when no model could satisfy the request (network/auth/models)."""
+    """Raised when no Bedrock model could satisfy the request (network/auth/models)."""
+
+
+def _to_langchain_messages(messages: list[dict[str, Any]]) -> list[BaseMessage]:
+    """Convert dict-style OpenAI message objects to LangChain BaseMessage objects."""
+    result: list[BaseMessage] = []
+    for m in messages:
+        role = m.get("role")
+        content = m.get("content") or ""
+        if role == "system":
+            result.append(SystemMessage(content=content))
+        elif role == "user":
+            result.append(HumanMessage(content=content))
+        elif role == "assistant":
+            tc_list = m.get("tool_calls")
+            if tc_list:
+                tool_calls = []
+                for tc in tc_list:
+                    fn = tc.get("function", {})
+                    args_str = fn.get("arguments", "{}")
+                    try:
+                        args = json.loads(args_str) if isinstance(args_str, str) else args_str
+                    except Exception:
+                        args = {}
+                    tool_calls.append(
+                        {
+                            "name": fn.get("name", ""),
+                            "args": args,
+                            "id": tc.get("id", fn.get("name", "")),
+                        }
+                    )
+                result.append(AIMessage(content=content, tool_calls=tool_calls))
+            else:
+                result.append(AIMessage(content=content))
+        elif role == "tool":
+            result.append(
+                ToolMessage(
+                    content=content,
+                    tool_call_id=m.get("tool_call_id", m.get("name", "")),
+                )
+            )
+    return result
 
 
 class LLMClient:
     def __init__(self) -> None:
-        self._client: httpx.AsyncClient | None = None
+        self._llm_instances: dict[str, ChatBedrockConverse] = {}
 
-    def _http(self) -> httpx.AsyncClient:
-        if self._client is None:
-            self._client = httpx.AsyncClient(timeout=httpx.Timeout(30.0))
-        return self._client
+    def _get_bedrock_llm(self, model_id: str, temperature: float = 0.1) -> ChatBedrockConverse:
+        cache_key = f"{model_id}:{temperature}"
+        if cache_key not in self._llm_instances:
+            self._llm_instances[cache_key] = ChatBedrockConverse(
+                model=model_id,
+                region_name=settings.aws_region,
+                temperature=temperature,
+            )
+        return self._llm_instances[cache_key]
 
     async def aclose(self) -> None:
-        if self._client is not None:
-            await self._client.aclose()
-            self._client = None
+        self._llm_instances.clear()
 
     @property
     def enabled(self) -> bool:
-        return settings.llm_enabled and bool(settings.hf_token)
+        return settings.llm_enabled
 
     @retry(
         reraise=True,
         stop=stop_after_attempt(2),
         wait=wait_exponential(multiplier=0.5, max=4),
-        retry=retry_if_exception_type((httpx.TransportError, httpx.HTTPStatusError)),
+        retry=retry_if_exception_type(Exception),
     )
     async def _call_model(
         self,
-        model: str,
-        messages: list[Message],
+        model_id: str,
+        messages: list[dict[str, Any]],
         *,
         json_mode: bool,
         max_tokens: int,
         temperature: float,
     ) -> str:
-        payload: dict[str, Any] = {
-            "model": model,
-            "messages": messages,
-            "max_tokens": max_tokens,
-            "temperature": temperature,
-        }
+        llm = self._get_bedrock_llm(model_id, temperature=temperature)
+        lc_messages = _to_langchain_messages(messages)
         if json_mode:
-            payload["response_format"] = {"type": "json_object"}
-
-        resp = await self._http().post(
-            settings.hf_router_url,
-            headers={
-                "Authorization": f"Bearer {settings.hf_token}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        content = data["choices"][0]["message"]["content"]
-        # Qwen3 (a reasoning model) may wrap output in <think>...</think>; strip it.
+            if lc_messages and isinstance(lc_messages[0], SystemMessage):
+                lc_messages[0].content += "\nIMPORTANT: Reply strictly in valid JSON format."
+            else:
+                lc_messages.insert(0, SystemMessage(content="Reply strictly in valid JSON format."))
+        
+        resp = await llm.ainvoke(lc_messages, max_tokens=max_tokens)
+        content = resp.content
+        if isinstance(content, list):
+            content = " ".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in content])
+        content = str(content).strip()
         if "</think>" in content:
-            content = content.split("</think>", 1)[1]
-        return content.strip()
+            content = content.split("</think>", 1)[1].strip()
+        return content
 
     async def chat(
         self,
@@ -98,12 +139,13 @@ class LLMClient:
         max_tokens: int = 512,
         temperature: float = 0.1,
     ) -> str:
-        """Return the assistant text, trying primary then fallback model."""
+        """Return assistant text, trying primary Bedrock model then fallback model."""
         if not self.enabled:
-            raise LLMUnavailable("LLM disabled or no HF token configured")
+            raise LLMUnavailable("LLM disabled in configuration")
 
+        models = [settings.bedrock_model_id, settings.bedrock_fallback_model_id]
         errors: list[str] = []
-        for model in (settings.llm_primary_model, settings.llm_fallback_model):
+        for model in models:
             if not model:
                 continue
             try:
@@ -114,15 +156,12 @@ class LLMClient:
                     max_tokens=max_tokens,
                     temperature=temperature,
                 )
-                log.info("LLM ok via %s (%d chars)", model, len(out))
+                log.info("Bedrock LLM ok via %s (%d chars)", model, len(out))
                 return out
-            except httpx.HTTPStatusError as e:
-                errors.append(f"{model}: HTTP {e.response.status_code}")
-                log.warning("LLM %s failed: HTTP %s", model, e.response.status_code)
             except Exception as e:  # noqa: BLE001
-                errors.append(f"{model}: {type(e).__name__}")
-                log.warning("LLM %s failed: %s", model, e)
-        raise LLMUnavailable("; ".join(errors) or "all models failed")
+                errors.append(f"{model}: {type(e).__name__} ({e})")
+                log.warning("Bedrock LLM %s failed: %s", model, e)
+        raise LLMUnavailable("; ".join(errors) or "all Bedrock models failed")
 
     async def raw_chat(
         self,
@@ -133,40 +172,53 @@ class LLMClient:
         max_tokens: int = 400,
         temperature: float = 0.0,
     ) -> dict[str, Any]:
-        """Return the full assistant message dict (supports ``tool_calls``).
-
-        Used by the agent loop. Tries primary then fallback model.
-        """
+        """Return full assistant message dict (supports ``tool_calls``) using LangChain Bedrock."""
         if not self.enabled:
-            raise LLMUnavailable("LLM disabled or no HF token configured")
+            raise LLMUnavailable("LLM disabled in configuration")
+
+        models = [settings.bedrock_model_id, settings.bedrock_fallback_model_id]
         errors: list[str] = []
-        for model in (settings.llm_primary_model, settings.llm_fallback_model):
+        lc_messages = _to_langchain_messages(messages)
+
+        for model in models:
             if not model:
                 continue
-            payload: dict[str, Any] = {
-                "model": model,
-                "messages": messages,
-                "max_tokens": max_tokens,
-                "temperature": temperature,
-            }
-            if tools:
-                payload["tools"] = tools
-                payload["tool_choice"] = tool_choice
             try:
-                resp = await self._http().post(
-                    settings.hf_router_url,
-                    headers={
-                        "Authorization": f"Bearer {settings.hf_token}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-                resp.raise_for_status()
-                return resp.json()["choices"][0]["message"]
+                llm = self._get_bedrock_llm(model, temperature=temperature)
+                if tools:
+                    llm_with_tools = llm.bind_tools(tools)
+                    resp: AIMessage = await llm_with_tools.ainvoke(lc_messages, max_tokens=max_tokens)
+                else:
+                    resp = await llm.ainvoke(lc_messages, max_tokens=max_tokens)
+
+                out_content = resp.content
+                if isinstance(out_content, list):
+                    out_content = " ".join([str(c.get("text", c)) if isinstance(c, dict) else str(c) for c in out_content])
+                else:
+                    out_content = str(out_content or "")
+
+                res_dict: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": out_content,
+                }
+                if resp.tool_calls:
+                    res_dict["tool_calls"] = [
+                        {
+                            "id": tc.get("id", tc["name"]),
+                            "type": "function",
+                            "function": {
+                                "name": tc["name"],
+                                "arguments": json.dumps(tc.get("args", {})),
+                            },
+                        }
+                        for tc in resp.tool_calls
+                    ]
+                return res_dict
             except Exception as e:  # noqa: BLE001
-                errors.append(f"{model}: {type(e).__name__}")
+                errors.append(f"{model}: {type(e).__name__} ({e})")
                 log.warning("raw_chat %s failed: %s", model, e)
-        raise LLMUnavailable("; ".join(errors) or "all models failed")
+
+        raise LLMUnavailable("; ".join(errors) or "all Bedrock models failed")
 
     async def chat_json(
         self, messages: list[Message], *, max_tokens: int = 512
@@ -178,26 +230,14 @@ class LLMClient:
         return _extract_json(raw)
 
     async def preflight(self) -> dict[str, Any]:
-        """Network/auth diagnostics, mirroring the POC's pre-flight engine."""
+        """Bedrock diagnostics report."""
         report: dict[str, Any] = {
-            "hf_token_present": bool(settings.hf_token),
+            "aws_region": settings.aws_region,
+            "bedrock_model_id": settings.bedrock_model_id,
             "llm_enabled": settings.llm_enabled,
-            "dns_router": None,
-            "tcp_cloudflare_dns": None,
             "chat_ok": None,
         }
-        try:
-            host = httpx.URL(settings.hf_router_url).host
-            report["dns_router"] = socket.gethostbyname(host)
-        except Exception as e:  # noqa: BLE001
-            report["dns_router"] = f"FAIL: {e}"
-        try:
-            s = socket.create_connection(("1.1.1.1", 53), timeout=3)
-            s.close()
-            report["tcp_cloudflare_dns"] = "ok"
-        except Exception as e:  # noqa: BLE001
-            report["tcp_cloudflare_dns"] = f"FAIL: {e}"
-        if report["hf_token_present"] and settings.llm_enabled:
+        if settings.llm_enabled:
             try:
                 await self.chat(
                     [{"role": "user", "content": "reply with the single word: ok"}],
@@ -225,5 +265,5 @@ def _extract_json(raw: str) -> dict[str, Any]:
         raise
 
 
-# Module-level singleton (one connection pool for the app).
+# Singleton instance
 llm = LLMClient()

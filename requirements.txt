@@ -24,5 +24,10 @@ rapidfuzz==3.11.0
 # Payments
 razorpay==1.4.2
 
+# AI / LLM / AWS Bedrock
+langchain-aws==0.2.35
+langchain-core==0.3.86
+boto3==1.43.2
+
 # Config
 python-dotenv==1.0.1

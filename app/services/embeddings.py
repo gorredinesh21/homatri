@@ -1,11 +1,8 @@
-"""Offline-first deterministic text embedder.
+"""Text embedding service using AWS Bedrock Titan Embeddings (with deterministic fallback).
 
-Maps text into a fixed 384-d space via hashed token bucketing with sub-token
-n-grams, then L2-normalizes. No model download, no network, fully reproducible
-— ideal for a host-agnostic demo. Because it's normalized, dot-product ==
-cosine similarity. The interface (``embed`` -> list[float] of DIM) is what the
-RAG layer depends on, so this can later be swapped for a real sentence encoder
-without touching callers.
+Uses ``BedrockEmbeddings`` from ``langchain_aws`` (model: ``amazon.titan-embed-text-v2:0``)
+producing 1024-dimensional vectors. Falls back gracefully to an offline token-bucket
+embedder if Bedrock is disabled or unreachable.
 """
 from __future__ import annotations
 
@@ -13,31 +10,63 @@ import hashlib
 import math
 import re
 
-DIM = 384
+from app.core.config import settings
+from app.core.logging import get_logger
+
+log = get_logger("embeddings")
+
+DIM = 1024
 _TOKEN_RE = re.compile(r"[a-z0-9]+")
 
-
-def _tokens(text: str) -> list[str]:
-    return _TOKEN_RE.findall(text.lower())
-
-
-def _bucket(token: str, salt: str = "") -> int:
-    h = hashlib.md5((salt + token).encode("utf-8")).hexdigest()
-    return int(h, 16) % DIM
+_bedrock_embedder = None
+_bedrock_init_attempted = False
 
 
-def embed(text: str) -> list[float]:
+def _get_bedrock_embedder():
+    global _bedrock_embedder, _bedrock_init_attempted
+    if not _bedrock_init_attempted:
+        _bedrock_init_attempted = True
+        try:
+            from langchain_aws import BedrockEmbeddings
+
+            _bedrock_embedder = BedrockEmbeddings(
+                model_id=settings.bedrock_embedding_model_id,
+                region_name=settings.aws_region,
+            )
+            log.info("BedrockEmbeddings initialized (%s)", settings.bedrock_embedding_model_id)
+        except Exception as e:  # noqa: BLE001
+            log.warning("BedrockEmbeddings init failed, falling back offline: %s", e)
+            _bedrock_embedder = None
+    return _bedrock_embedder
+
+
+def _offline_embed(text: str) -> list[float]:
     vec = [0.0] * DIM
-    toks = _tokens(text)
+    toks = _TOKEN_RE.findall(text.lower())
     for tok in toks:
-        vec[_bucket(tok)] += 1.0
-        # character trigrams add fuzziness (typo tolerance in retrieval)
+        h = int(hashlib.md5(tok.encode("utf-8")).hexdigest(), 16) % DIM
+        vec[h] += 1.0
         for i in range(len(tok) - 2):
-            vec[_bucket(tok[i : i + 3], salt="3g:")] += 0.5
+            h3g = int(hashlib.md5(("3g:" + tok[i : i + 3]).encode("utf-8")).hexdigest(), 16) % DIM
+            vec[h3g] += 0.5
     norm = math.sqrt(sum(v * v for v in vec))
     if norm == 0.0:
         return vec
     return [v / norm for v in vec]
+
+
+def embed(text: str) -> list[float]:
+    """Return a 1024-dimensional embedding vector for text using Bedrock (or offline)."""
+    if settings.llm_enabled:
+        embedder = _get_bedrock_embedder()
+        if embedder is not None:
+            try:
+                v = embedder.embed_query(text)
+                if len(v) == DIM:
+                    return v
+            except Exception as e:  # noqa: BLE001
+                log.warning("Bedrock embed query failed, using offline embedder: %s", e)
+    return _offline_embed(text)
 
 
 def cosine(a: list[float], b: list[float]) -> float:
