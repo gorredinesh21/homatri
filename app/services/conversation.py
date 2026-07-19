@@ -522,17 +522,23 @@ async def _run_customer_agent(
         + f"\nMENU:\n{_menu_text(menu)}\n\n"
         "Use tools to place orders or make changes. Only call place_order when the "
         "customer clearly names dishes to order. For greetings, questions, or a "
-        "vague 'yes', just reply warmly WITHOUT calling a tool (offer the menu). "
-        "Never invent menu items. Keep replies WhatsApp-short. When you place an "
-        "order, include the payment link from the tool result in your reply."
+        "Never invent menu items or fake order codes/links. Keep replies WhatsApp-short. "
+        "Do NOT write URLs yourself — official payment links are appended automatically."
     )
     result = await run_agent(system, text, tools)
     reply = result.text.strip() if result.text else ""
     if not reply:
         reply = "Done!" if result.acted else "How can I help with your order today?"
-    # Guarantee the exact payment link survives (never let the model drop it).
-    if box["link"] and box["link"] not in reply:
+    
+    # Strip any hallucinated /pay/ links from the LLM text so only official DB links are sent
+    import re
+    reply = re.sub(r"https?://\S+/pay/\S+", "", reply).strip()
+    reply = re.sub(r"/pay/[A-Za-z0-9\-]+", "", reply).strip()
+
+    # Guarantee the exact official payment link from the database is attached
+    if box["link"]:
         reply = f"{reply}\n\nTap to pay securely: {box['link']}"
+
     await wa.send_text(user.phone, reply, preview_url=bool(box["link"]))
     await rag.add_memory(session, user.phone, f"assistant: {reply}")
     # Record the turn in the trio's shared history (under the active/new order).
