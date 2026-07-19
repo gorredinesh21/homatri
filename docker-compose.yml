@@ -24,7 +24,7 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://homatri:homatri@db:5432/homatri
-      PUBLIC_BASE_URL: http://localhost:8000
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:8000}
       APP_ENV: production
       DEBUG: "false"
       # Providers (demo/mock by default; override for real Meta + Razorpay)
@@ -32,8 +32,11 @@ services:
       PAYMENT_PROVIDER: demo
       # LLM / AWS Bedrock settings
       AWS_REGION: ${AWS_REGION:-us-east-1}
-      BEDROCK_MODEL_ID: ${BEDROCK_MODEL_ID:-amazon.nova-lite-v1:0}
-      BEDROCK_FALLBACK_MODEL_ID: ${BEDROCK_FALLBACK_MODEL_ID:-amazon.nova-micro-v1:0}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      BEDROCK_MODEL_ID: ${BEDROCK_MODEL_ID:-us.meta.llama4-scout-17b-instruct-v1:0}
+      BEDROCK_FALLBACK_MODEL_ID: ${BEDROCK_FALLBACK_MODEL_ID:-qwen.qwen3-next-80b-a3b}
       BEDROCK_EMBEDDING_MODEL_ID: ${BEDROCK_EMBEDDING_MODEL_ID:-amazon.titan-embed-text-v2:0}
       LLM_ENABLED: ${LLM_ENABLED:-true}
       WEB_CONCURRENCY: "1"
