@@ -40,3 +40,13 @@ async def pay_page(request: Request, code: str):
     return templates.TemplateResponse(
         "pay.html", {"request": request, "order": order_data, "code": code}
     )
+
+
+@router.get("/gcp-presentation", response_class=HTMLResponse)
+async def gcp_presentation(request: Request):
+    from pathlib import Path
+    pres_file = Path("docs/gcp-presentation/index.html")
+    if pres_file.exists():
+        return HTMLResponse(content=pres_file.read_text(encoding="utf-8"))
+    return HTMLResponse(content="<h1>Presentation file not found</h1>", status_code=404)
+

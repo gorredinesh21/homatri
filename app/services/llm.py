@@ -11,6 +11,16 @@ import json
 from typing import Any
 
 from langchain_aws import ChatBedrockConverse
+try:
+    from langchain_google_vertexai import ChatVertexAI
+except ImportError:
+    ChatVertexAI = None
+
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+except ImportError:
+    ChatGoogleGenerativeAI = None
+
 from langchain_core.messages import (
     AIMessage,
     BaseMessage,
@@ -109,16 +119,38 @@ def _to_langchain_messages(messages: list[dict[str, Any]]) -> list[BaseMessage]:
 
 class LLMClient:
     def __init__(self) -> None:
-        self._llm_instances: dict[str, ChatBedrockConverse] = {}
+        self._llm_instances: dict[str, Any] = {}
 
-    def _get_bedrock_llm(self, model_id: str, temperature: float = 0.1) -> ChatBedrockConverse:
-        cache_key = f"{model_id}:{temperature}"
+    def _get_models(self) -> list[str]:
+        if settings.llm_provider in ("vertex", "gemini"):
+            return [m for m in [settings.gemini_model_id, settings.gemini_fallback_model_id] if m]
+        return [m for m in [settings.bedrock_model_id, settings.bedrock_fallback_model_id] if m]
+
+    def _get_llm(self, model_id: str, temperature: float = 0.1) -> Any:
+        cache_key = f"{settings.llm_provider}:{model_id}:{temperature}"
         if cache_key not in self._llm_instances:
-            self._llm_instances[cache_key] = ChatBedrockConverse(
-                model=model_id,
-                region_name=settings.aws_region,
-                temperature=temperature,
-            )
+            if settings.llm_provider in ("vertex", "gemini"):
+                if ChatVertexAI is not None:
+                    self._llm_instances[cache_key] = ChatVertexAI(
+                        model=model_id,
+                        project=settings.gcp_project_id,
+                        location=settings.gcp_region,
+                        temperature=temperature,
+                    )
+                elif ChatGoogleGenerativeAI is not None:
+                    self._llm_instances[cache_key] = ChatGoogleGenerativeAI(
+                        model=model_id,
+                        google_api_key=settings.gemini_api_key or None,
+                        temperature=temperature,
+                    )
+                else:
+                    raise LLMUnavailable("Google Vertex AI / Gemini packages not installed")
+            else:
+                self._llm_instances[cache_key] = ChatBedrockConverse(
+                    model=model_id,
+                    region_name=settings.aws_region,
+                    temperature=temperature,
+                )
         return self._llm_instances[cache_key]
 
     async def aclose(self) -> None:
@@ -143,7 +175,7 @@ class LLMClient:
         max_tokens: int,
         temperature: float,
     ) -> str:
-        llm = self._get_bedrock_llm(model_id, temperature=temperature)
+        llm = self._get_llm(model_id, temperature=temperature)
         lc_messages = _to_langchain_messages(messages)
         if json_mode:
             if lc_messages and isinstance(lc_messages[0], SystemMessage):
@@ -162,11 +194,11 @@ class LLMClient:
         max_tokens: int = 512,
         temperature: float = 0.1,
     ) -> str:
-        """Return assistant text, trying primary Bedrock model then fallback model."""
+        """Return assistant text, trying primary model then fallback model."""
         if not self.enabled:
             raise LLMUnavailable("LLM disabled in configuration")
 
-        models = [settings.bedrock_model_id, settings.bedrock_fallback_model_id]
+        models = self._get_models()
         errors: list[str] = []
         for model in models:
             if not model:
@@ -179,12 +211,12 @@ class LLMClient:
                     max_tokens=max_tokens,
                     temperature=temperature,
                 )
-                log.info("Bedrock LLM ok via %s (%d chars)", model, len(out))
+                log.info("LLM ok via %s [%s] (%d chars)", model, settings.llm_provider, len(out))
                 return out
             except Exception as e:  # noqa: BLE001
                 errors.append(f"{model}: {type(e).__name__} ({e})")
-                log.warning("Bedrock LLM %s failed: %s", model, e)
-        raise LLMUnavailable("; ".join(errors) or "all Bedrock models failed")
+                log.warning("LLM %s failed: %s", model, e)
+        raise LLMUnavailable("; ".join(errors) or "all models failed")
 
     async def raw_chat(
         self,
@@ -195,11 +227,11 @@ class LLMClient:
         max_tokens: int = 400,
         temperature: float = 0.0,
     ) -> dict[str, Any]:
-        """Return full assistant message dict (supports ``tool_calls``) using LangChain Bedrock."""
+        """Return full assistant message dict (supports ``tool_calls``)."""
         if not self.enabled:
             raise LLMUnavailable("LLM disabled in configuration")
 
-        models = [settings.bedrock_model_id, settings.bedrock_fallback_model_id]
+        models = self._get_models()
         errors: list[str] = []
         lc_messages = _to_langchain_messages(messages)
 
@@ -207,7 +239,7 @@ class LLMClient:
             if not model:
                 continue
             try:
-                llm = self._get_bedrock_llm(model, temperature=temperature)
+                llm = self._get_llm(model, temperature=temperature)
                 if tools:
                     llm_with_tools = llm.bind_tools(tools)
                     resp: AIMessage = await llm_with_tools.ainvoke(lc_messages, max_tokens=max_tokens)

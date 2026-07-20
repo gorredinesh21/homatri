@@ -32,7 +32,13 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://homatri:homatri@localhost:5432/homatri"
     )
 
-    # ── LLM & AWS Bedrock ──
+    # ── LLM & AWS / GCP ──
+    llm_provider: Literal["bedrock", "vertex", "gemini"] = "gemini"
+    gcp_project_id: str = "homatri"
+    gcp_region: str = "us-central1"
+    gemini_model_id: str = "gemini-2.0-flash-001"
+    gemini_fallback_model_id: str = "gemini-1.5-flash"
+    gemini_api_key: str = ""
     aws_region: str = "us-east-1"
     bedrock_model_id: str = "amazon.nova-lite-v1:0"
     bedrock_fallback_model_id: str = "amazon.nova-micro-v1:0"
@@ -41,8 +47,8 @@ class Settings(BaseSettings):
     hf_token: str = ""
     hf_token_part1: str = ""
     hf_token_part2: str = ""
-    llm_primary_model: str = "amazon.nova-lite-v1:0"
-    llm_fallback_model: str = "amazon.nova-micro-v1:0"
+    llm_primary_model: str = "gemini-2.0-flash-001"
+    llm_fallback_model: str = "gemini-1.5-flash"
     llm_enabled: bool = True
 
     # ── WhatsApp ──
