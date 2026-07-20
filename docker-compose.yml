@@ -30,7 +30,13 @@ services:
       # Providers (demo/mock by default; override for real Meta + Razorpay)
       WHATSAPP_PROVIDER: mock
       PAYMENT_PROVIDER: demo
-      # LLM / AWS Bedrock settings
+      # LLM Provider & GCP / AWS Bedrock settings
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      GCP_PROJECT_ID: ${GCP_PROJECT_ID:-homatri}
+      GCP_REGION: ${GCP_REGION:-us-central1}
+      GEMINI_MODEL_ID: ${GEMINI_MODEL_ID:-gemini-2.0-flash-001}
+      GEMINI_FALLBACK_MODEL_id: ${GEMINI_FALLBACK_MODEL_ID:-gemini-1.5-flash}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       AWS_REGION: ${AWS_REGION:-us-east-1}
       AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
       AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}

@@ -24,8 +24,11 @@ rapidfuzz==3.11.0
 # Payments
 razorpay==1.4.2
 
-# AI / LLM / AWS Bedrock
+# AI / LLM / AWS Bedrock & GCP Vertex AI / Gemini
 langchain-aws==0.2.35
+langchain-google-vertexai==2.1.2
+langchain-google-genai==2.0.10
+google-genai==2.12.1
 langchain-core==0.3.86
 boto3==1.43.2
 
