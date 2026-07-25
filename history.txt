@@ -62,6 +62,7 @@ STATUS:
 - Account Verified: errog2107@gmail.com (gcloud config profile [errog])
 - Project ID: homatri-503308
 - Target Model: gemini-2.5-flash (ChatVertexAI)
-- Implementation: Created sample `llm.py` using `langchain_google_vertexai.ChatVertexAI` with sync and async response generators.
-- Test Execution: Ran `python3 llm.py` — successfully invoked Gemini via Vertex AI and received response with 0 errors.
+- Simplified `llm.py`: 3-step minimal invocation script proving **NO API Key is needed** when using GCP Vertex AI, as `langchain-google-vertexai` automatically authenticates using `gcloud` CLI profile credentials (`errog2107@gmail.com`).
+- Test Execution: Ran `python3 llm.py` — successfully returned "Hello from GCP Gemini!" with 0 errors.
+
 
