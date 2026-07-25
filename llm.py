@@ -1,3 +1,7 @@
+# Suppress SDK deprecation and version warning spam
+import warnings
+warnings.filterwarnings("ignore")
+
 # ==============================================================================
 # ULTRA-SIMPLE GEMINI LLM CALL WITH LANGCHAIN
 # ==============================================================================

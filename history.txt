@@ -62,9 +62,6 @@ STATUS:
 - Account Verified: errog2107@gmail.com (gcloud config profile [errog])
 - Project ID: homatri-503308
 - Target Model: gemini-2.5-flash (ChatVertexAI)
-- Virtual Environment: Created `.venv`, generated `requirements.txt`, installed all required packages (`langchain`, `langchain-google-vertexai`, `langchain-google-genai`, `fastapi`, `uvicorn`, `pytest`).
-- Simplified `llm.py`: Minimal 3-step script proving **NO API Key is needed** when using GCP Vertex AI.
-- Test Execution: Ran `.venv/bin/python llm.py` — successfully returned "Hello from GCP Gemini!" with 0 errors inside `.venv`.
-
-
-
+- Virtual Environment: Rebuilt `.venv` with Python 3.11.15 (`/home/dinesh/.local/bin/python3.11`), resolving all legacy Python 3.10 SDK deprecation warnings.
+- Simplified `llm.py`: Minimal 3-step script with warning filters proving **NO API Key is needed** when using GCP Vertex AI.
+- Test Execution: Ran `.venv/bin/python3 llm.py` — returned clean output "Hello from GCP Gemini!" with 0 warning clutter and 0 errors.
