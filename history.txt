@@ -127,5 +127,5 @@ AGENT ROLES & TOPOLOGY:
      * If a Subagent requests a cross-domain write, it asks the Master Agent -> Master Agent delegates/sends the write request to the target domain Subagent -> Target Subagent performs the write in its own domain.
      * If a write is initiated by the Master Agent itself (e.g. system cutoffs, system orchestration), the Master Agent executes the write directly using its own global write access.
 
-
-
+4. ARCHITECTURE DOCUMENTATION:
+   - Authored comprehensive specification file `ai agent architecture.md` detailing topology, read/write matrices, delegation flows, and operational lifecycles.
