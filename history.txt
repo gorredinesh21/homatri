@@ -57,4 +57,11 @@ STATUS:
 --------------------------------------------------------------------------------
 [SECTION 3: LOG OF EXPERIMENTS & BUILD STEPS]
 --------------------------------------------------------------------------------
-(Entries will be appended below as we build step-by-step)
+
+[EXPERIMENT 001 - 2026-07-25]: LangChain GCP Vertex AI (Gemini) Integration Test
+- Account Verified: errog2107@gmail.com (gcloud config profile [errog])
+- Project ID: homatri-503308
+- Target Model: gemini-2.5-flash (ChatVertexAI)
+- Implementation: Created sample `llm.py` using `langchain_google_vertexai.ChatVertexAI` with sync and async response generators.
+- Test Execution: Ran `python3 llm.py` — successfully invoked Gemini via Vertex AI and received response with 0 errors.
+
