@@ -62,7 +62,9 @@ STATUS:
 - Account Verified: errog2107@gmail.com (gcloud config profile [errog])
 - Project ID: homatri-503308
 - Target Model: gemini-2.5-flash (ChatVertexAI)
-- Simplified `llm.py`: 3-step minimal invocation script proving **NO API Key is needed** when using GCP Vertex AI, as `langchain-google-vertexai` automatically authenticates using `gcloud` CLI profile credentials (`errog2107@gmail.com`).
-- Test Execution: Ran `python3 llm.py` — successfully returned "Hello from GCP Gemini!" with 0 errors.
+- Virtual Environment: Created `.venv`, generated `requirements.txt`, installed all required packages (`langchain`, `langchain-google-vertexai`, `langchain-google-genai`, `fastapi`, `uvicorn`, `pytest`).
+- Simplified `llm.py`: Minimal 3-step script proving **NO API Key is needed** when using GCP Vertex AI.
+- Test Execution: Ran `.venv/bin/python llm.py` — successfully returned "Hello from GCP Gemini!" with 0 errors inside `.venv`.
+
 
 
