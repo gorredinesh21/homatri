@@ -70,5 +70,38 @@ STATUS:
 - Created `llm_direct.py`: Implemented a direct invocation script using Google's official `google-genai` SDK (`google.genai.Client(vertexai=True, project="homatri-503308", location="global")`) **WITHOUT LangChain**.
 - Test Executions:
   * `.venv/bin/python3 llm.py` -> Successfully returned "Hello from Gemini 3.6 Flash via LangChain!".
-  * `.venv/bin/python3 llm_direct.py` -> Successfully returned "Hello from GCP Gemini 3.6 Flash (Direct SDK, No LangChain)!".
+
+--------------------------------------------------------------------------------
+[SECTION 4: CORE BUSINESS SPECIFICATIONS & SYSTEM FLOW]
+--------------------------------------------------------------------------------
+
+BUSINESS MODEL & CORE REQUIREMENTS:
+1. ENTITIES (3 Core Actors):
+   - Customers
+   - Home-Cook Chefs
+   - Delivery Drivers
+
+2. MEAL WINDOWS & STRICT CUTOFFS (No Impulse Ordering):
+   - Services offered: Lunch and Dinner only.
+   - Lunch Ordering Cutoff: Must be placed BEFORE 12:00 PM. No lunch orders accepted after 12:00 PM.
+   - Dinner Ordering Cutoff: Must be placed BEFORE 7:00 PM. No dinner orders accepted after 7:00 PM.
+
+3. WHATSAPP BUSINESS API INTERFACE:
+   - Primary interface: WhatsApp chat.
+   - Customer messages "Hi" -> AI assistant engages, collects item & preference details, and places the order into DB.
+
+4. BATCH PROCESSING & ROUTE OPTIMIZATION:
+   - At cutoff times (12:00 PM for lunch, 7:00 PM for dinner), chefs receive their aggregated order checklists.
+   - Delivery Route Optimization: System collects chef kitchen coordinates (pickups) and customer coordinates (drop-offs), using AI/algorithms to generate efficient route paths for delivery drivers.
+
+5. OPERATIONAL SIGNALS & HANDSHAKES:
+   - When food is ready and packed, Chef sends signal (e.g. "Order X is ready").
+   - System automatically notifies the assigned Driver that Order X is ready for pickup.
+
+6. AI CUSTOMER CARE & LIVE LOGISTICS TRACKING:
+   - AI acts as an interactive customer care agent (e.g. customer asks "Where is my driver?" -> AI queries driver location/order state and responds with live status).
+
+7. IMPLEMENTATION APPROACH:
+   - Evaluated step-by-step. Architecture, components, and tools selected incrementally through experiments.
+
 
