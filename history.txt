@@ -58,10 +58,17 @@ STATUS:
 [SECTION 3: LOG OF EXPERIMENTS & BUILD STEPS]
 --------------------------------------------------------------------------------
 
-[EXPERIMENT 001 - 2026-07-25]: LangChain GCP Vertex AI (Gemini) Integration Test
+[EXPERIMENT 001 - 2026-07-25]: LangChain GCP Vertex AI Integration Test
 - Account Verified: errog2107@gmail.com (gcloud config profile [errog])
 - Project ID: homatri-503308
-- Target Model: gemini-2.5-flash (ChatVertexAI)
-- Virtual Environment: Rebuilt `.venv` with Python 3.11.15 (`/home/dinesh/.local/bin/python3.11`), resolving all legacy Python 3.10 SDK deprecation warnings.
-- Simplified `llm.py`: Minimal 3-step script with warning filters proving **NO API Key is needed** when using GCP Vertex AI.
-- Test Execution: Ran `.venv/bin/python3 llm.py` — returned clean output "Hello from GCP Gemini!" with 0 warning clutter and 0 errors.
+- Virtual Environment: Rebuilt `.venv` with Python 3.11.15 (`/home/dinesh/.local/bin/python3.11`).
+- Test Execution: Verified basic setup.
+
+[EXPERIMENT 002 - 2026-07-25]: Upgrade to Gemini 3.6 Flash & Direct SDK Implementation (No LangChain)
+- Model Discovery: Tested models on GCP Vertex AI (`gemini-3.6-flash`, `gemini-2.5-flash`, `gemini-2.0-flash-001`, `gemini-1.5-pro`). Verified `gemini-3.6-flash` is active, accessible, and fast on location `global`.
+- Updated `llm.py`: Switched model to `gemini-3.6-flash` using `ChatVertexAI` via LangChain.
+- Created `llm_direct.py`: Implemented a direct invocation script using Google's official `google-genai` SDK (`google.genai.Client(vertexai=True, project="homatri-503308", location="global")`) **WITHOUT LangChain**.
+- Test Executions:
+  * `.venv/bin/python3 llm.py` -> Successfully returned "Hello from Gemini 3.6 Flash via LangChain!".
+  * `.venv/bin/python3 llm_direct.py` -> Successfully returned "Hello from GCP Gemini 3.6 Flash (Direct SDK, No LangChain)!".
+

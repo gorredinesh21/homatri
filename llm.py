@@ -9,32 +9,31 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore")
 
 # ==============================================================================
-# ULTRA-SIMPLE GEMINI LLM CALL WITH LANGCHAIN (GCP VERTEX AI)
-# ==============================================================================
-# FAQ: HOW DOES AUTHENTICATION WORK? IS AN API KEY NEEDED?
-#
-# -> GCP VERTEX AI METHOD (`ChatVertexAI`):
-#    Uses your active `gcloud` CLI profile (`errog2107@gmail.com`) automatically
-#    via GCP Application Default Credentials. NO API Key is required!
-#    You only specify your GCP `project` ID ("homatri-503308").
-#
-# -> GOOGLE AI STUDIO METHOD (`ChatGoogleGenerativeAI`):
-#    Used for free-tier / AI Studio developer API keys (`GEMINI_API_KEY="AIza..."`).
+# GEMINI LLM CALL WITH LANGCHAIN (GCP VERTEX AI — GEMINI 3.6 FLASH)
 # ==============================================================================
 
 from langchain_google_vertexai import ChatVertexAI
 
-# Step 1: Initialize Gemini via GCP Vertex AI (Uses active gcloud CLI credentials)
+# Step 1: Initialize Gemini using the latest model (gemini-3.6-flash) via GCP Vertex AI
 llm = ChatVertexAI(
-    model="gemini-2.5-flash",
+    model="gemini-3.6-flash",
     project="homatri-503308",
     location="global",
 )
 
-# Step 2: Make a simple call
-print("Making LLM call to GCP Gemini...")
-response = llm.invoke("Say 'Hello from GCP Gemini!' in 5 words.")
+# Step 2: Send 'hi' to the LLM
+print("Making LangChain LLM call to GCP Gemini 3.6 Flash...")
+response = llm.invoke("Hi! Respond with 'Hello from Gemini 3.6 Flash via LangChain!'.")
+
+# Helper to extract clean text if response is a list of blocks
+def extract_text(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = [c.get("text", "") if isinstance(c, dict) else str(c) for c in content]
+        return " ".join(p for p in parts if p).strip()
+    return str(content)
 
 # Step 3: Print result
 print("\nResult from LLM:")
-print(response.content)
+print(extract_text(response.content))
