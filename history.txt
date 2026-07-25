@@ -127,5 +127,43 @@ AGENT ROLES & TOPOLOGY:
      * If a Subagent requests a cross-domain write, it asks the Master Agent -> Master Agent delegates/sends the write request to the target domain Subagent -> Target Subagent performs the write in its own domain.
      * If a write is initiated by the Master Agent itself (e.g. system cutoffs, system orchestration), the Master Agent executes the write directly using its own global write access.
 
+
 4. ARCHITECTURE DOCUMENTATION:
    - Authored comprehensive specification file `ai agent architecture.md` detailing topology, read/write matrices, delegation flows, and operational lifecycles.
+
+--------------------------------------------------------------------------------
+[SECTION 6: DATABASE TABLE SCHEMA & INVENTORY SPECIFICATION]
+--------------------------------------------------------------------------------
+
+COMPLETE 18-TABLE INVENTORY:
+1. CUSTOMER DOMAIN (Customer Agent Writes):
+   - `customer_profiles`: Contact, delivery address, default coordinates.
+   - `customer_orders`: Order header, total pricing, meal window, status.
+   - `customer_order_items`: Line items, quantities, special requests.
+   - `customer_payments`: Payment transaction links & payment status.
+   - `customer_chat_history`: Customer WhatsApp chat transcript.
+   - `customer_reviews`: Ratings & feedback for chefs and drivers.
+
+2. CHEF DOMAIN (Chef Agent Writes):
+   - `chef_profiles`: Kitchen details, address, kitchen coordinates.
+   - `chef_menu_items`: Dish catalog, pricing, meal availability.
+   - `chef_daily_inventory`: Daily batch capacity & units sold.
+   - `chef_order_readiness`: Meal prep & packing readiness signals.
+   - `chef_chat_history`: Chef WhatsApp chat transcript.
+
+3. DRIVER DOMAIN (Driver Agent Writes):
+   - `driver_profiles`: Driver details, vehicle type, active status.
+   - `driver_locations`: Real-time GPS location telemetry.
+   - `driver_trip_status`: Active delivery trip status.
+   - `driver_chat_history`: Driver WhatsApp chat transcript.
+
+4. MASTER / SYSTEM DOMAIN (Master Agent Writes):
+   - `system_meal_windows`: Batch cutoff manager (Lunch 12 PM / Dinner 7 PM).
+   - `system_delivery_routes`: High-level TSP route assignments.
+   - `system_delivery_stops`: Sequential stop-by-stop route itinerary.
+   - `system_agent_logs`: Audit log for Master Agent relay calls & write delegations.
+   - `system_outbound_queue`: Outbound WhatsApp message dispatch queue.
+
+5. DATABASE SCHEMA DOCUMENTATION:
+   - Authored `table_structure.md` listing all 18 tables grouped by domain ownership.
+
