@@ -101,7 +101,31 @@ BUSINESS MODEL & CORE REQUIREMENTS:
 6. AI CUSTOMER CARE & LIVE LOGISTICS TRACKING:
    - AI acts as an interactive customer care agent (e.g. customer asks "Where is my driver?" -> AI queries driver location/order state and responds with live status).
 
-7. IMPLEMENTATION APPROACH:
-   - Evaluated step-by-step. Architecture, components, and tools selected incrementally through experiments.
+
+--------------------------------------------------------------------------------
+[SECTION 5: MULTI-AGENT ARCHITECTURE & DATA ACCESS SPECIFICATION]
+--------------------------------------------------------------------------------
+
+AGENT ROLES & TOPOLOGY:
+1. Four Agents Total:
+   - Master / Manager Agent (Central Supervisor / Orchestrator)
+   - Customer Agent (Domain Specialist)
+   - Chef Agent (Domain Specialist)
+   - Delivery Driver Agent (Domain Specialist)
+
+2. COMMUNICATION PATTERN (Hub-and-Spoke Mediator):
+   - Subagents cannot communicate directly with each other.
+   - All inter-role communications are relayed through the Master Agent.
+   - Master Agent can talk directly to all three subagents.
+
+3. DATABASE PERMISSION & WRITE ROUTING PROTOCOL:
+   - READ ACCESS: Unrestricted across all 4 agents. All agents have global read-only access to all database tables (both same-domain and cross-domain).
+   - WRITE ACCESS:
+     * Subagents: Scoped strictly to their own domain tables (Customer Agent -> `customer_*`, Chef Agent -> `chef_*`, Driver Agent -> `driver_*`).
+     * Master Agent: Global write access across all database tables.
+   - CROSS-DOMAIN WRITE ROUTING:
+     * If a Subagent requests a cross-domain write, it asks the Master Agent -> Master Agent delegates/sends the write request to the target domain Subagent -> Target Subagent performs the write in its own domain.
+     * If a write is initiated by the Master Agent itself (e.g. system cutoffs, system orchestration), the Master Agent executes the write directly using its own global write access.
+
 
 
