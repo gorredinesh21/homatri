@@ -1,0 +1,60 @@
+================================================================================
+                           HOMAATRI — HISTORY LOG
+================================================================================
+
+--------------------------------------------------------------------------------
+[SECTION 1: SUMMARY OF WORK DONE TILL NOW (V1 ARCHITECTURE & EXPERIMENTS)]
+--------------------------------------------------------------------------------
+
+1. INITIAL FOUNDATION & HUGGING FACE ROUTER MIGRATION:
+   - Built a food ordering WhatsApp-native chatbot POC using FastAPI, SQLite / PostgreSQL.
+   - Dealt with legacy Hugging Face serverless API endpoint decommissioning (`api-inference.huggingface.co`) by migrating to Hugging Face Inference Router (`router.huggingface.co`) using OpenAI-compatible payload schema.
+   - Created deterministic fallback parsing rules for offline stability when LLM services were unavailable or rate-limited.
+
+2. AGENT-FIRST & AWS BEDROCK ARCHITECTURE:
+   - Inverted platform design: "The AI is the runtime; the backend is its tool belt."
+   - Integrated AWS Bedrock (`ChatBedrockConverse`) with models: Llama 4 Scout (`us.meta.llama4-scout-17b-instruct-v1:0`), Qwen3-Next 80B, Amazon Nova Lite/Micro, and Claude Haiku 4.5.
+   - Implemented PostgreSQL 16 + pgvector (384-dim normalized vector embeddings for trio shared memory & RAG).
+   - Designed ~30 domain tools across Customer, Chef, and Driver roles.
+   - Added 3-way Mediator Agent relay tools (`send_message_to_customer`, `notify_chef`, `notify_driver`) for cross-role communication.
+   - Implemented strict guardrails:
+     * Context Assembler (`app/services/context.py`): Injects system policy, live order state, last-N transcript, vector trio memory, and rolling summary into every LLM turn.
+     * Policy Engine (`app/services/policy.py`): Enforces state machine lifecycle rules as tool pre-conditions.
+     * System-Authored Financial Integrity: Itemized bills, exact price calculations, and payment links generated programmatically by backend services (LLM never guesses prices or payment URLs). Handling of mid-cooking item additions via incremental top-up payment links.
+     * CoT Sanitization: Programmatically stripped `<think>` / `<thinking>` tags and broken markdown link placeholders.
+
+3. GCP VERTEX AI & GEMINI 3.6 FLASH UPGRADE:
+   - Multi-provider support (`bedrock`, `vertex`, `gemini`) in `app/services/llm.py`.
+   - Upgraded default primary engine to Gemini 3.6 Flash on GCP Vertex AI Agent Platform with global location configuration.
+   - Authored interactive architecture masterclass presentation site (`docs/gcp-presentation/index.html`).
+
+4. MULTI-USER SIMULATOR & LOCATION-BASED KITCHEN DISCOVERY:
+   - Built 3-phone Web Simulator UI (`templates/index.html`) with real-time SSE (`/api/stream`).
+   - Added character switcher dropdowns for multi-actor simulation (Customers: Dinesh, Priya, Rahul; Chefs: Ramesh, Sunita, Maria; Drivers: Vikram, Suresh).
+   - Added location-based discovery tools (`list_nearby_chefs`, `select_chef`) enabling customers to share coordinates and receive active kitchen menus nearby.
+
+5. REAL-TIME MICROSECOND TELEMETRY TRACKER:
+   - Built microsecond-level telemetry span tracker (`app/services/telemetry.py` & `/telemetry` router).
+   - Developed interactive flow diagram dashboard (`templates/telemetry.html`) with raw prompt, SQL query, vector search, and tool execution inspection.
+
+6. FAST MCP SERVER & REPO HARDENING:
+   - Added FastMCP server (`app/mcp_server.py`) exposing Homaatri tools over Model Context Protocol.
+   - Cleaned up unneeded archives/caches and updated Handover & Research docs.
+
+--------------------------------------------------------------------------------
+[SECTION 2: FRESH START — REBUILDING FROM SCRATCH]
+--------------------------------------------------------------------------------
+
+DATE INITIATED: 2026-07-25
+BRANCH: from-scratch
+
+STATUS:
+- Created a clean, blank branch `from-scratch`.
+- All previous code is preserved safely in git branches (`main`, `gcp-poc-upgrade`, `aws-bedrock`, `gcp-gemini`).
+- The working environment on branch `from-scratch` is reset to a completely fresh state.
+- Going forward, we will build Homaatri component by component, conducting experiments, running tests, and recording all findings and code updates in this `history.txt` file.
+
+--------------------------------------------------------------------------------
+[SECTION 3: LOG OF EXPERIMENTS & BUILD STEPS]
+--------------------------------------------------------------------------------
+(Entries will be appended below as we build step-by-step)
