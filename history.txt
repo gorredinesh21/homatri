@@ -183,7 +183,29 @@ KEY INSIGHT & ARCHITECTURAL BREAKTHROUGH:
    - WhatsApp Notification: Human actor (Chef/Driver/Admin) receives WhatsApp notification.
    - Resume Execution: Human reply triggers webhook, loading DB checkpoint and resuming graph execution to confirm back up the chain.
 
+
 3. DOCUMENTATION:
    - Authored `langgraph_hitl_relay.md` specifying the complete HITL relay architecture, sequence diagrams, and use cases.
+
+--------------------------------------------------------------------------------
+[SECTION 8: BACKEND CONCURRENCY, STATE ISOLATION & WORKSPACE REORGANIZATION]
+--------------------------------------------------------------------------------
+
+WORKSPACE REORGANIZATION:
+1. All markdown documentation files moved into a dedicated directory `markdowns/`:
+   - `markdowns/ai agent architecture.md`
+   - `markdowns/table_structure.md`
+   - `markdowns/langgraph_hitl_relay.md`
+   - `markdowns/backend_concurrency_and_state.md`
+2. RULE ENFORCED: All future markdown documentation files will be saved in `markdowns/`.
+
+BACKEND EXECUTION & CONCURRENCY CONCEPTS VERIFIED:
+1. Server Definition: Single 24/7 Python FastAPI application handling WhatsApp Business API webhook POST requests (`/webhook`).
+2. Agent Definition: Python execution node wrapping system prompt, Gemini 3.6 Flash LLM invocation, DB tool calls, and state management.
+3. Phone-Number Authentication: Immutable E.164 phone numbers used for instant database lookup (`customer_profiles` / `chef_profiles` / `driver_profiles`). Unregistered users routed to onboarding.
+4. Single Shared Container: 1 stateless Docker container serving all concurrent users via asynchronous I/O (`asyncio`), saving state to PostgreSQL.
+5. Concurrency & State Isolation: Asynchronous tasks run in parallel. LangGraph `thread_id` (phone number) ensures 100% state isolation between concurrent user turns.
+6. Documentation: Authored `markdowns/backend_concurrency_and_state.md`.
+
 
 
