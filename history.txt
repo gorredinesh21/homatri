@@ -221,7 +221,37 @@ CUSTOMER AGENT SPECIFICATION COMPLETED:
    - Meal Window Cutoff Guardrails (12:00 PM Lunch / 7:00 PM Dinner).
    - Past Order History & Receipts (`get_customer_order_history`).
    - Post-Delivery Ratings & Reviews (`submit_review`).
+
 3. Documentation: Authored `markdowns/customer_agent.md`.
+
+--------------------------------------------------------------------------------
+[SECTION 10: CHEF, DRIVER, & MASTER AGENTS MASTER SPECIFICATIONS]
+--------------------------------------------------------------------------------
+
+1. CHEF AGENT SPECIFICATION (`markdowns/chef_agent.md`):
+   - Persona: Kitchen Operations Lead (direct, precise, time-conscious).
+   - Core Rule: Onboarding & menu pricing managed strictly by Admin in DB (no self-registration or chat pricing changes).
+   - Actions (10 Actions): `get_chef_profile`, `set_daily_batch_capacity`, `toggle_dish_stock_status`, `get_chef_inventory_status`, `get_chef_batch_checklist`, `get_batch_item_totals`, `mark_order_packed_ready`, `get_assigned_driver_for_pickup`, `handle_customer_dietary_request_approval` (HITL `interrupt()`), `notify_chef_driver_arrival`.
+
+2. DELIVERY DRIVER AGENT SPECIFICATION (`markdowns/delivery_driver_agent.md`):
+   - Persona: Logistics Navigator (concise, location-aware, fast-paced).
+   - Core Rule: Admin handles driver onboarding in DB. Deliveries are made to Apartment Gates / Security Guards (no doorstep flat delivery).
+   - Multi-Order Gate Grouping: Consolidates orders sharing the same apartment gate coordinates into a single gate stop.
+   - Sequential Leg Navigation: Single GCP Route Optimization API call at cutoff (saved in `system_delivery_stops`). Driver Agent dispatches single-leg navigation links (`Stop N -> Stop N+1`) one by one on WhatsApp as driver messages "Reached".
+   - Actions (9 Actions): `get_driver_profile`, `update_driver_location`, `get_assigned_route_itinerary`, `dispatch_next_leg_navigation_link`, `mark_driver_reached_stop`, `mark_orders_picked_up`, `mark_gate_delivery_completed`, `report_unlocatable_address_hitl`, `report_vehicle_delay_alert`.
+
+3. MASTER AGENT SPECIFICATION (`markdowns/master_agent.md`):
+   - Persona: System Supervisor & Central Orchestrator (disciplined, impartial, global write authority).
+   - Dynamic Context Assembler & Scoped Tools: Python pre-fetches live DB state and injects operational variables into the System Prompt on every turn.
+   - Cross-Entity Double-HITL Relay: Central bridge executing cross-domain delegation and relaying HITL prompts across Customer, Chef, and Driver agents.
+   - Actions (13 Actions): `validate_meal_window_cutoff_clock`, `lock_meal_window_batch`, `orchestrate_gcp_route_optimization`, `relay_customer_dietary_request_to_chef`, `process_order_cancellation_request`, `relay_order_ready_signal_to_driver`, `relay_gate_delivery_completed_to_customer`, `relay_unlocatable_address_to_customer`, `relay_traffic_delay_alert_to_customers`, `process_payment_webhook_confirmation`, `execute_cross_domain_write_delegation`, `enqueue_and_dispatch_whatsapp_message`, `log_system_audit_event`.
+
+4. MASTER DOCUMENTATION CREATED & COMMITTED:
+   - `markdowns/customer_agent.md`
+   - `markdowns/chef_agent.md`
+   - `markdowns/delivery_driver_agent.md`
+   - `markdowns/master_agent.md`
+
 
 
 
