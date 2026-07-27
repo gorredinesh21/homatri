@@ -267,7 +267,21 @@ TIMEOUTS & OBSERVABILITY STANDARD:
 1. Hard Loop Kill: `recursion_limit = 10` on all LangGraph invocations.
 2. HITL Checkpoint Expiry: 15-minute TTL on all `interrupt()` states in PostgreSQL with background expiry worker.
 3. Tracing: LangSmith enabled via environment variables (`LANGCHAIN_TRACING_V2=true`).
+
 4. Documentation: Authored `markdowns/agent_coding_rules_and_observability.md`.
+
+--------------------------------------------------------------------------------
+[SECTION 12: PENDING ARCHITECTURE ROADMAP]
+--------------------------------------------------------------------------------
+
+THE 5 PENDING ARCHITECTURAL MILESTONES (TO-DO ROADMAP BEFORE CODING):
+1. Milestone 1: Database Column Schemas & SQL DDL Definitions (18 tables, data types, precision, FK constraints, indexes).
+2. Milestone 2: Agent Tools Design & Pydantic Mapping (Grouping/splitting actions into `@tool` defs, Pydantic schemas, docstrings).
+3. Milestone 3: LangGraph State Machine & Graph Structure (State `TypedDict`, nodes, conditional edges, checkpointer).
+4. Milestone 4: WhatsApp Business API Webhook Gateway Engine (FastAPI endpoint, verification handshake, payload parser, outbound queue).
+5. Milestone 5: Payment Gateway Webhook & Financial Verification Flow (Razorpay/Stripe webhook, HMAC signature verification, order status transitions).
+6. Documentation: Authored `markdowns/todo_architecture_roadmap.md`.
+
 
 
 
