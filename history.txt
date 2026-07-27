@@ -205,7 +205,24 @@ BACKEND EXECUTION & CONCURRENCY CONCEPTS VERIFIED:
 3. Phone-Number Authentication: Immutable E.164 phone numbers used for instant database lookup (`customer_profiles` / `chef_profiles` / `driver_profiles`). Unregistered users routed to onboarding.
 4. Single Shared Container: 1 stateless Docker container serving all concurrent users via asynchronous I/O (`asyncio`), saving state to PostgreSQL.
 5. Concurrency & State Isolation: Asynchronous tasks run in parallel. LangGraph `thread_id` (phone number) ensures 100% state isolation between concurrent user turns.
+
 6. Documentation: Authored `markdowns/backend_concurrency_and_state.md`.
+
+--------------------------------------------------------------------------------
+[SECTION 9: CUSTOMER AGENT MASTER SPECIFICATION]
+--------------------------------------------------------------------------------
+
+CUSTOMER AGENT SPECIFICATION COMPLETED:
+1. Persona: Hospitality Concierge on WhatsApp (warm, respectful, efficient, English/Hinglish).
+2. Features Included:
+   - Distance-Sorted Chef Discovery (`view_chefs_sorted_by_distance` via Haversine math).
+   - WhatsApp Location Pin Ingestion (`update_customer_location_from_whatsapp_pin`).
+   - Programmatic Bill Generation & Incremental Mid-Cooking Top-Up Billing (`generate_topup_payment_link`).
+   - Meal Window Cutoff Guardrails (12:00 PM Lunch / 7:00 PM Dinner).
+   - Past Order History & Receipts (`get_customer_order_history`).
+   - Post-Delivery Ratings & Reviews (`submit_review`).
+3. Documentation: Authored `markdowns/customer_agent.md`.
+
 
 
 
