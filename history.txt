@@ -246,11 +246,29 @@ CUSTOMER AGENT SPECIFICATION COMPLETED:
    - Cross-Entity Double-HITL Relay: Central bridge executing cross-domain delegation and relaying HITL prompts across Customer, Chef, and Driver agents.
    - Actions (13 Actions): `validate_meal_window_cutoff_clock`, `lock_meal_window_batch`, `orchestrate_gcp_route_optimization`, `relay_customer_dietary_request_to_chef`, `process_order_cancellation_request`, `relay_order_ready_signal_to_driver`, `relay_gate_delivery_completed_to_customer`, `relay_unlocatable_address_to_customer`, `relay_traffic_delay_alert_to_customers`, `process_payment_webhook_confirmation`, `execute_cross_domain_write_delegation`, `enqueue_and_dispatch_whatsapp_message`, `log_system_audit_event`.
 
+
 4. MASTER DOCUMENTATION CREATED & COMMITTED:
    - `markdowns/customer_agent.md`
    - `markdowns/chef_agent.md`
    - `markdowns/delivery_driver_agent.md`
    - `markdowns/master_agent.md`
+
+--------------------------------------------------------------------------------
+[SECTION 11: GOLDEN DEFENSIVE AI CODING RULES & OBSERVABILITY STANDARD]
+--------------------------------------------------------------------------------
+
+THE 4 GOLDEN DEFENSIVE CODING RULES (MANDATORY FOR ALL HOMAATRI AI CODE):
+1. Rule 1: Enforce `return_direct=True` or route directly to `END` for terminal actions to prevent infinite LLM retry loops.
+2. Rule 2: Implement hard pre-condition assertions in Python tool functions before performing any DB writes.
+3. Rule 3: Use strict Pydantic tool input schemas to validate LLM tool parameters at the schema boundary.
+4. Rule 4: Clean state schema hygiene (`TypedDict`/Pydantic) to prevent variable overwrites across graph nodes.
+
+TIMEOUTS & OBSERVABILITY STANDARD:
+1. Hard Loop Kill: `recursion_limit = 10` on all LangGraph invocations.
+2. HITL Checkpoint Expiry: 15-minute TTL on all `interrupt()` states in PostgreSQL with background expiry worker.
+3. Tracing: LangSmith enabled via environment variables (`LANGCHAIN_TRACING_V2=true`).
+4. Documentation: Authored `markdowns/agent_coding_rules_and_observability.md`.
+
 
 
 
