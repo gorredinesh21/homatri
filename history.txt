@@ -164,6 +164,26 @@ COMPLETE 18-TABLE INVENTORY:
    - `system_agent_logs`: Audit log for Master Agent relay calls & write delegations.
    - `system_outbound_queue`: Outbound WhatsApp message dispatch queue.
 
+
 5. DATABASE SCHEMA DOCUMENTATION:
    - Authored `table_structure.md` listing all 18 tables grouped by domain ownership.
+
+--------------------------------------------------------------------------------
+[SECTION 7: LANGGRAPH HUMAN-IN-THE-LOOP (HITL) & AGENT RELAY PATTERN]
+--------------------------------------------------------------------------------
+
+KEY INSIGHT & ARCHITECTURAL BREAKTHROUGH:
+1. RAW TRANSCRIPT PASSING ANTIPATTERN REJECTED:
+   - Passing raw chat history (e.g. last 10 messages) creates massive token bloat, causes context loss when window shifts, and pollutes specialist prompt contexts with unrelated dialogue.
+
+2. STRUCTURED INTENT RELAY & HITL FLOW:
+   - Subagents extract clean JSON intent payloads (e.g. `{"order_id": "ord_104", "request": "No garlic"}`).
+   - Relay Chain: Customer Agent -> Master Agent -> Target Subagent (Chef/Driver Agent).
+   - LangGraph `interrupt()`: Target Subagent triggers `interrupt()`, saving checkpoint state to DB and pausing execution.
+   - WhatsApp Notification: Human actor (Chef/Driver/Admin) receives WhatsApp notification.
+   - Resume Execution: Human reply triggers webhook, loading DB checkpoint and resuming graph execution to confirm back up the chain.
+
+3. DOCUMENTATION:
+   - Authored `langgraph_hitl_relay.md` specifying the complete HITL relay architecture, sequence diagrams, and use cases.
+
 
