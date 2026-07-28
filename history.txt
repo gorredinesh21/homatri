@@ -431,11 +431,27 @@ COMPLETE INTER-AGENT TOOL LINKING & PROTOCOL SPECIFICATIONS COMPLETED:
    - Unified Billing (Customer Tool 8): Auto-detects initial bill vs mid-cooking top-up.
    - Stop-Based Driver Handshakes (Driver Tools 4-6): Replaced continuous telemetry with practical stop arrival & gate completion handshakes.
 
+
 DOCUMENTATION UPDATED & COMMITTED:
 - `markdowns/chef_agent.md` (9 Tools)
 - `markdowns/customer_agent.md` (11 Tools)
 - `markdowns/master_agent.md` (12 Tools)
 - `markdowns/delivery_driver_agent.md` (8 Tools)
+
+--------------------------------------------------------------------------------
+[SECTION 20: LEFT-TO-RIGHT MERMAID EXECUTION FLOWCHARTS (`graph LR`)]
+--------------------------------------------------------------------------------
+
+VISUAL EXECUTION FLOWCHARTS ADDED:
+1. Standardized `graph LR` Mermaid Flowchart diagrams embedded into all 4 agent master specification files for every cross-domain linked tool.
+2. Traces exact node-to-node execution paths, payloads, API calls, and terminal resolution conditions visually across Chef, Customer, Master, and Driver domains.
+
+DOCUMENTATION UPDATED & COMMITTED:
+- `markdowns/chef_agent.md` (Embedded Mermaid Flowcharts)
+- `markdowns/customer_agent.md` (Embedded Mermaid Flowcharts)
+- `markdowns/master_agent.md` (Embedded Mermaid Flowcharts)
+- `markdowns/delivery_driver_agent.md` (Embedded Mermaid Flowcharts)
+
 
 
 

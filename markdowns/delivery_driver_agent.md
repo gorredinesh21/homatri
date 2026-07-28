@@ -1,6 +1,6 @@
 # 🚴‍♂️ Master Specification: The Delivery Driver Agent Tools
 
-This document outlines the complete persona, communication rules, categories, and **8 Final Production LLM Tool Specifications** for the **Delivery Driver Agent** in Homaatri.
+This document outlines the complete persona, communication rules, categories, and **8 Final Production LLM Tool Specifications** for the **Delivery Driver Agent** in Homaatri, complete with **Left-to-Right Execution Flowcharts (`graph LR`)** for all cross-domain linked tools.
 
 ---
 
@@ -60,6 +60,14 @@ PROFILE LOOKUP    LEG NAVIGATION     ARRIVAL          GATE HANDSHAKES   EXCEPTIO
   - `driver_phone`: `str` (Required)
   - `meal_window`: `str` (Required, `'LUNCH'` or `'DINNER'`)
   - `date`: `str` (Required, `'YYYY-MM-DD'`)
+* **Execution Flowchart**:
+  ```mermaid
+  graph LR
+      Driver["Driver Agent<br>(get_assigned_route_itinerary_tool)"] -->|Query Route Itinerary| Master["Master Agent"]
+      Master -->|Fetch Sequenced Stops| DB["system_delivery_routes & system_delivery_stops"]
+      DB -->|Stop Sequence Summary| Driver
+      Driver --> END["END (Format WhatsApp Reply)"]
+  ```
 * **Expected Output Structure**:
   ```json
   {
@@ -129,6 +137,14 @@ PROFILE LOOKUP    LEG NAVIGATION     ARRIVAL          GATE HANDSHAKES   EXCEPTIO
   - `driver_phone`: `str` (Required)
   - `stop_index`: `int` (Required)
   - `order_ids_list`: `list[str]` (Required)
+* **Execution Flowchart**:
+  ```mermaid
+  graph LR
+      Driver["Driver Agent<br>(mark_orders_picked_up_tool)"] -->|Update Status = PICKED_UP| DB["customer_orders"]
+      DB -->|Trigger Next Leg| LegTool["dispatch_next_leg_navigation_link_tool"]
+      LegTool -->|Single-Leg Google Maps URL| DriverWA["Driver WhatsApp"]
+      DriverWA --> END["END (Next Leg Dispatched)"]
+  ```
 * **Expected Output Structure**:
   ```json
   {
@@ -151,6 +167,14 @@ PROFILE LOOKUP    LEG NAVIGATION     ARRIVAL          GATE HANDSHAKES   EXCEPTIO
   - `stop_index`: `int` (Required)
   - `order_ids_list`: `list[str]` (Required)
   - `left_with_security`: `bool` (Required)
+* **Execution Flowchart**:
+  ```mermaid
+  graph LR
+      Driver["Driver Agent<br>(mark_gate_delivery_completed_tool)"] -->|Update Status = DELIVERED| DB["customer_orders"]
+      DB -->|Gate Delivery Payload| Master["Master Agent<br>(relay_gate_delivery_completed_tool)"]
+      Master -->|WhatsApp Alerts| CustAgent["Customer Agent ➔ Customers"]
+      CustAgent --> END["END (Customers Alerted)"]
+  ```
 * **Expected Output Structure**:
   ```json
   {
@@ -175,6 +199,14 @@ PROFILE LOOKUP    LEG NAVIGATION     ARRIVAL          GATE HANDSHAKES   EXCEPTIO
   - `driver_phone`: `str` (Required)
   - `stop_index`: `int` (Required)
   - `order_id`: `str` (Required)
+* **Execution Flowchart**:
+  ```mermaid
+  graph LR
+      Driver["Driver Agent<br>(report_unlocatable_address_hitl_tool)"] -->|Trigger interrupt()| Master["Master Agent"]
+      Master -->|Unlocatable Pin Payload| CustAgent["Customer Agent"]
+      CustAgent -->|WhatsApp Prompt| Customer["Customer<br>(Share Location Pin)"]
+      Customer --> END["END (Waiting for Location Pin)"]
+  ```
 * **Expected Output Structure**:
   ```json
   {
@@ -197,6 +229,14 @@ PROFILE LOOKUP    LEG NAVIGATION     ARRIVAL          GATE HANDSHAKES   EXCEPTIO
   - `driver_phone`: `str` (Required)
   - `delay_minutes`: `int` (Required)
   - `delay_reason`: `str` (Required)
+* **Execution Flowchart**:
+  ```mermaid
+  graph LR
+      Driver["Driver Agent<br>(report_vehicle_delay_alert_tool)"] -->|Vehicle Delay Payload| Master["Master Agent"]
+      Master -->|Recalculate ETAs| DB["system_delivery_stops"]
+      DB -->|Updated ETAs| CustAgent["Customer Agent ➔ Customers"]
+      CustAgent --> END["END (ETAs Updated)"]
+  ```
 * **Expected Output Structure**:
   ```json
   {

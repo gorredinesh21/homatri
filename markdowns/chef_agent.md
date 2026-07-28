@@ -1,6 +1,6 @@
 # 👨‍🍳 Master Specification: The Chef Agent Tools
 
-This document outlines the complete persona, communication rules, categories, and **9 Final Production LLM Tool Specifications** for the **Chef Agent** in Homaatri.
+This document outlines the complete persona, communication rules, categories, and **9 Final Production LLM Tool Specifications** for the **Chef Agent** in Homaatri, complete with **Left-to-Right Execution Flowcharts (`graph LR`)** for all cross-domain linked tools.
 
 ---
 
@@ -15,16 +15,15 @@ This document outlines the complete persona, communication rules, categories, an
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                            CHEF AGENT TOOLSET                               │
+│                       CHEF AGENT TOOL LINKING MAP                           │
 └──────────────────────────────────────┬──────────────────────────────────────┘
                                        │
- ┌─────────────────┬─────────────────┬─┴───────────────┬─────────────────┬─────────────────┐
- ▼                 ▼                 ▼                 ▼                 ▼                 ▼
-CAT 1: KITCHEN     CAT 2: CAPACITY   CAT 3: BATCH      CAT 4: PACKING    CAT 5: HITL &
-PROFILE LOOKUP     & INVENTORY       DISPATCH          & READINESS       INTERACTION MGMT
-• Profile Tool     • Capacity Tool   • Merged Checklist• Mark Packed     • Counter-Offer
-                   • Stock Toggle      & Totals Tool   • Driver Info     • Driver Arrival
-                   • Inventory Check                                       Status
+  ┌───────────────────┬────────────────┴───┬───────────────────┬──────────────┐
+  ▼                   ▼                    ▼                   ▼              ▼
+STANDALONE TOOLS     STANDALONE TOOLS     LINKED TOOL (6)     LINKED TOOL (8) LINKED TOOL (9)
+Tools 1, 2, 3, 4     Tool 5 (Checklist)   Packed Ready ➔      Counter-Offer   Driver Arrival ➔
+Profile & Capacity   Consolidated Prep    Notifies Driver     ➔ Master ➔      Queries Master
+Read/Write           Checklist            Agent via Master    Customer        Stop State
 ```
 
 ---
@@ -32,6 +31,7 @@ PROFILE LOOKUP     & INVENTORY       DISPATCH          & READINESS       INTERAC
 ### 📍 CATEGORY 1: Kitchen Profile Lookup
 
 #### Tool 1: `get_chef_profile_tool`
+* **Linking Status**: `STANDALONE_INTERNAL`
 * **Action Source**: Action 1 (`get_chef_profile`)
 * **Purpose**: Identifies an onboarded home-cook chef when they send a message on WhatsApp.
 * **Inputs**:
@@ -55,6 +55,7 @@ PROFILE LOOKUP     & INVENTORY       DISPATCH          & READINESS       INTERAC
 ### 📦 CATEGORY 2: Daily Capacity & Inventory Control
 
 #### Tool 2: `set_daily_dish_capacity_tool`
+* **Linking Status**: `STANDALONE_INTERNAL`
 * **Action Source**: Action 2 (`set_daily_batch_capacity`)
 * **Purpose**: Sets the maximum prep limit for a dish for a specific date (e.g. *"Max 15 Paneer Thalis for Lunch today"*).
 * **Inputs**:
@@ -74,17 +75,18 @@ PROFILE LOOKUP     & INVENTORY       DISPATCH          & READINESS       INTERAC
     "status": "SUCCESS"
   }
   ```
-* **DB Write**: `INSERT INTO chef_daily_inventory ...` (Write - `chef_daily_inventory`)
+* **DB Write**: `INSERT INTO chef_daily_inventory ...` (Write)
 
 ---
 
 #### Tool 3: `toggle_dish_stock_tool`
+* **Linking Status**: `STANDALONE_INTERNAL`
 * **Action Source**: Action 3 (`toggle_dish_stock_status`)
 * **Purpose**: Instantly marks a dish as IN_STOCK or OUT_OF_STOCK mid-day when ingredients run out.
 * **Inputs**:
   - `chef_phone`: `str` (Required)
   - `menu_item_id`: `str` (Required)
-  - `is_available`: `bool` (Required, `True` for IN_STOCK, `False` for OUT_OF_STOCK)
+  - `is_available`: `bool` (Required)
 * **Expected Output Structure**:
   ```json
   {
@@ -94,11 +96,12 @@ PROFILE LOOKUP     & INVENTORY       DISPATCH          & READINESS       INTERAC
     "status": "UPDATED_OUT_OF_STOCK"
   }
   ```
-* **DB Write**: `UPDATE chef_menu_items SET is_available = ? WHERE id = ?` (Write - `chef_menu_items`)
+* **DB Write**: `UPDATE chef_menu_items SET is_available = ? WHERE id = ?` (Write)
 
 ---
 
 #### Tool 4: `check_daily_inventory_status_tool`
+* **Linking Status**: `STANDALONE_INTERNAL`
 * **Action Source**: Action 4 (`get_chef_inventory_status`)
 * **Purpose**: Displays the chef's remaining meal prep capacity and units sold for today's batch.
 * **Inputs**:
@@ -118,8 +121,9 @@ PROFILE LOOKUP     & INVENTORY       DISPATCH          & READINESS       INTERAC
 ### 🍳 CATEGORY 3: Cutoff Batch Dispatch & Prep Tracking
 
 #### Tool 5: `get_chef_batch_checklist_tool` *(MERGED TOOL)*
+* **Linking Status**: `STANDALONE_INTERNAL` (Cross-Domain Read)
 * **Action Source**: Merges Action 5 (`get_chef_batch_checklist`) + Action 6 (`get_batch_item_totals`)
-* **Purpose**: Called at cutoff (12:00 PM / 7:00 PM) to generate summary cooking totals (*"Cook 12 Paneer Thalis, 6 Veg Thalis"*) AND itemized order checklists in a single call.
+* **Purpose**: Called at cutoff (12:00 PM / 7:00 PM) to generate summary cooking totals AND itemized order checklists in a single call.
 * **Inputs**:
   - `chef_phone`: `str` (Required)
   - `meal_window`: `str` (Required, `'LUNCH'` or `'DINNER'`)
@@ -148,11 +152,19 @@ PROFILE LOOKUP     & INVENTORY       DISPATCH          & READINESS       INTERAC
 ### 📦 CATEGORY 4: Packing & Readiness Signals
 
 #### Tool 6: `mark_order_packed_ready_tool`
+* **Linking Status**: `CROSS_AGENT_LINKED`
 * **Action Source**: Action 7 (`mark_order_packed_ready`)
 * **Purpose**: Broadcasts readiness signal when chef finishes packing food (*"Order #104 is ready"*). Notifies Master Agent $\rightarrow$ Driver Agent.
 * **Inputs**:
   - `chef_phone`: `str` (Required)
   - `order_id`: `str` (Required)
+* **Execution Flowchart**:
+  ```mermaid
+  graph LR
+      Chef["Chef Agent<br>(mark_order_packed_ready_tool)"] -->|ORDER_PACKED_READY Payload| Master["Master Agent<br>(relay_order_ready_to_driver_tool)"]
+      Master -->|WhatsApp Notification| Driver["Driver Agent<br>(Assigned Driver)"]
+      Driver -->|Update Stop Status| END["END (Ready for Pickup)"]
+  ```
 * **Expected Output Structure**:
   ```json
   {
@@ -164,17 +176,26 @@ PROFILE LOOKUP     & INVENTORY       DISPATCH          & READINESS       INTERAC
     "assigned_driver_name": "Vikram"
   }
   ```
-* **DB Write**: `INSERT INTO chef_order_readiness` & `UPDATE customer_orders SET status = 'PACKED'` (Write - `chef_*`)
+* **DB Write**: `INSERT INTO chef_order_readiness` & `UPDATE customer_orders SET status = 'PACKED'` (Write)
 
 ---
 
 #### Tool 7: `get_assigned_driver_info_tool`
+* **Linking Status**: `CROSS_AGENT_LINKED` (Read-Only Bridge)
 * **Action Source**: Action 8 (`get_assigned_driver_for_pickup`)
 * **Purpose**: Answers chef's query (*"Which driver is picking up my batch?"* or *"What is the driver's phone number?"*).
 * **Inputs**:
   - `chef_phone`: `str` (Required)
   - `meal_window`: `str` (Required, `'LUNCH'` or `'DINNER'`)
   - `date`: `str` (Required, `'YYYY-MM-DD'`)
+* **Execution Flowchart**:
+  ```mermaid
+  graph LR
+      Chef["Chef Agent<br>(get_assigned_driver_info_tool)"] -->|Query Assigned Driver| Master["Master Agent"]
+      Master -->|Join Tables| DB["system_delivery_stops + driver_profiles"]
+      DB -->|Driver Details & ETA| Chef
+      Chef --> END["END (Format WhatsApp Reply)"]
+  ```
 * **Expected Output Structure**:
   ```json
   {
@@ -192,13 +213,23 @@ PROFILE LOOKUP     & INVENTORY       DISPATCH          & READINESS       INTERAC
 ### 🤝 CATEGORY 5: HITL & Interaction Management (Customer & Rider Events)
 
 #### Tool 8: `respond_to_custom_request_tool` *(COUNTER-OFFER PROTOCOL)*
+* **Linking Status**: `CROSS_AGENT_LINKED` (Double-HITL Relay Loop)
 * **Action Source**: Action 9 (`handle_customer_dietary_request_approval`)
 * **Purpose**: Executed when a chef accepts, declines, or proposes an alternative counter-offer (e.g. *"Can provide 2 extra rotis instead of 3"*) to a customer's request.
 * **Inputs**:
   - `chef_phone`: `str` (Required)
   - `order_id`: `str` (Required)
   - `decision`: `str` (Required, `ENUM('ACCEPTED', 'DECLINED', 'COUNTER_OFFER')`)
-  - `counter_offer_text`: `str | None` (Optional, e.g. `"Can provide 2 extra rotis instead of 3"`)
+  - `counter_offer_text`: `str | None` (Optional)
+* **Execution Flowchart**:
+  ```mermaid
+  graph LR
+      RealChef["Real Chef<br>(WhatsApp Reply)"] -->|COUNTER_OFFER Payload| ChefAgent["Chef Agent<br>(respond_to_custom_request_tool)"]
+      ChefAgent -->|Relay Payload| Master["Master Agent"]
+      Master -->|Prompt Counter-Offer| CustAgent["Customer Agent"]
+      CustAgent -->|WhatsApp Message| Customer["Customer<br>(Reply YES / NO)"]
+      Customer -->|YES / NO Response| END["END (Resolution)"]
+  ```
 * **Expected Output Structure**:
   ```json
   {
@@ -215,11 +246,20 @@ PROFILE LOOKUP     & INVENTORY       DISPATCH          & READINESS       INTERAC
 ---
 
 #### Tool 9: `check_driver_arrival_status_tool`
+* **Linking Status**: `CROSS_AGENT_LINKED` (Read-Only Bridge)
 * **Action Source**: Action 10 (`notify_chef_driver_arrival`)
 * **Purpose**: Used when a chef asks *"Has the driver arrived outside my door yet?"* or *"Is Vikram here?"*.
 * **Inputs**:
   - `chef_phone`: `str` (Required)
   - `date`: `str` (Required, `'YYYY-MM-DD'`)
+* **Execution Flowchart**:
+  ```mermaid
+  graph LR
+      Chef["Chef Agent<br>(check_driver_arrival_status_tool)"] -->|Query Stop Arrival| Master["Master Agent"]
+      Master -->|Check Arrival Timestamp| DB["system_delivery_stops"]
+      DB -->|Arrival Status| Chef
+      Chef --> END["END (Format WhatsApp Reply)"]
+  ```
 * **Expected Output Structure**:
   ```json
   {

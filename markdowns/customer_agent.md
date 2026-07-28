@@ -1,6 +1,6 @@
 # 🙋‍♂️ Master Specification: The Customer Agent Tools
 
-This document outlines the complete persona, communication rules, categories, and **11 Final Production LLM Tool Specifications** for the **Customer Agent** in Homaatri.
+This document outlines the complete persona, communication rules, categories, and **11 Final Production LLM Tool Specifications** for the **Customer Agent** in Homaatri, complete with **Left-to-Right Execution Flowcharts (`graph LR`)** for all cross-domain linked tools.
 
 ---
 
@@ -35,7 +35,7 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
 * **Linking Status**: `STANDALONE_INTERNAL`
 * **Purpose**: Identifies the customer on incoming WhatsApp webhooks.
 * **Inputs**:
-  - `customer_phone`: `str` (Required, E.164 format e.g. `"+919876543210"`)
+  - `customer_phone`: `str` (Required)
 * **Expected Output Structure**:
   ```json
   {
@@ -79,7 +79,7 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
   - `customer_phone`: `str` (Required)
   - `latitude`: `float` (Required)
   - `longitude`: `float` (Required)
-  - `address_text`: `str | None` (Optional description)
+  - `address_text`: `str | None` (Optional)
 * **Expected Output Structure**:
   ```json
   {
@@ -148,12 +148,19 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
 
 #### Tool 6: `initialize_customer_order_tool` *(ATOMIC 1-STEP ORDER CREATION)*
 * **Linking Status**: `CROSS_AGENT_LINKED`
-* **Purpose**: Checks system cutoff clock ($\le$ 12:00 PM for Lunch, $\le$ 7:00 PM for Dinner), creates the order header in `customer_orders`, and atomically appends initial dishes into `customer_order_items` in **a single turn**.
+* **Purpose**: Checks system cutoff clock ($\le$ 12:00 PM for Lunch, $\le$ 7:00 PM for Dinner), creates order header, and atomically appends initial dishes into `customer_order_items` in a single turn.
 * **Inputs**:
   - `customer_phone`: `str` (Required)
   - `chef_phone`: `str` (Required)
-  - `meal_window`: `str` (Required, `'LUNCH'` or `'DINNER'`)
-  - `items`: `list[dict]` (Required, List of `{ "menu_item_id": str, "quantity": int, "special_instructions": str | None }`)
+  - `meal_window`: `str` (Required)
+  - `items`: `list[dict]` (Required)
+* **Execution Flowchart**:
+  ```mermaid
+  graph LR
+      Customer["Customer Agent<br>(initialize_customer_order_tool)"] -->|Check Cutoff Payload| Master["Master Agent<br>(validate_meal_cutoff_clock_tool)"]
+      Master -->|Cutoff Validated| DB["PostgreSQL<br>(Insert Header & Items)"]
+      DB -->|Draft Cart Ready| END["END (Order Header Created)"]
+  ```
 * **Expected Output Structure**:
   ```json
   {
@@ -163,7 +170,7 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
     "meal_window": "LUNCH",
     "status": "PENDING_PAYMENT",
     "items_added": [
-      { "dish_name": "Special Paneer Thali", "quantity": 2, "unit_price": 180.00, "item_subtotal": 360.00, "special_instructions": "Less spicy" }
+      { "dish_name": "Special Paneer Thali", "quantity": 2, "unit_price": 180.00, "item_subtotal": 360.00 }
     ],
     "cart_subtotal": 360.00,
     "cutoff_check": "PASSED_BEFORE_12PM"
@@ -174,7 +181,7 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
 ---
 
 #### Tool 7: `add_item_to_order_tool`
-* **Linking Status**: `STANDALONE_INTERNAL` (Subsequent Dish Additions)
+* **Linking Status**: `STANDALONE_INTERNAL`
 * **Purpose**: Used when a customer subsequently adds extra dishes to an existing order in a later turn.
 * **Inputs**:
   - `customer_phone`: `str` (Required)
@@ -206,6 +213,15 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
 * **Inputs**:
   - `customer_phone`: `str` (Required)
   - `order_id`: `str` (Required)
+* **Execution Flowchart**:
+  ```mermaid
+  graph LR
+      CustAgent["Customer Agent<br>(generate_payment_link_tool)"] -->|Calculate Bill| Master["Master Agent<br>(Generate UPI Link)"]
+      Master -->|Send Payment Link| Customer["Customer<br>(Pays via UPI)"]
+      Customer -->|Webhook POST| Razorpay["Razorpay/Stripe Webhook"]
+      Razorpay -->|Payment Paid Payload| MasterWebhook["Master Agent<br>(process_payment_gateway_webhook_tool)"]
+      MasterWebhook -->|Update Status = CONFIRMED| END["END (Order Confirmed)"]
+  ```
 * **Expected Output Structure**:
   ```json
   {
@@ -224,10 +240,18 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
 ### 📞 CATEGORY 5: Live Support, Receipts & Reviews
 
 #### Tool 9: `get_active_order_status_tool`
-* **Linking Status**: `CROSS_AGENT_LINKED` (Read-Only Bridge across 3 Domains)
+* **Linking Status**: `CROSS_AGENT_LINKED` (Read-Only Bridge)
 * **Purpose**: Answers live support queries on WhatsApp (*"Where is my driver?"*, *"Is my lunch cooking?"*).
 * **Inputs**:
   - `customer_phone`: `str` (Required)
+* **Execution Flowchart**:
+  ```mermaid
+  graph LR
+      CustAgent["Customer Agent<br>(get_active_order_status_tool)"] -->|Query Operational State| Master["Master Agent"]
+      Master -->|Join Tables| DB["customer_orders + chef_readiness + driver_locations"]
+      DB -->|Live Tracking Summary| CustAgent
+      CustAgent --> END["END (Format WhatsApp Reply)"]
+  ```
 * **Expected Output Structure**:
   ```json
   {
@@ -273,8 +297,8 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
 * **Inputs**:
   - `customer_phone`: `str` (Required)
   - `order_id`: `str` (Required)
-  - `chef_rating`: `int` (Required, 1 to 5)
-  - `driver_rating`: `int` (Required, 1 to 5)
+  - `chef_rating`: `int` (Required)
+  - `driver_rating`: `int` (Required)
   - `review_text`: `str | None` (Optional)
 * **Expected Output Structure**:
   ```json
