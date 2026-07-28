@@ -1,6 +1,6 @@
-# 👑 Master Specification: The Master Agent
+# 👑 Master Specification: The Master Agent Tools
 
-This document outlines the complete persona, communication rules, categories, toolset, and guardrails for the **Master Agent** in Homaatri.
+This document outlines the complete persona, communication rules, categories, and **12 Final Production LLM Tool Specifications** for the **Master Agent** in Homaatri.
 
 ---
 
@@ -10,106 +10,265 @@ This document outlines the complete persona, communication rules, categories, to
 
 ---
 
-## 🛠️ 2. Master Agent Action & Toolset (13 Actions)
+## 🛠️ 2. Production Toolset Specification (12 Tools)
 
-### ⏱️ CATEGORY 1: Cutoff Clock & Batch State Guardrails
-
-#### 1. `validate_meal_window_cutoff_clock(meal_window, current_time)`
-* **Purpose**: Called before any order creation. Rejects Lunch orders after 12:00 PM and Dinner orders after 7:00 PM.
-* **Inputs**: `meal_window: str` (`'LUNCH'` or `'DINNER'`), `current_time: timestamp`
-* **Outputs**: `dict` (`is_allowed: bool`, cutoff status message).
-* **DB Operation**: `SELECT * FROM system_meal_windows WHERE ...` (Read)
-
-#### 2. `lock_meal_window_batch(meal_window, date)`
-* **Purpose**: Executed automatically at 12:00 PM & 7:00 PM. Locks meal window status from `OPEN` $\rightarrow$ `LOCKED_PROCESSING`, freezing new customer orders for that batch.
-* **Inputs**: `meal_window: str`, `date: str`
-* **Outputs**: `dict` (Batch locked confirmation, total confirmed orders count).
-* **DB Operation**: `UPDATE system_meal_windows SET status = 'LOCKED_PROCESSING' WHERE ...` (Write - `system_*`)
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            MASTER AGENT TOOLSET                             │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       │
+ ┌─────────────────┬─────────────────┬─┴───────────────┬─────────────────┬─────────────────┐
+ ▼                 ▼                 ▼                 ▼                 ▼                 ▼
+CAT 1 & 2: CUTOFF  CAT 3: INTER-AGENT  CAT 3: HITL &     CAT 4: FINANCIAL  CAT 5: WRITE DELEGATION
+CLOCK & ROUTE API  CROSS-DOMAIN RELAYS EXCEPTION RELAYS  WEBHOOK ENGINE    & AUDIT LOGGING
+• Validate Cutoff  • Dietary Relay     • Gate Delivery   • Payment Webhook • Write Delegation
+• Atomic Cutoff &  • Cancellation      • Address Pin     • Dispatch WA Queue• System Audit
+  Route Solver       Check             • Traffic Delay   • Log Audit Event
+```
 
 ---
 
-### 🗺️ CATEGORY 2: GCP Route Optimization Engine
+### ⏱️ CATEGORY 1 & 2: Cutoff Clock & GCP Route Optimization Engine
 
-#### 3. `orchestrate_gcp_route_optimization(meal_window_id, date)`
-* **Purpose**: Called at cutoff time. Gathers all Chef Kitchen coordinates & Customer Delivery coordinates, merges orders with identical apartment gate coordinates into single drop-off stops, calls GCP Route Optimization API (ONCE), and saves the master sequenced itinerary (`system_delivery_stops`).
-* **Inputs**: `meal_window_id: str`, `date: str`
-* **Outputs**: `dict` (Master trip route created, driver assigned, sequenced stops count).
-* **DB Operation**: `INSERT INTO system_delivery_routes` & `INSERT INTO system_delivery_stops` (Write - `system_*`)
+#### Tool 1: `validate_meal_cutoff_clock_tool`
+* **Action Source**: Action 1 (`validate_meal_window_cutoff_clock`)
+* **Purpose**: Called during customer chat turns to check if the meal window is open or closed before taking an order ($\le$ 12:00 PM for Lunch, $\le$ 7:00 PM for Dinner).
+* **Inputs**:
+  - `meal_window`: `str` (Required, `'LUNCH'` or `'DINNER'`)
+* **Expected Output Structure**:
+  ```json
+  {
+    "meal_window": "LUNCH",
+    "is_open": true,
+    "cutoff_time": "12:00 PM",
+    "time_remaining_minutes": 15,
+    "status_message": "Lunch window is open. 15 minutes remaining before 12:00 PM cutoff."
+  }
+  ```
+* **DB Read**: `SELECT * FROM system_meal_windows WHERE ...` (Read)
+
+---
+
+#### Tool 2: `execute_cutoff_batch_and_route_optimization_tool` *(MERGED ATOMIC TOOL)*
+* **Action Source**: Merges Action 2 (`lock_meal_window_batch`) + Action 3 (`orchestrate_gcp_route_optimization`)
+* **Purpose**: Executed automatically at 12:00 PM & 7:00 PM cutoff. Atomically locks the meal window (`LOCKED_PROCESSING`), merges orders with identical apartment gate coordinates into single stops, calls GCP Route Optimization API (ONCE), and saves master routes in DB.
+* **Inputs**:
+  - `meal_window`: `str` (Required, `'LUNCH'` or `'DINNER'`)
+  - `date`: `str` (Required, `'YYYY-MM-DD'`)
+* **Expected Output Structure**:
+  ```json
+  {
+    "meal_window": "LUNCH",
+    "date": "2026-07-29",
+    "batch_status": "LOCKED_PROCESSING",
+    "total_confirmed_orders": 18,
+    "route_id": "rt_801",
+    "total_stops": 6,
+    "apartment_gate_consolidated_stops": 4,
+    "assigned_driver_phone": "+919988776655",
+    "status": "BATCH_LOCKED_AND_ROUTE_OPTIMIZED"
+  }
+  ```
+* **DB Write**: `UPDATE system_meal_windows`, `INSERT INTO system_delivery_routes` & `system_delivery_stops` (Write)
 
 ---
 
 ### 🔄 CATEGORY 3: Inter-Agent Cross-Domain Message Relays (Mediator Duty)
 
-#### 4. `relay_customer_dietary_request_to_chef(order_id, dietary_notes)`
-* **Support For**: Customer Agent $\rightarrow$ Chef Agent.
-* **Purpose**: Takes customer's mid-cooking custom request (*"No garlic for Order #104"*), verifies order status, and triggers LangGraph `interrupt()` on Chef Agent to prompt the real Chef on WhatsApp.
-* **Inputs**: `order_id: str`, `dietary_notes: str`
-* **Outputs**: `dict` (Relay status; Chef Agent interrupted for approval).
-* **DB Operation**: `INSERT INTO system_agent_logs ...` (Write - `system_*`)
+#### Tool 3: `relay_dietary_request_to_chef_tool`
+* **Action Source**: Action 4 (`relay_customer_dietary_request_to_chef`)
+* **Purpose**: Relays a customer's mid-cooking dietary request (*"No garlic"*) to the Chef Agent and triggers LangGraph `interrupt()` for real Chef approval on WhatsApp.
+* **Inputs**:
+  - `customer_phone`: `str` (Required)
+  - `order_id`: `str` (Required)
+  - `dietary_notes`: `str` (Required)
+* **Expected Output Structure**:
+  ```json
+  {
+    "order_id": "ord_104",
+    "chef_notified": true,
+    "status": "INTERRUPTED_WAITING_CHEF_RESPONSE"
+  }
+  ```
+* **DB Write**: `INSERT INTO system_agent_logs ...` (Write)
 
-#### 5. `process_order_cancellation_request(order_id, customer_id, reason)`
-* **Support For**: Customer Agent $\rightarrow$ System.
-* **Purpose**: Evaluates customer cancellation request against strict platform rules (e.g. if order is before cutoff $\rightarrow$ auto-cancel & refund; if after cutoff & cooking started $\rightarrow$ reject cancellation).
-* **Inputs**: `order_id: str`, `customer_id: str`, `reason: str`
-* **Outputs**: `dict` (Cancellation status, refund eligibility).
-* **DB Operation**: `UPDATE customer_orders SET status = 'CANCELLED'` (Write - Global)
+---
 
-#### 6. `relay_order_ready_signal_to_driver(order_id, chef_id)`
-* **Support For**: Chef Agent $\rightarrow$ Driver Agent.
-* **Purpose**: When Chef marks an order packed, Master Agent finds the assigned driver for that batch and notifies Driver Agent.
-* **Inputs**: `order_id: str`, `chef_id: str`
-* **Outputs**: `dict` (Driver notified confirmation).
-* **DB Operation**: Global Read on `system_delivery_stops` & `INSERT INTO system_agent_logs`.
+#### Tool 4: `process_order_cancellation_tool`
+* **Action Source**: Action 5 (`process_order_cancellation_request`)
+* **Purpose**: Evaluates cancellation requests against platform rules. If before cutoff (12 PM / 7 PM) $\rightarrow$ Auto-cancels & triggers refund; if after cutoff & cooking $\rightarrow$ Rejects cancellation.
+* **Inputs**:
+  - `customer_phone`: `str` (Required)
+  - `order_id`: `str` (Required)
+  - `cancellation_reason`: `str` (Required)
+* **Expected Output Structure**:
+  ```json
+  {
+    "order_id": "ord_104",
+    "status": "CANCELLED_REFUNDED",
+    "refund_amount": 390.00,
+    "reason": "Cancelled before 12 PM cutoff"
+  }
+  ```
+* **DB Write**: `UPDATE customer_orders SET status = 'CANCELLED'` (Write - Global)
 
-#### 7. `relay_gate_delivery_completed_to_customer(order_ids_list, driver_name)`
-* **Support For**: Driver Agent $\rightarrow$ Customer Agent.
-* **Purpose**: When driver completes apartment gate delivery, Master Agent triggers Customer Agent to message affected customers on WhatsApp (*"Your food has been delivered to your Apartment Security Gate!"*).
-* **Inputs**: `order_ids_list: list[str]`, `driver_name: str`
-* **Outputs**: `dict` (Customer WhatsApp messages dispatched).
-* **DB Operation**: `UPDATE customer_orders SET status = 'DELIVERED'` & Outbound Queue.
+---
 
-#### 8. `relay_unlocatable_address_to_customer(order_id, driver_name)`
-* **Support For**: Driver Agent $\rightarrow$ Customer Agent.
-* **Purpose**: When driver reports unlocatable address, Master Agent notifies Customer Agent to ask customer for an updated WhatsApp location pin.
-* **Inputs**: `order_id: str`, `driver_name: str`
-* **Outputs**: `dict` (Customer location pin request sent).
-* **DB Operation**: Updates LangGraph state checkpointer.
+#### Tool 5: `relay_order_ready_to_driver_tool`
+* **Action Source**: Action 6 (`relay_order_ready_signal_to_driver`)
+* **Purpose**: Triggered when a chef marks an order packed ready. Finds assigned driver for that batch and notifies Driver Agent on WhatsApp.
+* **Inputs**:
+  - `chef_phone`: `str` (Required)
+  - `order_id`: `str` (Required)
+* **Expected Output Structure**:
+  ```json
+  {
+    "order_id": "ord_104",
+    "assigned_driver_phone": "+919988776655",
+    "driver_notified": true
+  }
+  ```
+* **DB Write**: Global Read on `system_delivery_stops` & `INSERT INTO system_agent_logs`.
 
-#### 9. `relay_traffic_delay_alert_to_customers(route_id, delay_minutes)`
-* **Support For**: Driver Agent $\rightarrow$ Customer Agent.
-* **Purpose**: When driver reports traffic delay, Master Agent recalculates ETAs for remaining stops and notifies affected customers.
-* **Inputs**: `route_id: str`, `delay_minutes: int`
-* **Outputs**: `dict` (Updated ETAs across delivery stops).
-* **DB Operation**: `UPDATE system_delivery_stops SET estimated_arrival = ...`
+---
+
+#### Tool 6: `relay_gate_delivery_completed_tool`
+* **Action Source**: Action 7 (`relay_gate_delivery_completed_to_customer`)
+* **Purpose**: Triggered when a driver completes apartment gate drop-off. Notifies all affected customers on WhatsApp (*"Food delivered to Security Guard!"*).
+* **Inputs**:
+  - `driver_phone`: `str` (Required)
+  - `order_ids_list`: `list[str]` (Required)
+  - `apartment_gate_name`: `str` (Required)
+* **Expected Output Structure**:
+  ```json
+  {
+    "order_ids_notified": ["ord_101", "ord_104"],
+    "delivery_location": "My Home Bhooja Gate",
+    "status": "CUSTOMERS_NOTIFIED"
+  }
+  ```
+* **DB Write**: `UPDATE customer_orders SET status = 'DELIVERED'` & Outbound Queue.
+
+---
+
+#### Tool 7: `relay_unlocatable_address_request_tool`
+* **Action Source**: Action 8 (`relay_unlocatable_address_to_customer`)
+* **Purpose**: Triggered when a driver reports an address not found. Prompts Customer Agent to ask customer for an updated WhatsApp location pin.
+* **Inputs**:
+  - `driver_phone`: `str` (Required)
+  - `order_id`: `str` (Required)
+* **Expected Output Structure**:
+  ```json
+  {
+    "order_id": "ord_104",
+    "customer_notified": true,
+    "status": "WAITING_FOR_CUSTOMER_LOCATION_PIN"
+  }
+  ```
+* **DB Write**: Updates LangGraph State Checkpointer.
+
+---
+
+#### Tool 8: `relay_traffic_delay_alert_tool`
+* **Action Source**: Action 9 (`relay_traffic_delay_alert_to_customers`)
+* **Purpose**: Triggered when a driver reports a traffic delay. Recalculates ETAs for remaining stops and alerts affected customers on WhatsApp.
+* **Inputs**:
+  - `driver_phone`: `str` (Required)
+  - `route_id`: `str` (Required)
+  - `delay_minutes`: `int` (Required)
+  - `delay_reason`: `str` (Required)
+* **Expected Output Structure**:
+  ```json
+  {
+    "route_id": "rt_801",
+    "delay_minutes": 15,
+    "affected_customers_notified_count": 5
+  }
+  ```
+* **DB Write**: `UPDATE system_delivery_stops SET estimated_arrival = ...`
 
 ---
 
 ### 💳 CATEGORY 4: Financial Webhooks & Order Confirmation
 
-#### 10. `process_payment_webhook_confirmation(payment_id, transaction_id, status)`
-* **Purpose**: Receives payment gateway webhook (Razorpay/Stripe). If `status == 'PAID'`, transitions order from `PENDING_PAYMENT` $\rightarrow$ `CONFIRMED`.
-* **Inputs**: `payment_id: str`, `transaction_id: str`, `status: str`
-* **Outputs**: `dict` (Payment recorded, order status updated to `CONFIRMED`).
-* **DB Operation**: `UPDATE customer_payments` & `UPDATE customer_orders SET status = 'CONFIRMED'` (Write - Global)
+#### Tool 9: `process_payment_gateway_webhook_tool`
+* **Action Source**: Action 10 (`process_payment_webhook_confirmation`)
+* **Purpose**: Receives payment gateway webhooks (Razorpay/Stripe). If `status == 'PAID'`, transitions order status from `PENDING_PAYMENT` $\rightarrow$ `CONFIRMED`.
+* **Inputs**:
+  - `payment_id`: `str` (Required)
+  - `transaction_id`: `str` (Required)
+  - `status`: `str` (Required, `'PAID'` or `'FAILED'`)
+* **Expected Output Structure**:
+  ```json
+  {
+    "payment_id": "pay_901",
+    "order_id": "ord_104",
+    "order_status": "CONFIRMED",
+    "payment_status": "PAID",
+    "message": "Payment verified. Order status updated to CONFIRMED."
+  }
+  ```
+* **DB Write**: `UPDATE customer_payments` & `UPDATE customer_orders SET status = 'CONFIRMED'` (Write - Global)
 
 ---
 
 ### 🔐 CATEGORY 5: Write Delegation & Audit Trail Logging
 
-#### 11. `execute_cross_domain_write_delegation(requesting_agent, target_agent, target_table, write_payload)`
-* **Purpose**: Enforces Master Agent's write-delegation protocol. When a subagent requests a cross-domain write, Master Agent delegates it to the target domain subagent after logging.
-* **Inputs**: `requesting_agent: str`, `target_agent: str`, `target_table: str`, `write_payload: dict`
-* **Outputs**: `dict` (Delegation status, execution result).
-* **DB Operation**: `INSERT INTO system_agent_logs ...` (Write - `system_*`)
+#### Tool 10: `delegate_cross_domain_write_tool`
+* **Action Source**: Action 11 (`execute_cross_domain_write_delegation`)
+* **Purpose**: Enforces least-privilege write boundaries. When a subagent requests a cross-domain write, Master Agent logs the request and delegates it to the target domain subagent.
+* **Inputs**:
+  - `requesting_role`: `str` (Required, `'CUSTOMER'` / `'CHEF'` / `'DRIVER'`)
+  - `target_role`: `str` (Required, `'CUSTOMER'` / `'CHEF'` / `'DRIVER'`)
+  - `target_table`: `str` (Required)
+  - `payload`: `dict` (Required)
+* **Expected Output Structure**:
+  ```json
+  {
+    "delegation_id": "del_301",
+    "requesting_role": "CUSTOMER",
+    "target_role": "CHEF",
+    "status": "DELEGATED_SUCCESSFULLY",
+    "execution_result": "SUCCESS"
+  }
+  ```
+* **DB Write**: `INSERT INTO system_agent_logs ...` (Write)
 
-#### 12. `enqueue_and_dispatch_whatsapp_message(recipient_phone, message_text, role)`
-* **Purpose**: Pushes outbound WhatsApp messages to `system_outbound_queue` and calls Meta WhatsApp Business API gateway.
-* **Inputs**: `recipient_phone: str`, `message_text: str`, `role: str`
-* **Outputs**: `dict` (Message queued & dispatched).
-* **DB Operation**: `INSERT INTO system_outbound_queue ...` (Write - `system_*`)
+---
 
-#### 13. `log_system_audit_event(event_type, source_role, payload, severity)`
-* **Purpose**: Writes audit log for system events, cutoff locks, relays, and exceptions.
-* **Inputs**: `event_type: str`, `source_role: str`, `payload: dict`, `severity: str`
-* **Outputs**: `dict` (Audit log inserted).
-* **DB Operation**: `INSERT INTO system_agent_logs ...` (Write - `system_*`)
+#### Tool 11: `dispatch_whatsapp_outbound_message_tool`
+* **Action Source**: Action 12 (`enqueue_and_dispatch_whatsapp_message`)
+* **Purpose**: Pushes outbound WhatsApp messages to `system_outbound_queue` and triggers Meta WhatsApp Business API gateway.
+* **Inputs**:
+  - `recipient_phone`: `str` (Required)
+  - `message_text`: `str` (Required)
+  - `recipient_role`: `str` (Required, `'CUSTOMER'` / `'CHEF'` / `'DRIVER'`)
+* **Expected Output Structure**:
+  ```json
+  {
+    "message_id": "msg_701",
+    "recipient_phone": "+919876543210",
+    "status": "QUEUED_AND_DISPATCHED"
+  }
+  ```
+* **DB Write**: `INSERT INTO system_outbound_queue ...` (Write)
+
+---
+
+#### Tool 12: `log_system_audit_event_tool`
+* **Action Source**: Action 13 (`log_system_audit_event`)
+* **Purpose**: Writes immutable audit log for system events, cutoff locks, relays, and exceptions in `system_agent_logs`.
+* **Inputs**:
+  - `event_type`: `str` (Required)
+  - `source_role`: `str` (Required)
+  - `payload`: `dict` (Required)
+  - `severity`: `str` (Required, `'INFO'` / `'WARNING'` / `'CRITICAL'`)
+* **Expected Output Structure**:
+  ```json
+  {
+    "audit_id": "aud_901",
+    "event_type": "CUTOFF_LOCK",
+    "status": "LOGGED_SUCCESSFULLY"
+  }
+  ```
+* **DB Write**: `INSERT INTO system_agent_logs ...` (Write)

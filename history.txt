@@ -351,7 +351,35 @@ LIST OF 11 CUSTOMER TOOLS:
 11. `submit_order_review_tool`
 
 DOCUMENTATION CREATED & COMMITTED:
+
 - Updated Specification: `markdowns/customer_agent.md`
+
+--------------------------------------------------------------------------------
+[SECTION 16: MASTER AGENT PRODUCTION TOOL SPECIFICATIONS (TIER 3 ORCHESTRATION)]
+--------------------------------------------------------------------------------
+
+MASTER AGENT TOOL DESIGN COMPLETED (12 PRODUCTION LLM TOOLS):
+1. Atomic Cutoff & GCP Route Solver: Merged Action 2 (`lock_meal_window_batch`) and Action 3 (`orchestrate_gcp_route_optimization`) into 1 atomic tool `execute_cutoff_batch_and_route_optimization_tool` to guarantee batch lock and route generation execute together at 12 PM / 7 PM cutoff.
+2. Cross-Entity Double-HITL Relays: Built dedicated relay tools for dietary requests, cancellations, ready signals, gate delivery alerts, unlocatable address pin requests, and traffic delay updates.
+3. Financial Webhooks & Delegation: Built payment gateway webhook processor, write delegation tool, outbound WhatsApp message dispatcher, and system audit logger.
+
+LIST OF 12 MASTER TOOLS:
+1. `validate_meal_cutoff_clock_tool`
+2. `execute_cutoff_batch_and_route_optimization_tool` (Atomic Cutoff Lock + GCP Route Solver)
+3. `relay_dietary_request_to_chef_tool`
+4. `process_order_cancellation_tool`
+5. `relay_order_ready_to_driver_tool`
+6. `relay_gate_delivery_completed_tool`
+7. `relay_unlocatable_address_request_tool`
+8. `relay_traffic_delay_alert_tool`
+9. `process_payment_gateway_webhook_tool`
+10. `delegate_cross_domain_write_tool`
+11. `dispatch_whatsapp_outbound_message_tool`
+12. `log_system_audit_event_tool`
+
+DOCUMENTATION CREATED & COMMITTED:
+- Updated Specification: `markdowns/master_agent.md`
+
 
 
 
