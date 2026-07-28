@@ -280,7 +280,28 @@ THE 5 PENDING ARCHITECTURAL MILESTONES (TO-DO ROADMAP BEFORE CODING):
 3. Milestone 3: LangGraph State Machine & Graph Structure (State `TypedDict`, nodes, conditional edges, checkpointer).
 4. Milestone 4: WhatsApp Business API Webhook Gateway Engine (FastAPI endpoint, verification handshake, payload parser, outbound queue).
 5. Milestone 5: Payment Gateway Webhook & Financial Verification Flow (Razorpay/Stripe webhook, HMAC signature verification, order status transitions).
+
 6. Documentation: Authored `markdowns/todo_architecture_roadmap.md`.
+
+--------------------------------------------------------------------------------
+[SECTION 13: ACTION DEPENDENCY ANALYSIS & 4-TIER TOOL BUILD SEQUENCE]
+--------------------------------------------------------------------------------
+
+CROSS-AGENT ACTION DEPENDENCY ANALYSIS:
+1. Producer vs. Consumer Mapping: Identified that Customer ordering tools (`Customer.view_chefs_sorted_by_distance`, `Customer.add_item_to_order`) cannot be tested or built without Chef menus & daily capacity limits existing in DB.
+2. Master Route Optimizer Dependencies: Master GCP Route Solver (`Master.orchestrate_gcp_route_optimization`) requires confirmed customer orders to generate pickup/drop-off stop sequences.
+3. Driver Fulfillment Dependencies: Driver Agent navigation (`Driver.get_assigned_route_itinerary`, `Driver.dispatch_next_leg_navigation_link`) relies directly on Master Route sequence output.
+
+4-TIER LOGICAL TOOL BUILD ORDER:
+- Tier 1 (Build 1st - Foundation): Chef Inventory Tools (`Chef.set_daily_batch_capacity`, `Chef.toggle_dish_stock_status`) & Master Cutoff Engine (`Master.validate_meal_window_cutoff_clock`).
+- Tier 2 (Build 2nd - Ingestion): Customer Agent Tools (`Customer.register_customer_profile`, `Customer.view_chefs_sorted_by_distance`, `Customer.create_customer_order`, `Customer.generate_initial_payment_link`).
+- Tier 3 (Build 3rd - Orchestration): Master GCP Route Solver (`Master.orchestrate_gcp_route_optimization`) & Chef Batch Checklists (`Chef.get_chef_batch_checklist`, `Chef.mark_order_packed_ready`).
+- Tier 4 (Build 4th - Fulfillment): Driver Agent Tools (`Driver.get_assigned_route_itinerary`, `Driver.dispatch_next_leg_navigation_link`, `Driver.mark_gate_delivery_completed`) & Cross-Domain Relays.
+
+DOCUMENTATION & VISUAL MAP CREATED:
+- Interactive HTML Map: `docs/action_dependency_map.html`
+- Written Documentation: `markdowns/action_dependencies_and_build_order.md`
+
 
 
 

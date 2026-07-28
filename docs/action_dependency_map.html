@@ -1,0 +1,510 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Homaatri — Action Dependency & Tool Build Sequence Map</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #090d16;
+            --bg-card: #111827;
+            --bg-card-hover: #1f293d;
+            --border-color: #1f293d;
+            --border-highlight: #374151;
+            
+            --chef-color: #f59e0b;
+            --chef-glow: rgba(245, 158, 11, 0.15);
+            --customer-color: #3b82f6;
+            --customer-glow: rgba(59, 130, 246, 0.15);
+            --master-color: #8b5cf6;
+            --master-glow: rgba(139, 92, 246, 0.15);
+            --driver-color: #10b981;
+            --driver-glow: rgba(16, 185, 129, 0.15);
+            
+            --text-main: #f9fafb;
+            --text-muted: #9ca3af;
+            --text-dim: #6b7280;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: 'Plus Jakarta Sans', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            line-height: 1.6;
+            padding: 40px 20px;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 50px;
+        }
+
+        .badge {
+            display: inline-block;
+            padding: 6px 16px;
+            border-radius: 9999px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            background: linear-gradient(135deg, rgba(139, 92, 246, 0.2), rgba(59, 130, 246, 0.2));
+            border: 1px solid rgba(139, 92, 246, 0.4);
+            color: #c4b5fd;
+            margin-bottom: 16px;
+        }
+
+        h1 {
+            font-size: 2.75rem;
+            font-weight: 800;
+            letter-spacing: -0.02em;
+            margin-bottom: 12px;
+            background: linear-gradient(135deg, #ffffff 0%, #9ca3af 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        p.subtitle {
+            color: var(--text-muted);
+            font-size: 1.15rem;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        /* Build Order Summary Banner */
+        .build-order-banner {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 50px;
+        }
+
+        .order-card {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 24px;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .order-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--border-highlight);
+            box-shadow: 0 12px 30px rgba(0, 0, 0, 0.4);
+        }
+
+        .order-number {
+            position: absolute;
+            top: -10px;
+            right: 15px;
+            font-size: 4rem;
+            font-weight: 900;
+            opacity: 0.08;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        .order-card.tier-1 { border-top: 4px solid var(--chef-color); }
+        .order-card.tier-2 { border-top: 4px solid var(--customer-color); }
+        .order-card.tier-3 { border-top: 4px solid var(--master-color); }
+        .order-card.tier-4 { border-top: 4px solid var(--driver-color); }
+
+        .tier-title {
+            font-size: 0.9rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            margin-bottom: 8px;
+        }
+
+        .tier-1 .tier-title { color: var(--chef-color); }
+        .tier-2 .tier-title { color: var(--customer-color); }
+        .tier-3 .tier-title { color: var(--master-color); }
+        .tier-4 .tier-title { color: var(--driver-color); }
+
+        .order-card h3 {
+            font-size: 1.25rem;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .order-card p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        /* Dependency Flow Matrix */
+        .section-title {
+            font-size: 1.75rem;
+            font-weight: 700;
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .section-title::before {
+            content: '';
+            display: inline-block;
+            width: 4px;
+            height: 24px;
+            background: var(--master-color);
+            border-radius: 2px;
+        }
+
+        .dependency-matrix {
+            display: flex;
+            flex-direction: column;
+            gap: 32px;
+            margin-bottom: 60px;
+        }
+
+        .phase-block {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: 20px;
+            padding: 32px;
+        }
+
+        .phase-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 24px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .phase-tag {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.85rem;
+            padding: 4px 12px;
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-muted);
+        }
+
+        .action-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+            gap: 20px;
+        }
+
+        .action-node {
+            background: var(--bg-dark);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.2s ease;
+        }
+
+        .action-node:hover {
+            border-color: var(--border-highlight);
+            background: #0d1322;
+        }
+
+        .node-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+        }
+
+        .action-name {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 0.95rem;
+            font-weight: 600;
+        }
+
+        .agent-pill {
+            font-size: 0.75rem;
+            font-weight: 700;
+            padding: 3px 10px;
+            border-radius: 9999px;
+            text-transform: uppercase;
+        }
+
+        .pill-chef { background: var(--chef-glow); color: var(--chef-color); border: 1px solid rgba(245, 158, 11, 0.3); }
+        .pill-customer { background: var(--customer-glow); color: var(--customer-color); border: 1px solid rgba(59, 130, 246, 0.3); }
+        .pill-master { background: var(--master-glow); color: var(--master-color); border: 1px solid rgba(139, 92, 246, 0.3); }
+        .pill-driver { background: var(--driver-glow); color: var(--driver-color); border: 1px solid rgba(16, 185, 129, 0.3); }
+
+        .node-desc {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+            margin-bottom: 14px;
+        }
+
+        .deps-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            font-size: 0.825rem;
+            padding-top: 12px;
+            border-top: 1px dashed var(--border-color);
+        }
+
+        .dep-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-dim);
+        }
+
+        .dep-item strong {
+            color: #e5e7eb;
+            font-family: 'JetBrains Mono', monospace;
+            font-weight: 500;
+        }
+
+        .arrow-icon {
+            color: #9ca3af;
+        }
+
+        footer {
+            text-align: center;
+            color: var(--text-dim);
+            font-size: 0.9rem;
+            padding-top: 40px;
+            border-top: 1px solid var(--border-color);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div class="badge">Architecture & Build Sequence Blueprint</div>
+            <h1>Homaatri Action Dependency & Tool Build Map</h1>
+            <p class="subtitle">A complete visual mapping of cross-agent dependencies determining the exact 4-tier logical build sequence for Homaatri's AI tools.</p>
+        </header>
+
+        <!-- Build Order Banner -->
+        <h2 class="section-title">Logical Tool Build Order</h2>
+        <div class="build-order-banner">
+            <div class="order-card tier-1">
+                <div class="order-number">01</div>
+                <div class="tier-title">Phase 1 (Foundation)</div>
+                <h3>Chef Domain & Master Cutoff Engine</h3>
+                <p>Data Provider Foundation. Chefs, menus, & daily capacities must exist before customers can browse or order.</p>
+            </div>
+            <div class="order-card tier-2">
+                <div class="order-number">02</div>
+                <div class="tier-title">Phase 2 (Ingestion)</div>
+                <h3>Customer Agent & Payment Gateway</h3>
+                <p>Depends on Chef Menus & Master Cutoff Clock. Enables location discovery, cart checkout, and payment links.</p>
+            </div>
+            <div class="order-card tier-3">
+                <div class="order-number">03</div>
+                <div class="tier-title">Phase 3 (Orchestration)</div>
+                <h3>Master Route Solver & Chef Packing</h3>
+                <p>Runs at 12 PM / 7 PM cutoff. Locks batch, calls GCP Route Optimization, dispatches chef checklists & packing signals.</p>
+            </div>
+            <div class="order-card tier-4">
+                <div class="order-number">04</div>
+                <div class="tier-title">Phase 4 (Fulfillment)</div>
+                <h3>Driver Agent & Cross-Domain Relays</h3>
+                <p>Reads Master Route itinerary. Feeds leg-by-leg navigation links, stop handshakes, and gate delivery alerts.</p>
+            </div>
+        </div>
+
+        <!-- Dependency Flow Matrix -->
+        <h2 class="section-title">Detailed Action Dependencies by Phase</h2>
+        <div class="dependency-matrix">
+
+            <!-- PHASE 1 -->
+            <div class="phase-block">
+                <div class="phase-header">
+                    <h2>Phase 1: Foundation (Chefs & Master Clock)</h2>
+                    <span class="phase-tag">BUILD FIRST — ZERO DEPENDENCIES</span>
+                </div>
+                <div class="action-grid">
+                    <div class="action-node">
+                        <div class="node-header">
+                            <span class="action-name">validate_meal_window_cutoff_clock</span>
+                            <span class="agent-pill pill-master">Master</span>
+                        </div>
+                        <div class="node-desc">Rejects Lunch orders after 12:00 PM and Dinner orders after 7:00 PM.</div>
+                        <div class="deps-list">
+                            <div class="dep-item"><span class="arrow-icon">➔</span> Required By: <strong>Customer.create_customer_order</strong></div>
+                        </div>
+                    </div>
+
+                    <div class="action-node">
+                        <div class="node-header">
+                            <span class="action-name">set_daily_batch_capacity</span>
+                            <span class="agent-pill pill-chef">Chef</span>
+                        </div>
+                        <div class="node-desc">Sets max meal prep limit per dish for a date (e.g. max 15 Thalis).</div>
+                        <div class="deps-list">
+                            <div class="dep-item"><span class="arrow-icon">➔</span> Required By: <strong>Customer.view_chefs_sorted_by_distance</strong></div>
+                            <div class="dep-item"><span class="arrow-icon">➔</span> Required By: <strong>Customer.add_item_to_order</strong></div>
+                        </div>
+                    </div>
+
+                    <div class="action-node">
+                        <div class="node-header">
+                            <span class="action-name">toggle_dish_stock_status</span>
+                            <span class="agent-pill pill-chef">Chef</span>
+                        </div>
+                        <div class="node-desc">Marks dish IN_STOCK / OUT_OF_STOCK mid-day when ingredients run out.</div>
+                        <div class="deps-list">
+                            <div class="dep-item"><span class="arrow-icon">➔</span> Required By: <strong>Customer.view_chef_menu</strong></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PHASE 2 -->
+            <div class="phase-block">
+                <div class="phase-header">
+                    <h2>Phase 2: Ingestion & Checkout (Customer Agent)</h2>
+                    <span class="phase-tag">BUILD SECOND — DEPENDS ON PHASE 1</span>
+                </div>
+                <div class="action-grid">
+                    <div class="action-node">
+                        <div class="node-header">
+                            <span class="action-name">view_chefs_sorted_by_distance</span>
+                            <span class="agent-pill pill-customer">Customer</span>
+                        </div>
+                        <div class="node-desc">Calculates distance (Haversine math) and ranks active home kitchens closest to customer.</div>
+                        <div class="deps-list">
+                            <div class="dep-item"><span class="arrow-icon">⬅</span> Depends On: <strong>Chef.chef_profiles</strong>, <strong>Chef.set_daily_batch_capacity</strong></div>
+                        </div>
+                    </div>
+
+                    <div class="action-node">
+                        <div class="node-header">
+                            <span class="action-name">create_customer_order</span>
+                            <span class="agent-pill pill-customer">Customer</span>
+                        </div>
+                        <div class="node-desc">Validates cutoff clock and initializes order header in DB.</div>
+                        <div class="deps-list">
+                            <div class="dep-item"><span class="arrow-icon">⬅</span> Depends On: <strong>Master.validate_meal_window_cutoff_clock</strong></div>
+                            <div class="dep-item"><span class="arrow-icon">➔</span> Required By: <strong>Chef.get_chef_batch_checklist</strong>, <strong>Master.orchestrate_gcp_route_optimization</strong></div>
+                        </div>
+                    </div>
+
+                    <div class="action-node">
+                        <div class="node-header">
+                            <span class="action-name">generate_initial_payment_link</span>
+                            <span class="agent-pill pill-customer">Customer</span>
+                        </div>
+                        <div class="node-desc">Programmatically calculates final total and generates UPI payment link.</div>
+                        <div class="deps-list">
+                            <div class="dep-item"><span class="arrow-icon">⬅</span> Depends On: <strong>Customer.add_item_to_order</strong></div>
+                            <div class="dep-item"><span class="arrow-icon">➔</span> Required By: <strong>Master.process_payment_webhook_confirmation</strong></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PHASE 3 -->
+            <div class="phase-block">
+                <div class="phase-header">
+                    <h2>Phase 3: Cutoff Orchestration & Cooking (Master & Chef)</h2>
+                    <span class="phase-tag">BUILD THIRD — DEPENDS ON PHASE 2</span>
+                </div>
+                <div class="action-grid">
+                    <div class="action-node">
+                        <div class="node-header">
+                            <span class="action-name">orchestrate_gcp_route_optimization</span>
+                            <span class="agent-pill pill-master">Master</span>
+                        </div>
+                        <div class="node-desc">Calls GCP Route Optimization API at cutoff, groups apartment gate drop-offs, and saves master route.</div>
+                        <div class="deps-list">
+                            <div class="dep-item"><span class="arrow-icon">⬅</span> Depends On: <strong>Customer.create_customer_order</strong> (Confirmed Orders)</div>
+                            <div class="dep-item"><span class="arrow-icon">➔</span> Required By: <strong>Driver.get_assigned_route_itinerary</strong></div>
+                        </div>
+                    </div>
+
+                    <div class="action-node">
+                        <div class="node-header">
+                            <span class="action-name">get_chef_batch_checklist</span>
+                            <span class="agent-pill pill-chef">Chef</span>
+                        </div>
+                        <div class="node-desc">Delivers consolidated order prep checklist to home cooks at 12 PM / 7 PM cutoff.</div>
+                        <div class="deps-list">
+                            <div class="dep-item"><span class="arrow-icon">⬅</span> Depends On: <strong>Master.lock_meal_window_batch</strong>, <strong>Customer.create_customer_order</strong></div>
+                        </div>
+                    </div>
+
+                    <div class="action-node">
+                        <div class="node-header">
+                            <span class="action-name">mark_order_packed_ready</span>
+                            <span class="agent-pill pill-chef">Chef</span>
+                        </div>
+                        <div class="node-desc">Broadcasts food packed signal so Master Agent notifies assigned delivery driver.</div>
+                        <div class="deps-list">
+                            <div class="dep-item"><span class="arrow-icon">⬅</span> Depends On: <strong>Customer.create_customer_order</strong></div>
+                            <div class="dep-item"><span class="arrow-icon">➔</span> Required By: <strong>Master.relay_order_ready_signal_to_driver</strong></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PHASE 4 -->
+            <div class="phase-block">
+                <div class="phase-header">
+                    <h2>Phase 4: Fulfillment & Driver Dispatch (Driver & Relays)</h2>
+                    <span class="phase-tag">BUILD FOURTH — DEPENDS ON PHASE 3</span>
+                </div>
+                <div class="action-grid">
+                    <div class="action-node">
+                        <div class="node-header">
+                            <span class="action-name">get_assigned_route_itinerary</span>
+                            <span class="agent-pill pill-driver">Driver</span>
+                        </div>
+                        <div class="node-desc">Reads master route sequence generated by GCP Route Optimization API.</div>
+                        <div class="deps-list">
+                            <div class="dep-item"><span class="arrow-icon">⬅</span> Depends On: <strong>Master.orchestrate_gcp_route_optimization</strong></div>
+                        </div>
+                    </div>
+
+                    <div class="action-node">
+                        <div class="node-header">
+                            <span class="action-name">dispatch_next_leg_navigation_link</span>
+                            <span class="agent-pill pill-driver">Driver</span>
+                        </div>
+                        <div class="node-desc">Dispatches single-leg Google Maps link (Stop N ➔ Stop N+1) as driver messages "Reached".</div>
+                        <div class="deps-list">
+                            <div class="dep-item"><span class="arrow-icon">⬅</span> Depends On: <strong>Driver.mark_driver_reached_stop</strong></div>
+                        </div>
+                    </div>
+
+                    <div class="action-node">
+                        <div class="node-header">
+                            <span class="action-name">mark_gate_delivery_completed</span>
+                            <span class="agent-pill pill-driver">Driver</span>
+                        </div>
+                        <div class="node-desc">Marks multi-order gate drop-off complete and triggers Master Agent to alert customers.</div>
+                        <div class="deps-list">
+                            <div class="dep-item"><span class="arrow-icon">⬅</span> Depends On: <strong>Driver.mark_orders_picked_up</strong></div>
+                            <div class="dep-item"><span class="arrow-icon">➔</span> Required By: <strong>Master.relay_gate_delivery_completed_to_customer</strong></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <footer>
+            Homaatri Multi-Agent Architecture Blueprint — Generated for Step-by-Step Implementation
+        </footer>
+    </div>
+</body>
+</html>
