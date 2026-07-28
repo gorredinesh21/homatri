@@ -300,7 +300,32 @@ CROSS-AGENT ACTION DEPENDENCY ANALYSIS:
 
 DOCUMENTATION & VISUAL MAP CREATED:
 - Interactive HTML Map: `docs/action_dependency_map.html`
+
 - Written Documentation: `markdowns/action_dependencies_and_build_order.md`
+
+--------------------------------------------------------------------------------
+[SECTION 14: CHEF AGENT PRODUCTION TOOL SPECIFICATIONS (TIER 1 FOUNDATION)]
+--------------------------------------------------------------------------------
+
+CHEF AGENT TOOL DESIGN COMPLETED (9 PRODUCTION LLM TOOLS):
+1. Tool Identifiers: Converted tool input lookups from internal `chef_id` to `chef_phone` for 100% natural WhatsApp alignment and zero LLM UUID hallucination.
+2. Merged Tool: Merged Action 5 (`get_chef_batch_checklist`) and Action 6 (`get_batch_item_totals`) into 1 comprehensive tool `get_chef_batch_checklist_tool`.
+3. Counter-Offer Protocol: Upgraded Tool 8 (`respond_to_custom_request_tool`) from binary YES/NO to a 3-way negotiation enum (`ACCEPTED`, `DECLINED`, `COUNTER_OFFER` + `counter_offer_text`).
+
+LIST OF 9 CHEF TOOLS:
+1. `get_chef_profile_tool`
+2. `set_daily_dish_capacity_tool`
+3. `toggle_dish_stock_tool`
+4. `check_daily_inventory_status_tool`
+5. `get_chef_batch_checklist_tool` (Merged Checklist + Totals)
+6. `mark_order_packed_ready_tool`
+7. `get_assigned_driver_info_tool`
+8. `respond_to_custom_request_tool` (Counter-Offer Protocol)
+9. `check_driver_arrival_status_tool`
+
+DOCUMENTATION CREATED & COMMITTED:
+- Updated Specification: `markdowns/chef_agent.md`
+
 
 
 
