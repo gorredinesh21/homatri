@@ -324,7 +324,35 @@ LIST OF 9 CHEF TOOLS:
 9. `check_driver_arrival_status_tool`
 
 DOCUMENTATION CREATED & COMMITTED:
+
 - Updated Specification: `markdowns/chef_agent.md`
+
+--------------------------------------------------------------------------------
+[SECTION 15: CUSTOMER AGENT PRODUCTION TOOL SPECIFICATIONS (TIER 2 INGESTION)]
+--------------------------------------------------------------------------------
+
+CUSTOMER AGENT TOOL DESIGN COMPLETED (11 PRODUCTION LLM TOOLS):
+1. Tool Identifiers: Converted tool input lookups from internal `customer_id` to `customer_phone` for 100% natural WhatsApp alignment and zero LLM UUID hallucination.
+2. 2-Step Onboarding UX Refinement: Refined Tool 2 (`register_customer_profile_tool`) to accept text name & address first, and prompt user on WhatsApp to share location pin attachment for Tool 3 (`update_customer_location_pin_tool`).
+3. Unified Payment Tool: Merged Action 8 (`generate_initial_payment_link`) and Action 9 (`add_extra_items_mid_order` / `generate_topup_payment_link`) into 1 unified tool `generate_payment_link_tool` (Python auto-detects initial bill vs top-up bill).
+4. Modular Cart Building: Kept `initialize_customer_order_tool` (Tool 6) and `add_item_to_order_tool` (Tool 7) separate for multi-turn cart building.
+
+LIST OF 11 CUSTOMER TOOLS:
+1. `get_customer_profile_tool`
+2. `register_customer_profile_tool` (2-Step text onboarding)
+3. `update_customer_location_pin_tool` (WhatsApp location attachment pin)
+4. `find_nearby_home_kitchens_tool` (Haversine distance ranking)
+5. `view_chef_menu_tool`
+6. `initialize_customer_order_tool` (Cutoff clock check & draft cart)
+7. `add_item_to_order_tool` (Incremental cart building)
+8. `generate_payment_link_tool` (Unified Initial + Top-Up Billing)
+9. `get_active_order_status_tool`
+10. `get_order_history_tool`
+11. `submit_order_review_tool`
+
+DOCUMENTATION CREATED & COMMITTED:
+- Updated Specification: `markdowns/customer_agent.md`
+
 
 
 
