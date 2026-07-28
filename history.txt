@@ -401,7 +401,21 @@ LIST OF 8 DRIVER TOOLS:
 8. `report_vehicle_delay_alert_tool`
 
 DOCUMENTATION CREATED & COMMITTED:
+
 - Updated Specification: `markdowns/delivery_driver_agent.md`
+
+--------------------------------------------------------------------------------
+[SECTION 18: ATOMIC ORDER CREATION & INTER-AGENT TOOL PROTOCOL SPECIFICATIONS]
+--------------------------------------------------------------------------------
+
+1. ATOMIC 1-STEP ORDER CREATION REFINEMENT:
+   - Refined Customer Tool 6 (`initialize_customer_order_tool`) to accept an optional initial `items` list payload.
+   - Eliminates 2-turn order redundancy: Python checks cutoff clock, creates `customer_orders` header, and inserts `customer_order_items` in 1 single atomic DB transaction!
+   - Tool 7 (`add_item_to_order_tool`) is retained for subsequent dish additions in later turns.
+
+2. DOCUMENTATION & REPO SYNC:
+   - Updated Specification: `markdowns/customer_agent.md`
+
 
 
 

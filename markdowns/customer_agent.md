@@ -22,9 +22,9 @@ This document outlines the complete persona, communication rules, categories, an
  ▼                 ▼                 ▼                 ▼                 ▼                 ▼
 CAT 1: PROFILE &   CAT 2: KITCHEN    CAT 3: CART &     CAT 4: UNIFIED    CAT 5: LIVE SUPPORT
 LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIPTS & REVIEWS
-• Profile Tool     • Find Nearby     • Init Order Header• Unified Payment • Active Status
-• Register Profile • View Chef Menu  • Add Item to Cart   Link Tool       • Order History
-• Location Pin                                            (Initial/Topup) • Submit Review
+• Profile Tool     • Find Nearby     • Atomic Init &   • Unified Payment • Active Status
+• Register Profile • View Chef Menu    Order Tool      Link Tool         • Order History
+• Location Pin                       • Add Extra Item  (Initial/Topup)   • Submit Review
 ```
 
 ---
@@ -32,7 +32,7 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
 ### 📍 CATEGORY 1: Profile & Location Onboarding
 
 #### Tool 1: `get_customer_profile_tool`
-* **Action Source**: Action 1 (`get_customer_profile`)
+* **Linking Status**: `STANDALONE_INTERNAL`
 * **Purpose**: Identifies the customer on incoming WhatsApp webhooks.
 * **Inputs**:
   - `customer_phone`: `str` (Required, E.164 format e.g. `"+919876543210"`)
@@ -52,7 +52,7 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
 ---
 
 #### Tool 2: `register_customer_profile_tool` *(REFINED 2-STEP ONBOARDING)*
-* **Action Source**: Action 2 (`register_customer_profile`)
+* **Linking Status**: `STANDALONE_INTERNAL`
 * **Purpose**: Saves first-time customer's name and text address, and prompts them on WhatsApp to send a location pin attachment.
 * **Inputs**:
   - `customer_phone`: `str` (Required)
@@ -73,7 +73,7 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
 ---
 
 #### Tool 3: `update_customer_location_pin_tool`
-* **Action Source**: Action 3 (`update_customer_location_from_whatsapp_pin`)
+* **Linking Status**: `STANDALONE_INTERNAL`
 * **Purpose**: Updates customer GPS coordinates when they tap "Share Location" attachment pin on WhatsApp.
 * **Inputs**:
   - `customer_phone`: `str` (Required)
@@ -96,7 +96,7 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
 ### 🍽️ CATEGORY 2: Kitchen Discovery & Menu Browsing
 
 #### Tool 4: `find_nearby_home_kitchens_tool`
-* **Action Source**: Action 4 (`view_chefs_sorted_by_distance`)
+* **Linking Status**: `STANDALONE_INTERNAL` (Cross-Domain Read)
 * **Purpose**: Fetches active home kitchens sorted from closest to farthest from the customer's location using Haversine distance math.
 * **Inputs**:
   - `customer_phone`: `str` (Required)
@@ -110,13 +110,6 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
       "distance_km": 1.4,
       "specialty": "North Indian Thalis",
       "available_dishes_count": 3
-    },
-    {
-      "chef_phone": "+919988776655",
-      "kitchen_name": "Sita South Indian Kitchen",
-      "distance_km": 3.2,
-      "specialty": "Traditional Andhra Meals",
-      "available_dishes_count": 2
     }
   ]
   ```
@@ -125,7 +118,7 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
 ---
 
 #### Tool 5: `view_chef_menu_tool`
-* **Action Source**: Action 5 (`view_chef_menu`)
+* **Linking Status**: `STANDALONE_INTERNAL` (Cross-Domain Read)
 * **Purpose**: Displays full dish catalog, descriptions, prices, and remaining batch inventory for a selected home kitchen.
 * **Inputs**:
   - `chef_phone`: `str` (Required)
@@ -140,7 +133,6 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
       {
         "menu_item_id": "item_201",
         "dish_name": "Special Paneer Thali",
-        "description": "4 Rotis, Paneer Curry, Dal, Rice, Sweet",
         "unit_price": 180.00,
         "remaining_inventory": 7,
         "is_available": true
@@ -154,13 +146,14 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
 
 ### 🛒 CATEGORY 3: Cart Creation & Cutoff Validation
 
-#### Tool 6: `initialize_customer_order_tool`
-* **Action Source**: Action 6 (`create_customer_order`)
-* **Purpose**: Checks system cutoff clock ($\le$ 12:00 PM for Lunch, $\le$ 7:00 PM for Dinner) and initializes an active draft order header in the DB.
+#### Tool 6: `initialize_customer_order_tool` *(ATOMIC 1-STEP ORDER CREATION)*
+* **Linking Status**: `CROSS_AGENT_LINKED`
+* **Purpose**: Checks system cutoff clock ($\le$ 12:00 PM for Lunch, $\le$ 7:00 PM for Dinner), creates the order header in `customer_orders`, and atomically appends initial dishes into `customer_order_items` in **a single turn**.
 * **Inputs**:
   - `customer_phone`: `str` (Required)
   - `chef_phone`: `str` (Required)
   - `meal_window`: `str` (Required, `'LUNCH'` or `'DINNER'`)
+  - `items`: `list[dict]` (Required, List of `{ "menu_item_id": str, "quantity": int, "special_instructions": str | None }`)
 * **Expected Output Structure**:
   ```json
   {
@@ -168,34 +161,36 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
     "customer_phone": "+919876543210",
     "chef_phone": "+919876543210",
     "meal_window": "LUNCH",
-    "status": "DRAFT_CART",
-    "cutoff_check": "PASSED_BEFORE_12PM",
-    "message": "Order header created. Ready to add items."
+    "status": "PENDING_PAYMENT",
+    "items_added": [
+      { "dish_name": "Special Paneer Thali", "quantity": 2, "unit_price": 180.00, "item_subtotal": 360.00, "special_instructions": "Less spicy" }
+    ],
+    "cart_subtotal": 360.00,
+    "cutoff_check": "PASSED_BEFORE_12PM"
   }
   ```
-* **DB Write**: `INSERT INTO customer_orders ...` (Write)
+* **DB Write**: `INSERT INTO customer_orders` & `INSERT INTO customer_order_items` (Write)
 
 ---
 
 #### Tool 7: `add_item_to_order_tool`
-* **Action Source**: Action 7 (`add_item_to_order`)
-* **Purpose**: Checks if an active draft order exists, verifies remaining dish inventory, and appends the meal item to the cart with special instructions.
+* **Linking Status**: `STANDALONE_INTERNAL` (Subsequent Dish Additions)
+* **Purpose**: Used when a customer subsequently adds extra dishes to an existing order in a later turn.
 * **Inputs**:
   - `customer_phone`: `str` (Required)
   - `order_id`: `str` (Required)
   - `menu_item_id`: `str` (Required)
-  - `quantity`: `int` (Required, `Field(gt=0)`)
+  - `quantity`: `int` (Required)
   - `special_instructions`: `str | None` (Optional)
 * **Expected Output Structure**:
   ```json
   {
     "order_id": "ord_104",
-    "item_added": "Special Paneer Thali",
-    "quantity": 2,
-    "unit_price": 180.00,
-    "item_subtotal": 360.00,
-    "special_instructions": "Less spicy",
-    "cart_total": 360.00,
+    "item_added": "Gulab Jamun",
+    "quantity": 1,
+    "unit_price": 40.00,
+    "item_subtotal": 40.00,
+    "updated_cart_total": 400.00,
     "status": "ITEM_ADDED"
   }
   ```
@@ -206,8 +201,8 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
 ### 💳 CATEGORY 4: Unified Payment Links
 
 #### Tool 8: `generate_payment_link_tool` *(UNIFIED BILLING TOOL)*
-* **Action Source**: Merges Action 8 (`generate_initial_payment_link`) + Action 9 (`add_extra_items_mid_order` / `generate_topup_payment_link`)
-* **Purpose**: Programmatically calculates the unpaid balance (whether initial bill `subtotal + delivery_fee` OR mid-cooking top-up) and generates the UPI payment link URL.
+* **Linking Status**: `CROSS_AGENT_LINKED`
+* **Purpose**: Programmatically calculates unpaid balance (initial bill `subtotal + delivery_fee` OR mid-cooking top-up) and generates UPI payment link URL.
 * **Inputs**:
   - `customer_phone`: `str` (Required)
   - `order_id`: `str` (Required)
@@ -229,7 +224,7 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
 ### 📞 CATEGORY 5: Live Support, Receipts & Reviews
 
 #### Tool 9: `get_active_order_status_tool`
-* **Action Source**: Action 10 (`get_active_order_status`)
+* **Linking Status**: `CROSS_AGENT_LINKED` (Read-Only Bridge across 3 Domains)
 * **Purpose**: Answers live support queries on WhatsApp (*"Where is my driver?"*, *"Is my lunch cooking?"*).
 * **Inputs**:
   - `customer_phone`: `str` (Required)
@@ -251,7 +246,7 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
 ---
 
 #### Tool 10: `get_order_history_tool`
-* **Action Source**: Action 11 - Part A (`get_customer_order_history`)
+* **Linking Status**: `STANDALONE_INTERNAL`
 * **Purpose**: Retrieves past order receipts for a customer.
 * **Inputs**:
   - `customer_phone`: `str` (Required)
@@ -273,7 +268,7 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
 ---
 
 #### Tool 11: `submit_order_review_tool`
-* **Action Source**: Action 11 - Part B (`submit_review`)
+* **Linking Status**: `STANDALONE_INTERNAL`
 * **Purpose**: Records post-delivery 1–5 star reviews for the home chef and delivery driver.
 * **Inputs**:
   - `customer_phone`: `str` (Required)
