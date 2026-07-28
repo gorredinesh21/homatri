@@ -414,7 +414,29 @@ DOCUMENTATION CREATED & COMMITTED:
    - Tool 7 (`add_item_to_order_tool`) is retained for subsequent dish additions in later turns.
 
 2. DOCUMENTATION & REPO SYNC:
-   - Updated Specification: `markdowns/customer_agent.md`
+   
+- Updated Specification: `markdowns/customer_agent.md`
+
+--------------------------------------------------------------------------------
+[SECTION 19: INTER-AGENT TOOL LINKING & PROTOCOL BLUEPRINT (ALL 40 TOOLS)]
+--------------------------------------------------------------------------------
+
+COMPLETE INTER-AGENT TOOL LINKING & PROTOCOL SPECIFICATIONS COMPLETED:
+1. Tool Linking Classification: Every tool across all 4 agents classified as `STANDALONE_INTERNAL`, `CROSS_AGENT_LINKED`, or `MASTER_CORE_ENGINE_SERVICE`.
+2. Protocol Rule Blueprint: Specified Trigger Flow, State Data Payload Schema, Loop & Retry Boundaries, and Terminal Resolution Conditions for all 40 LLM tools.
+3. Key Architectural Rules Enforced:
+   - Counter-Offer Protocol (Chef Tool 8): Max 1 counter-offer negotiation turn (`ACCEPTED`, `DECLINED`, `COUNTER_OFFER` + dynamic dish/qty payload).
+   - Atomic Cutoff Lock & GCP Route Solver (Master Tool 2): Merged atomic execution at 12 PM / 7 PM cutoff calling GCP Route Optimization API.
+   - 2-Step Onboarding UX (Customer Tool 2 & 3): Text name/address first ➔ WhatsApp location pin attachment second.
+   - Unified Billing (Customer Tool 8): Auto-detects initial bill vs mid-cooking top-up.
+   - Stop-Based Driver Handshakes (Driver Tools 4-6): Replaced continuous telemetry with practical stop arrival & gate completion handshakes.
+
+DOCUMENTATION UPDATED & COMMITTED:
+- `markdowns/chef_agent.md` (9 Tools)
+- `markdowns/customer_agent.md` (11 Tools)
+- `markdowns/master_agent.md` (12 Tools)
+- `markdowns/delivery_driver_agent.md` (8 Tools)
+
 
 
 
