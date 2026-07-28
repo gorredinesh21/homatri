@@ -1,25 +1,42 @@
 # 📋 Homaatri Pending Architecture & Implementation Roadmap
 
-This document outlines the **5 Pending Architectural Milestones** required to complete the system design before writing production backend code.
+This document tracks the status of the **5 Key Architectural Milestones** required to complete the system design before writing production backend code.
 
 ---
 
-## 🗺️ Master Pending Roadmap Overview
+## 🗺️ Master Roadmap Status
 
 ```
  ┌─────────────────────────────────────────────────────────────────────────┐
- │                       PENDING ARCHITECTURE ROADMAP                      │
+ │                       ARCHITECTURE ROADMAP STATUS                       │
  └────────────────────────────────────┬────────────────────────────────────┘
                                       │
   ┌───────────────────┬───────────────┴───┬───────────────────┬───────────────────┐
   ▼                   ▼                   ▼                   ▼                   ▼
 1. DB COLUMN SCHEMAS 2. LLM AGENT TOOLS  3. LANGGRAPH STATE  4. WHATSAPP WEBHOOK 5. PAYMENT & BILLING
    & SQL DDL DEFS       DESIGN & MAPPING    GRAPH STRUCTURE     GATEWAY ENGINE      INTEGRITY ENGINE
+   [IN PROGRESS NEXT]  [✅ 100% COMPLETED] [PENDING]           [PENDING]           [PENDING]
 ```
 
 ---
 
-## 🗄️ Milestone 1: Database Column Schemas & SQL DDL Definitions
+## ✅ Milestone 2: Agent Tools Design & Pydantic Mapping (Actions ➔ Tools) — COMPLETED
+
+### Completed Accomplishments:
+- Formally declared and mapped all backend actions into **40 Production LLM Tools (`@tool`)** across Chef (9), Customer (11), Master (12), and Driver (8) agents.
+- Authored production blueprint file **[`all_40_agent_tools.py`](file:///home/dinesh/coding/PROJECTS/homatri/all_40_agent_tools.py)** declaring Pydantic input schemas and tool docstrings.
+- Embedded standardized **Left-to-Right (`graph LR`) Mermaid Flowchart Diagrams** into all 4 agent master specification files in `markdowns/`.
+- Enforced key architectural protocols:
+  - **Counter-Offer Negotiation Protocol**: Chef Tool 8 (`respond_to_custom_request_tool`) with 3-way decision enum (`ACCEPTED`, `DECLINED`, `COUNTER_OFFER` + dynamic dish/qty payload).
+  - **Atomic Cutoff Lock & GCP Route Solver**: Master Tool 2 (`execute_cutoff_batch_and_route_optimization_tool`) as an atomic service.
+  - **2-Step Onboarding UX**: Customer Tool 2 (Text name/address) + Customer Tool 3 (WhatsApp location pin attachment).
+  - **Atomic 1-Step Order Creation**: Customer Tool 6 (`initialize_customer_order_tool`) creating order header + items in 1 turn.
+  - **Unified Payment Tool**: Customer Tool 8 (`generate_payment_link_tool`) auto-detecting initial bill vs top-up bill.
+  - **Decoupled Handoffs**: LangGraph router edges handling state transitions without circular imports (`demo_langgraph_agents.py`).
+
+---
+
+## 🗄️ Milestone 1: Database Column Schemas & SQL DDL Definitions — NEXT UP
 
 ### Goal:
 Finalize production-grade SQL DDL schemas for all **18 Master Database Tables** across Customer, Chef, Driver, and System domains.
@@ -35,7 +52,7 @@ Finalize production-grade SQL DDL schemas for all **18 Master Database Tables** 
    - `order_status_enum`: `['PENDING_PAYMENT', 'CONFIRMED', 'BATCHED', 'COOKING', 'PACKED', 'PICKED_UP', 'DELIVERED', 'CANCELLED']`.
    - `payment_status_enum`: `['PENDING', 'PAID', 'FAILED', 'REFUNDED']`.
    - `payment_type_enum`: `['INITIAL', 'TOPUP', 'REFUND']`.
-   - `stop_type_enum`: `['PICKUP_KITCHEN', 'DROPOFF_CUSTOMER']`.
+   - `stop_type_enum`: `['PICKUP_KITCHEN', 'DROPOFF_GATE']`.
 3. **Foreign Key Constraints & Cascade Rules**:
    - Strict `FOREIGN KEY` definitions linking orders to profiles, line items to orders/chefs/dishes, and stops to routes.
    - `ON DELETE RESTRICT` to prevent accidental deletion of historical order receipts.
@@ -45,26 +62,10 @@ Finalize production-grade SQL DDL schemas for all **18 Master Database Tables** 
 
 ---
 
-## 🧰 Milestone 2: Agent Tools Design & Pydantic Mapping (Actions $\rightarrow$ Tools)
-
-### Goal:
-Translate primitive backend actions into high-level, production-ready `@tool` definitions for LangGraph.
-
-### Detailed Requirements:
-1. **Tool Combination & Splitting**:
-   - Evaluate whether actions should be merged (e.g. `add_extra_items_mid_order` + `generate_topup_payment_link`) or split for LLM simplicity.
-2. **Pydantic Input Schemas**:
-   - Define strict input classes for every tool (e.g. `CreateOrderInput`, `ReportUnlocatableAddressInput`).
-   - Include regex validators for phone numbers and positive integer bounds for quantities (`Field(gt=0)`).
-3. **LLM Tool Docstring Engineering**:
-   - Write clear, unambiguous docstrings for Gemini 3.6 Flash explaining *when* and *why* to invoke each tool.
-
----
-
 ## 🕸️ Milestone 3: LangGraph State Machine & Graph Structure
 
 ### Goal:
-Define the complete multi-agent graph graph topology, nodes, conditional edges, and state checkpointing.
+Define the complete multi-agent graph topology, nodes, conditional edges, and state checkpointing.
 
 ### Detailed Requirements:
 1. **State Schema (`TypedDict`)**:
@@ -72,7 +73,7 @@ Define the complete multi-agent graph graph topology, nodes, conditional edges, 
 2. **Graph Node Definitions**:
    - `MasterNode`, `CustomerNode`, `ChefNode`, `DriverNode`.
 3. **Conditional Routing Edges**:
-   - Write edge functions evaluating subagent intent payloads to route control (`CustomerNode` $\rightarrow$ `MasterNode` $\rightarrow$ `ChefNode`).
+   - Write edge functions evaluating subagent intent payloads to route control (`CustomerNode` ➔ `MasterNode` ➔ `ChefNode`).
 4. **Checkpointer & `interrupt()` Configuration**:
    - Configure PostgreSQL checkpointer for human-in-the-loop state persistence.
 
@@ -104,5 +105,5 @@ Design the asynchronous payment verification and programmatic billing engine.
 2. **Cryptographic Signature Verification**:
    - Validate HMAC-SHA256 signature to guarantee payment authenticity.
 3. **Order Status Transition**:
-   - Automatically transition orders from `PENDING_PAYMENT` $\rightarrow$ `CONFIRMED` upon payment verification.
+   - Automatically transition orders from `PENDING_PAYMENT` ➔ `CONFIRMED` upon payment verification.
    - Handle incremental top-up payments for mid-cooking dish additions.
