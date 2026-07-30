@@ -469,6 +469,227 @@ FILES CREATED, UPDATED & COMMITTED:
 - `markdowns/todo_architecture_roadmap.md` (Updated Roadmap Status)
 - `markdowns/chef_agent.md`, `customer_agent.md`, `master_agent.md`, `delivery_driver_agent.md`
 
+--------------------------------------------------------------------------------
+[SECTION 22: MILESTONE 1 KICKOFF — TABLE DESIGN METHOD & CHEF AGENT TABLES]
+--------------------------------------------------------------------------------
+
+DATE: 2026-07-30
+
+ENTITY MODEL LOCKED (5 core entities in interaction order):
+1. Homaatri/System (Master Agent actor-face + `system_*` domain) — foundation + cutoff orchestration.
+2. Admin (human, no agent, `admin_*`) — onboards chefs/riders, sets menu prices.
+3. Chef (Chef Agent + `chef_*`).
+4. Customer (Customer Agent + `customer_*`).
+5. Rider (Driver Agent + `driver_*`).
+   Plus 3 EXTERNAL INTEGRATIONS (no entity tables; integration state lives inside `system_*`):
+   Payment Gateway (webhook idempotency), WhatsApp/Meta (inbound dedup + outbound status), Maps/Route API (route-run logs).
+   NOTE: "Master" and "System" are the actor-face and data-face of the ONE Homaatri entity (chose single-entity model).
+
+TABLE DESIGN METHOD LOCKED (bottom-up query inventory, then merge):
+- Go agent by agent. For each tool, list every query the tool ITSELF runs (reads + writes) in a fixed table:
+  Q# | Tool | R/W | what | table | filter/key cols | index implied | on-list?
+- Each query emits a table entry. Do all agents (overlaps expected), then dedupe/merge SAME-ENTITY tables (union columns).
+  Merge trigger = same real-world entity (same PK meaning), NOT merely shared columns.
+- Access-pattern-first is used as a COMPLETENESS CHECK; extra operational/future tables added on top.
+
+BASE RULES (apply to ALL agents):
+1. PHONE IS THE NATURAL KEY — tables key on normalized phone (`chef_phone`/`customer_phone`/`driver_phone`); no phone->id resolve.
+   Transactional rows (orders/items/payments/routes) keep `VARCHAR(36)` surrogate ids.
+2. WRITE INVARIANT — a subagent tool WRITES only its own domain tables; every cross-domain write is a HANDOFF to Master (note only).
+3. READS ARE GLOBAL — a tool may READ any table; cross-domain reads stay on the list, finalized under the owner agent.
+4. CROSS-AGENT CALLS = NOTES — another agent's queries are covered under that agent (mapping recorded).
+5. `driver_locations` DROPPED — no live GPS; rider position inferred from route progress; arrival = `system_delivery_stops.actual_arrival`.
+6. DATA TYPES — money `DECIMAL(10,2)`; lat `DECIMAL(10,8)`/lng `DECIMAL(11,8)`; timestamps `TIMESTAMPTZ`; FKs `ON DELETE RESTRICT`.
+
+PHONE NORMALIZATION (at webhook ingress, Indian numbers only for now):
+- Strip spaces; `+91`(13-char) -> last 10; 10-digit stays; else invalid.
+- PENDING: add the `919876543210` (12-digit, no `+`) case that WhatsApp Cloud API actually sends.
+
+CHEF AGENT PASS COMPLETED (9 tools -> 12 clean queries, 5 owned tables):
+- Owned tables: chef_profiles (PK chef_phone), chef_menu_items, chef_daily_inventory, chef_order_readiness, chef_chat_history.
+- New enum: readiness_status_enum (PREPARING, PACKED_READY).
+- Cross-domain reads noted for owners: customer_orders, customer_order_items (Customer); system_delivery_stops,
+  system_delivery_stop_orders, system_delivery_routes (System); driver_profiles (Rider).
+- Handoffs -> Master: Tool 6 (order->PACKED + notify driver); Tool 8 (hitl resume + counter-offer relay -> Customer).
+- Query count fell ~21 -> 12: removed ~7 redundant phone->id resolves (phone-as-key) + moved 2 cross-domain writes to Master handoffs. No work lost.
+
+FILES CREATED / UPDATED:
+- `markdowns/chef_tables.md` (NEW — full Chef table design & query access map)
+- `markdowns/chef_agent.md` (appended Section 3: Table Design & Query Access Map)
+- `history.txt` (this Section 22)
+
+NEXT: Customer agent query pass (11 tools), same format and base rules.
+
+--------------------------------------------------------------------------------
+[SECTION 23: CUSTOMER AGENT TABLES — QUERY PASS & PAYMENT PROTOCOL]
+--------------------------------------------------------------------------------
+
+DATE: 2026-07-30
+
+CUSTOMER AGENT PASS COMPLETED (11 -> 10 tools; 22 queries + 2 delegated executors; 6 owned tables).
+
+TOOL CHANGE:
+- Tool 3 (`update_customer_location_pin_tool`) FOLDED INTO `register` as a 2-phase HITL onboarding flow:
+  write name/address (is_registered=false) -> interrupt() "share location" (if/else validates reply) -> save coords -> is_registered=true
+  -> "thank you for registering, would you like to see kitchens near you?". So 11 -> 10 tools.
+
+PAYMENT PROTOCOL (locked, double-state relay via Master):
+- Customer computes FINAL AMOUNT -> hands amount to Master. Customer never touches the gateway.
+- Master mints the UPI link via the external provider (Razorpay/etc.) -> returns link to Customer -> Customer wraps text + sends to user.
+- TWO parallel LangGraph interrupts (states): Master waits on the provider WEBHOOK (`PAYMENT_AWAIT_PROVIDER`);
+  Customer waits on Master's APPROVAL (`PAYMENT_AWAIT_MASTER_APPROVAL`).
+- On webhook: Master verifies HMAC + dedups (`system_payment_webhook_events`) -> delegates customer_payments->PAID and
+  customer_orders->CONFIRMED to the Customer executor -> approves the waiting Customer interrupt -> Customer notifies user.
+- No new tables: reuses customer_payments (customer domain), system_payment_webhook_events + system_hitl_sessions (System).
+
+DESIGN DECISIONS APPLIED:
+- Cutoff check = DIRECT READ of system_meal_windows (no LLM hop). [flag A resolved]
+- Payment gateway owned by Master; customer_payments records owned by customer domain (delegated executor). [flag B resolved]
+- `units_sold` DERIVED = SUM(customer_order_items.quantity) for chef+dish+date -> NO cross-domain write on order creation. [flag C]
+- SNAPSHOTS: kitchen_name on order; dish_name+unit_price+service_date on item (immutable; correct receipts, no cross-domain join). [flag D]
+- Avg chef/driver ratings DERIVED from customer_reviews via global read -> no write to chef_/driver_profiles. [flag E]
+
+DELEGATED-WRITE EXECUTORS (customer domain, triggered by Master) — where cross-domain writes INTO customer land:
+- DW1 execute_order_status_transition -> customer_orders (BATCHED/PACKED/PICKED_UP/DELIVERED/CONFIRMED/CANCELLED)
+- DW2 execute_payment_status_update -> customer_payments (PAID/FAILED/REFUNDED)
+
+OWNED TABLES (6): customer_profiles (PK customer_phone), customer_orders, customer_order_items, customer_payments,
+  customer_reviews, customer_chat_history.
+NEW ENUMS: order_status_enum, payment_status_enum, payment_type_enum.
+NEW system_hitl_sessions interrupt types introduced: AWAIT_LOCATION_PIN, PAYMENT_AWAIT_MASTER_APPROVAL, PAYMENT_AWAIT_PROVIDER.
+
+CROSS-DOMAIN READS NOTED FOR OWNERS: chef_profiles/chef_menu_items/chef_daily_inventory/chef_order_readiness (Chef);
+  system_meal_windows/system_settings/system_delivery_stops/system_delivery_routes/system_hitl_sessions/system_payment_webhook_events (System);
+  driver_profiles (Rider).
+
+FILES CREATED / UPDATED:
+- `markdowns/customer_tables.md` (NEW — full Customer table design & query access map)
+- `markdowns/customer_agent.md` (appended Section 3: Table Design & Query Access Map)
+- `history.txt` (this Section 23)
+
+NEXT: Rider (Driver) agent query pass (8 tools), same format and base rules.
+
+--------------------------------------------------------------------------------
+[SECTION 24: RIDER (DRIVER) AGENT TABLES — QUERY PASS]
+--------------------------------------------------------------------------------
+
+DATE: 2026-07-30
+
+RIDER (DRIVER) AGENT PASS COMPLETED (8 tools; 7 on-list queries + 5 handoff notes; 3 owned tables).
+
+OWNED TABLES (3; driver_locations DROPPED):
+- driver_profiles (PK driver_phone; Admin-onboarded) — driver_name, vehicle_info, active_status, current_assigned_route_id.
+- driver_trip_status (PK trip_id) — driver_phone, route_id, service_date, status (trip_status_enum), current_stop_index.
+- driver_chat_history (written by runtime per turn).
+NEW ENUM: trip_status_enum (ASSIGNED, EN_ROUTE_PICKUP, AT_KITCHEN, EN_ROUTE_DELIVERY, AT_GATE, COMPLETED).
+
+KEY DECISIONS:
+- KEEP driver_trip_status (not derived). It is an own-domain write (free) AND doubles as the cross-domain LIVE-TRACKING
+  "progress list" board: Customer & Chef agents read `system_delivery_stops (ordered drop list) JOIN driver_trip_status
+  (current_stop_index + completed)` to show the route, completed stops, current position, and pending stops.
+  Replaces dropped GPS; upgrades to a map view later.
+- The RIDER is the MOST Master-mediated agent: its only own-domain writes are trip-phase updates to driver_trip_status.
+  All operational state (stop status, order status, ETAs) lives in System/Customer domains -> Master handoffs.
+
+MASTER HANDOFF — TWO KINDS CLARIFIED (already implied by delegate rule):
+- Target = SYSTEM domain (Master's own) -> Master writes DIRECTLY. e.g. stop->ARRIVED (T4), stop->COMPLETED (T6), ETA recalc (T8).
+- Target = another SUBAGENT domain -> Master DELEGATES to that domain's executor. e.g. customer_orders->PICKED_UP (T5)/DELIVERED (T6) -> Customer DW1.
+
+NEW system_hitl_sessions interrupt type: UNLOCATABLE_ADDRESS (waiting_on = CUSTOMER).
+
+MASTER GAP SURFACED: Master needs a STOP-STATUS write mechanism (ARRIVED/COMPLETED/ETA recalc) — not in the current 12
+Master tools. Add during the Master pass.
+
+FILES CREATED / UPDATED:
+- `markdowns/driver_tables.md` (NEW — full Rider table design & query access map)
+- `markdowns/delivery_driver_agent.md` (appended Section 3: Table Design & Query Access Map)
+- `history.txt` (this Section 24)
+
+NEXT: Homaatri/System (Master) agent pass (12 tools) + Admin, then merge/dedupe all agent passes into the final schema.
+
+--------------------------------------------------------------------------------
+[SECTION 25: MASTER/SYSTEM AGENT TABLES + UNIFIED conversation_messages]
+--------------------------------------------------------------------------------
+
+DATE: 2026-07-30
+
+MASTER/SYSTEM PASS COMPLETED (12 tools; ~25 on-list queries + delegations; 9 core system tables + observability + 1 runtime table).
+
+RECONCILIATION (delegate-only supersedes spec): Master writes ONLY system_* directly and DELEGATES every subagent-domain
+write to the owner executor (Customer DW1/DW2). Spec's "Master UPDATE customer_orders" lines are reclassified as delegations.
+DELEGATIONS closing the loop: DW1 execute_order_status_transition <- BATCHED(cutoff)/CANCELLED(cancel)/PACKED(chef)/
+DELIVERED(gate)/CONFIRMED(payment); DW2 execute_payment_status_update <- REFUNDED(cancel)/PAID(payment).
+
+SYSTEM-OWNED TABLES (9 core): system_meal_windows (UNIQUE service_date+meal_type), system_settings (delivery_fee/cutoffs/tz),
+system_delivery_routes, system_delivery_stops (UNIQUE route_id+stop_index), system_delivery_stop_orders (junction),
+system_agent_logs (audit), system_outbound_queue (partial idx QUEUED + WA delivery status), system_hitl_sessions
+(partial idx WAITING + 15-min TTL), system_payment_webhook_events (UNIQUE gateway_event_id idempotency).
+OBSERVABILITY: system_route_optimization_runs.
+NEW ENUMS: window_status_enum, route_status_enum, stop_status_enum, stop_type_enum, log_severity_enum, outbound_status_enum,
+hitl_status_enum, hitl_interrupt_type_enum.
+MASTER GAP FILLED: driver stop->ARRIVED handoff = Master DIRECT write to system_delivery_stops (system_* is Master's own).
+
+UNIFIED CHAT HISTORY DECISION (conversation_messages):
+- ONE unified, INSERT-ONLY (no update/delete) table `conversation_messages` stores EVERY message in both directions.
+- Cols: message_id, phone, actor_role (CUSTOMER/CHEF/DRIVER), direction (INBOUND/OUTBOUND), source
+  (USER/*_AGENT/MASTER_AGENT/SYSTEM), message_type, message_text, lat/lng, media_ref, related_order_id,
+  wa_message_id (UNIQUE inbound dedup), raw_payload, created_at. Index (phone, created_at DESC); partition by month at scale.
+- WRITTEN BY THE RUNTIME (messaging layer), NOT by agent tools: webhook logs inbound; dispatcher logs outbound
+  (incl. Master's proactive notifications). This is a THIRD table category: RUNTIME/INFRASTRUCTURE (alongside domain
+  tables and delegated executors). Global read.
+- REPLACES the 3 per-domain *_chat_history tables AND system_inbound_messages (conversation_messages carries wa_message_id
+  UNIQUE + raw_payload, serving inbound dedup too).
+- CONTEXT ASSEMBLER: before each LLM call, fetch last 4-5 messages (both directions) for the phone; guardrail lets the LLM
+  escalate to last-10 (hard cap) since users say "yes"/"okay" without context.
+
+FILES CREATED / UPDATED:
+- `markdowns/master_tables.md` (NEW — full Master/System table design)
+- `markdowns/master_agent.md` (appended Section 3)
+- `markdowns/chef_tables.md`, `customer_tables.md`, `driver_tables.md` + their agent .md files (dropped *_chat_history -> conversation_messages)
+- `history.txt` (this Section 25)
+
+NEXT: Admin entity pass, then MERGE/DEDUPE all agent passes into the final Milestone-1 schema (DDL).
+
+--------------------------------------------------------------------------------
+[SECTION 26: ADMIN ENTITY TABLES & ACCESS MODEL]
+--------------------------------------------------------------------------------
+
+DATE: 2026-07-30
+
+ADMIN ENTITY PASS COMPLETED (back-office human operator via dashboard; 2 owned tables + 1 future; new access tier).
+
+WHAT MAKES ADMIN DIFFERENT:
+- NOT phone-based: dashboard email/password login -> surrogate admin_id + UNIQUE email (no phone natural key).
+- NEW 4th ACCESS TIER (true superuser): Admin has GLOBAL READ + GLOBAL WRITE (direct to ALL tables). It bypasses the
+  scoped-write/delegate model because the write-invariant exists to contain LLM mistakes, and Admin is a TRUSTED,
+  AUTHENTICATED HUMAN. Accountability = AUDITING (every write logged to admin_activity_log), not delegation.
+
+ACCESS LADDER (all actors):
+- Subagent (Customer/Chef/Driver): global read; scoped write (own domain); cross-domain via Master delegate.
+- Master: global read; own system_* write; delegates the rest.
+- Admin (human): global read; GLOBAL WRITE (direct, all tables, audited).
+- Admin AI agent (dashboard): global read; NO write (read-only).
+
+ADMIN-OWNED TABLES (2 now + 1 future):
+- admin_users (admin_id PK, email UNIQUE, name, password_hash, role admin_role_enum, is_active, last_login_at, timestamps).
+- admin_activity_log (activity_id PK, admin_id FK, action, target_table, target_id, changes JSONB diff, created_at) — INSERT-only audit.
+- admin_ai_queries (future/observability: admin_id, nl_question, generated_sql, row_count, latency_ms, status).
+NEW ENUM: admin_role_enum (SUPER_ADMIN, OPS, SUPPORT).
+
+KEY DECISIONS:
+- admin_activity_log kept SEPARATE from system_agent_logs (distinct human-accountability audit domain).
+- Mini dashboard AI agent is STRICTLY READ-ONLY (SELECT-only, read-only DB role / read replica). All writes go through
+  dashboard UI forms with validation, never the free-form NL->SQL agent (avoids mass-DELETE/UPDATE footgun).
+- Admin writes existing tables (chef_profiles, chef_menu_items, driver_profiles, system_settings) DIRECTLY — no new
+  tables beyond admin_*. Matches the agent specs ("Admin handles onboarding & menu pricing in DB").
+
+FILES CREATED / UPDATED:
+- `markdowns/admin_tables.md` (NEW — Admin table design & access model)
+- `history.txt` (this Section 26)
+
+ALL 6 ENTITY PASSES DONE (Chef, Customer, Rider, Master/System, Admin + the runtime conversation_messages table).
+NEXT: MERGE/DEDUPE all passes into the final Milestone-1 schema (CREATE TYPE enums + CREATE TABLE DDL).
+
 
 
 

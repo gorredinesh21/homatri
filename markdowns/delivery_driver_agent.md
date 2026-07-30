@@ -247,3 +247,46 @@ PROFILE LOOKUP    LEG NAVIGATION     ARRIVAL          GATE HANDSHAKES   EXCEPTIO
   }
   ```
 * **DB Write**: `UPDATE system_delivery_stops SET estimated_arrival = ...` (Write)
+
+---
+
+## 🗄️ 3. Table Design & Query Access Map (Milestone 1)
+
+Derived bottom-up from the 8 tools above. Full standalone version: [`driver_tables.md`](driver_tables.md).
+
+### Base Rules Applied (all agents)
+1. **Phone is the natural key** (`driver_phone`); transactional rows keep `VARCHAR(36)` ids.
+2. **Write invariant** — writes only `driver_*`; cross-domain writes = HANDOFF to Master.
+3. **Reads are global**; cross-domain reads finalized under owner.
+4. **Master handoff, two kinds:** target = System (Master's own) → Master writes **direct**; target = another subagent → Master **delegates** to that domain's executor.
+5. **`driver_locations` dropped** — progress from `driver_trip_status` + `system_delivery_stops`.
+
+### Query List
+| Q | Tool | R/W | What it does | Table(s) | Filter/key | Index | On list? |
+|---|---|---|---|---|---|---|---|
+| Q1 | 1 get_profile | R | identify driver (HOT) | `driver_profiles` | driver_phone | PK(driver_phone) | ✅ |
+| Q2 | 2 get_route_itinerary | R (x-domain) | route + ordered stops (+orders per stop) | `system_delivery_routes` ⋈ `system_delivery_stops` ⋈ `system_delivery_stop_orders` | route.driver_phone, meal, date; route_id, stop_index | routes(driver_phone,service_date,meal_type); stops(route_id,stop_index) | ✅ (System) |
+| Q3 | 3 dispatch_next_leg | R (x-domain) | next stop (N+1) coords + orders → Maps link (reply) | `system_delivery_stops` (+`system_delivery_stop_orders`) | route_id, stop_index=current+1 | stops(route_id,stop_index) | ✅ (System) |
+| Q4 | 4 mark_reached | W | update trip phase (AT_KITCHEN/AT_GATE) + current_stop_index | `driver_trip_status` | driver_phone | (driver_phone, service_date) | ✅ own |
+| — | 4 mark_reached | HANDOFF | stop → ARRIVED + actual_arrival | → Master direct (`system_delivery_stops`) | — | — | ❌ note |
+| Q5 | 5 picked_up | W | update trip phase (EN_ROUTE_DELIVERY) | `driver_trip_status` | driver_phone | (driver_phone, service_date) | ✅ own |
+| Q6 | 5 picked_up | R (x-domain) | next stop for leg link (reply) | `system_delivery_stops` | route_id, stop_index+1 | stops(route_id,stop_index) | ✅ (System) |
+| — | 5 picked_up | HANDOFF | orders → PICKED_UP | → Master → Customer DW1 (`customer_orders`) | — | — | ❌ note |
+| Q7 | 6 gate_delivered | W | update trip phase + current_stop_index | `driver_trip_status` | driver_phone | (driver_phone, service_date) | ✅ own |
+| — | 6 gate_delivered | HANDOFF | orders → DELIVERED (Customer DW1) · stop → COMPLETED (Master direct) · notify customers (Master relay) | → Master | — | — | ❌ note |
+| — | 7 unlocatable_addr | PAUSE/HANDOFF | `interrupt()` `UNLOCATABLE_ADDRESS` (waiting_on=CUSTOMER) → Master → Customer requests pin | → Master | — | — | ❌ note |
+| — | 8 vehicle_delay | HANDOFF | recalc stop ETAs (Master direct) · alert customers (Master relay) | → Master | — | — | ❌ note |
+
+### Live-Tracking "Progress List"
+`driver_trip_status` is read cross-domain by **Customer & Chef** agents: **`system_delivery_stops` (ordered drop list) ⋈ `driver_trip_status` (current position + completed)** → shows the route, completed ✅ stops, current position (`current_stop_index`), pending stops. Replaces GPS; future map view.
+
+### Rider-Owned Tables (3 — `driver_locations` dropped)
+| Table | Columns | Keys / Indexes |
+|---|---|---|
+| `driver_profiles` | driver_phone (PK), driver_name, vehicle_info, active_status, current_assigned_route_id (FK→system_delivery_routes), created_at, updated_at | PK(driver_phone) — Admin-onboarded |
+| `driver_trip_status` | trip_id (PK `VARCHAR(36)`), driver_phone (FK), route_id (FK), service_date `DATE`, status `trip_status_enum`, current_stop_index `INT`, created_at, updated_at | PK; (driver_phone, service_date) |
+| ~~`driver_chat_history`~~ | superseded → unified runtime-written `conversation_messages` | — |
+
+**New enum:** `trip_status_enum` = (ASSIGNED, EN_ROUTE_PICKUP, AT_KITCHEN, EN_ROUTE_DELIVERY, AT_GATE, COMPLETED).
+
+**Cross-domain reads → owners:** system_delivery_routes/system_delivery_stops/system_delivery_stop_orders/system_hitl_sessions (System); customer_orders (Customer). **Handoffs → Master:** stop status/ETA (Master direct, system_*); order status PICKED_UP/DELIVERED (Master → Customer DW1); unlocatable-address interrupt; traffic-delay relay. **Master gap:** needs a stop-status write mechanism (ARRIVED/COMPLETED/ETA) — add in Master pass.

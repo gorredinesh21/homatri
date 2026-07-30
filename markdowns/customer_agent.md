@@ -311,3 +311,67 @@ LOCATION ONBOARDING DISCOVERY & MENUS CUTOFF CHECK      PAYMENT LINKS     RECEIP
   }
   ```
 * **DB Write**: `INSERT INTO customer_reviews ...` (Write)
+
+---
+
+## 🗄️ 3. Table Design & Query Access Map (Milestone 1)
+
+Derived bottom-up from the tools above. Full standalone version: [`customer_tables.md`](customer_tables.md).
+
+> **Tool 3 folded into `register`:** onboarding is a 2-phase HITL flow (write details → `interrupt()` for location pin → save coords → `ACTIVE`). So **11 → 10 tools**.
+
+### Base Rules Applied (all agents)
+1. **Phone is the natural key** (`customer_phone`); transactional rows keep `VARCHAR(36)` ids.
+2. **Write invariant** — writes only `customer_*`; cross-domain writes = HANDOFF to Master.
+3. **Reads are global**; cross-domain reads finalized under owner.
+4. **Master delegates cross-domain writes**; writes INTO customer domain land here as executors (DW1/DW2 below).
+5. **`driver_locations` dropped**; **payment via Master** (Master owns gateway; two LangGraph interrupts); **`units_sold` derived**; **order/item snapshots**; **avg ratings derived**.
+
+### Query List
+| Q | Tool | R/W | What it does | Table(s) | Filter/key | Index | On list? |
+|---|---|---|---|---|---|---|---|
+| Q1 | get_profile | R | identify customer (HOT) | `customer_profiles` | customer_phone | PK(customer_phone) | ✅ |
+| Q2 | register *(phase 1)* | W | insert profile (name/address, `is_registered=false`) | `customer_profiles` | customer_phone | PK | ✅ own |
+| — | register | PAUSE | `interrupt()` "share location"; if/else validates (→ `system_hitl_sessions`) | — | — | — | ⚑ note |
+| Q3 | register *(phase 2)* | W | save coords + `is_registered=true` | `customer_profiles` | customer_phone | PK | ✅ own |
+| Q4 | find_nearby | R | get customer's coords | `customer_profiles` | customer_phone | PK | ✅ own |
+| Q5 | find_nearby | R (x-domain) | active kitchens + availability (Haversine app; remaining derived) | `chef_profiles` ⋈ `chef_menu_items` ⋈ `chef_daily_inventory` | active_status; meal_type,is_available; service_date | chef_profiles(active_status); chef_menu_items(chef_phone,meal_type,is_available); chef_daily_inventory(chef_phone,service_date) | ✅ (Chef) |
+| Q6 | view_menu | R (x-domain) | dishes + remaining inventory for chef+meal | `chef_menu_items` ⋈ `chef_daily_inventory` (+ SUM items) | chef_phone, meal_type | chef_menu_items(chef_phone,meal_type) | ✅ (Chef+own) |
+| Q7 | init_order | R (x-domain) | is cutoff open? (direct read) | `system_meal_windows` (+`system_settings`) | service_date, meal_type | UNIQUE(service_date,meal_type) | ✅ (System) |
+| Q8 | init_order | R (x-domain+own) | validate items: price + dish_name + availability + remaining capacity (max_cap − SUM sold) | `chef_menu_items` ⋈ `chef_daily_inventory` (+ SUM items) | menu_item_id; chef_phone, service_date | chef_menu_items(PK); chef_daily_inventory(chef_phone,menu_item_id,service_date) | ✅ (Chef+own) |
+| Q9 | init_order | W | insert order header (snapshot `kitchen_name`, PENDING_PAYMENT) | `customer_orders` | order_id | PK | ✅ own |
+| Q10 | init_order | W | insert line items (snapshot dish_name, unit_price, service_date) | `customer_order_items` | order_id | (order_id) | ✅ own |
+| Q11 | add_item | R | order editable & customer's (pre-cond) | `customer_orders` | order_id, customer_phone | PK | ✅ own |
+| Q12 | add_item | R (x-domain+own) | validate item: price + remaining capacity (derived) | `chef_menu_items` ⋈ `chef_daily_inventory` (+ SUM items) | menu_item_id; chef_phone, service_date | as Q8 | ✅ (Chef+own) |
+| Q13 | add_item | W | append line item (snapshot) | `customer_order_items` | order_id | (order_id) | ✅ own |
+| Q14 | payment_link | R | read order+items → final amount | `customer_orders` ⋈ `customer_order_items` | order_id | PK; (order_id) | ✅ own |
+| Q15 | payment_link | R (x-domain) | delivery_fee / config | `system_settings` | key | PK(key) | ✅ (System) |
+| Q16 | payment_link | R | prior payments (top-up detect) | `customer_payments` | order_id | (order_id) | ✅ own |
+| — | payment_link | HANDOFF | send final amount → Master mints UPI link via gateway → returns link | → Master (owns gateway) | — | — | ⚑ note |
+| Q17 | payment_link | W | insert `customer_payments` (PENDING+link) — Customer executor, delegated by Master | `customer_payments` | order_id | (order_id) | ✅ own (delegated) |
+| — | payment_link | PAUSE | Customer `interrupt()` `PAYMENT_AWAIT_MASTER_APPROVAL`; resumes on Master approval → notify user | — | — | — | ⚑ note |
+| Q18 | active_status | R | customer's active order | `customer_orders` | customer_phone, status | (customer_phone, status) | ✅ own |
+| Q19 | active_status | R (x-domain) | live status: readiness + route + stop + driver | `chef_order_readiness` ⋈ `system_delivery_stops` ⋈ `system_delivery_routes` ⋈ `driver_profiles` | order_id; stop→route→driver | stops(target_ref_id,stop_type) | ✅ (Chef/System/Rider) |
+| Q20 | order_history | R | past delivered + dishes (snapshots → no chef join) | `customer_orders` ⋈ `customer_order_items` | customer_phone, status=DELIVERED | (customer_phone, status) | ✅ own |
+| Q21 | submit_review | R | verify order delivered & customer's (pre-cond) | `customer_orders` | order_id | PK | ✅ own |
+| Q22 | submit_review | W | insert review | `customer_reviews` | order_id | (order_id) | ✅ own |
+
+### Delegated-Write Executors (customer domain, triggered by Master)
+| DW | Executor | W | Table | Trigger |
+|---|---|---|---|---|
+| DW1 | `execute_order_status_transition` | W | `customer_orders` | cutoff (BATCHED), Chef (PACKED), Driver (PICKED_UP/DELIVERED), payment (CONFIRMED), cancel (CANCELLED) |
+| DW2 | `execute_payment_status_update` | W | `customer_payments` | payment webhook (PAID/FAILED/REFUNDED) |
+
+### Customer-Owned Tables (6)
+| Table | Columns | Keys / Indexes |
+|---|---|---|
+| `customer_profiles` | customer_phone (PK), name, delivery_address, latitude `DECIMAL(10,8)`, longitude `DECIMAL(11,8)`, is_registered, created_at, updated_at | PK(customer_phone) |
+| `customer_orders` | order_id (PK `VARCHAR(36)`), customer_phone (FK), chef_phone (FK), meal_window `meal_window_enum`, service_date `DATE`, status `order_status_enum`, cart_subtotal, delivery_fee, total_amount `DECIMAL(10,2)`, kitchen_name (snapshot), created_at, updated_at | PK; (customer_phone, status); (chef_phone, meal_window, service_date, status) |
+| `customer_order_items` | item_id (PK), order_id (FK), menu_item_id (FK), chef_phone (denorm), service_date (snapshot), dish_name (snapshot), quantity, unit_price `DECIMAL(10,2)` (snapshot), item_subtotal, special_instructions, created_at | (order_id); (chef_phone, menu_item_id, service_date); (menu_item_id) |
+| `customer_payments` | payment_id (PK), order_id (FK), customer_phone (FK), payment_type `payment_type_enum`, amount_due `DECIMAL(10,2)`, payment_link_url, gateway, gateway_payment_id, transaction_id, status `payment_status_enum`, created_at, paid_at | (order_id); (customer_phone); (status) |
+| `customer_reviews` | review_id (PK), order_id (FK), customer_phone (FK), chef_phone, driver_phone, chef_rating (1-5), driver_rating (1-5), review_text, created_at | (order_id); (chef_phone); (driver_phone) |
+| ~~`customer_chat_history`~~ | superseded → unified runtime-written `conversation_messages` | — |
+
+**New enums:** `order_status_enum`, `payment_status_enum`, `payment_type_enum`.
+
+**Cross-domain reads → owners:** chef_* (Chef); system_* (System); driver_profiles (Rider). **Handoffs → Master:** payment link mint; inbound payment webhook (DW1/DW2). **New HITL interrupt types:** `AWAIT_LOCATION_PIN`, `PAYMENT_AWAIT_MASTER_APPROVAL`.

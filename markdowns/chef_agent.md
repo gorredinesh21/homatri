@@ -271,3 +271,49 @@ Read/Write           Checklist            Agent via Master    Customer        St
   }
   ```
 * **DB Read**: Global Read across `system_delivery_stops` & `driver_locations`. (Read)
+
+---
+
+## 🗄️ 3. Table Design & Query Access Map (Milestone 1)
+
+Derived bottom-up from the 9 tools above. Full standalone version: [`chef_tables.md`](chef_tables.md).
+
+### Base Rules Applied (hold for ALL agents)
+1. **Phone is the natural key** — tables key on normalized `chef_phone`; no phone→id resolve. Transactional rows keep `VARCHAR(36)` surrogate ids.
+2. **Write invariant** — a tool WRITES only its own `chef_*` tables; any cross-domain write is a **HANDOFF to Master** (note only).
+3. **Reads are global** — a tool may READ any table; cross-domain reads stay on the list, finalized under the owner.
+4. **Cross-agent calls = notes** — another agent's queries are covered under that agent.
+5. **`driver_locations` dropped** — arrival = `system_delivery_stops.actual_arrival`.
+
+### Query List
+| Q | Tool | R/W | What it does | Table(s) | Filter/key cols | Index | On list? |
+|---|---|---|---|---|---|---|---|
+| Q1 | 1 get_chef_profile | R | identify chef (HOT) | `chef_profiles` | chef_phone | PK(chef_phone) | ✅ |
+| Q2 | 2 set_capacity | R | dish name + ownership | `chef_menu_items` | menu_item_id, chef_phone | PK; (chef_phone) | ✅ |
+| Q3 | 2 set_capacity | W | upsert daily cap | `chef_daily_inventory` | chef_phone, menu_item_id, service_date | UNIQUE(chef_phone,menu_item_id,service_date) | ✅ own |
+| Q4 | 3 toggle_stock | R | ownership pre-cond | `chef_menu_items` | menu_item_id, chef_phone | PK; (chef_phone) | ✅ |
+| Q5 | 3 toggle_stock | W | flip IN/OUT of stock | `chef_menu_items` | menu_item_id | PK | ✅ own |
+| Q6 | 4 check_inventory | R | remaining cap + sold | `chef_daily_inventory` ⋈ `chef_menu_items` | chef_phone, service_date | (chef_phone, service_date) | ✅ |
+| Q7 | 5 batch_checklist | R (x-domain) | orders+items for chef → totals+itemized+notes | `customer_orders` ⋈ `customer_order_items` | items.chef_phone; orders.meal_window,service_date,status | items(chef_phone); orders(status,meal_window,service_date) | ✅ (Customer) |
+| Q8 | 6 mark_packed | R (x-domain) | pre-cond: order COOKING | `customer_orders` | order_id | PK | ✅ (Customer) |
+| Q9 | 6 mark_packed | W | record readiness | `chef_order_readiness` | order_id, chef_phone | (order_id) | ✅ own |
+| — | 6 mark_packed | HANDOFF | order→PACKED + notify driver | → Master `relay_order_ready_to_driver_tool` | — | — | ❌ note |
+| Q10 | 7 get_assigned_driver | R (x-domain) | pickup stop → driver + ETA | `system_delivery_stops` ⋈ `system_delivery_routes` ⋈ `driver_profiles` | stop.target_ref_id=chef_phone, PICKUP_KITCHEN | stops(target_ref_id,stop_type) | ✅ (System/Rider) |
+| Q11 | 8 counter_offer | — | reply logged to `conversation_messages` by runtime (not a chef write) | `conversation_messages` | phone | (phone, created_at DESC) | runtime |
+| — | 8 counter_offer | HANDOFF | resume interrupt + relay to customer | → Master (`system_hitl_sessions` resume + counter-offer relay → Customer) | — | — | ❌ note |
+| Q12 | 9 check_arrival | R (x-domain) | driver arrived at my pickup? | `system_delivery_stops` ⋈ `system_delivery_stop_orders` ⋈ `system_delivery_routes` ⋈ `driver_profiles` | stop.target_ref_id=chef_phone, PICKUP_KITCHEN, date | stops(target_ref_id,stop_type) | ✅ (System/Rider) |
+
+### Chef-Owned Tables
+| Table | Columns | Keys / Indexes |
+|---|---|---|
+| `chef_profiles` | chef_phone (PK), kitchen_name, address, latitude `DECIMAL(10,8)`, longitude `DECIMAL(11,8)`, active_status, created_at, updated_at | PK(chef_phone) |
+| `chef_menu_items` | menu_item_id (PK `VARCHAR(36)`), chef_phone (FK), dish_name, description, unit_price `DECIMAL(10,2)`, meal_type `meal_window_enum`, is_available (default true), created_at, updated_at | PK; idx(chef_phone) |
+| `chef_daily_inventory` | inventory_id (PK), chef_phone (FK), menu_item_id (FK), service_date `DATE`, max_capacity (>0), units_sold (0), created_at, updated_at | UNIQUE(chef_phone,menu_item_id,service_date) |
+| `chef_order_readiness` | readiness_id (PK), order_id (FK), chef_phone (FK), status `readiness_status_enum`, packed_at, created_at | idx(order_id) |
+| ~~`chef_chat_history`~~ | superseded → unified runtime-written `conversation_messages` | — |
+
+**New enum:** `readiness_status_enum` = (PREPARING, PACKED_READY).
+
+**Cross-domain reads noted → owners:** `customer_orders`/`customer_order_items` (Customer); `system_delivery_stops`/`system_delivery_stop_orders`/`system_delivery_routes` (System); `driver_profiles` (Rider).
+
+**Handoffs → Master:** Tool 6 (order→PACKED + notify driver); Tool 8 (hitl resume + counter-offer relay).

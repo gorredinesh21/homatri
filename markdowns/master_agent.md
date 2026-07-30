@@ -341,3 +341,28 @@ CLOCK & ROUTE API  CROSS-DOMAIN RELAYS EXCEPTION RELAYS  WEBHOOK ENGINE    & AUD
   }
   ```
 * **DB Write**: `INSERT INTO system_agent_logs ...` (Write)
+
+---
+
+## 🗄️ 3. Table Design & Query Access Map (Milestone 1)
+
+Full standalone version: [`master_tables.md`](master_tables.md).
+
+**Reconciliation:** delegate-only supersedes the spec — Master writes **only `system_*` directly** and **DELEGATES** every subagent-domain write to the owner executor (Customer DW1/DW2). "Master updates customer_*" lines are delegations.
+
+### Delegations → Customer executors
+| Executor | Triggered by → status |
+|---|---|
+| DW1 `execute_order_status_transition` | cutoff (BATCHED) · cancellation (CANCELLED) · order-ready (PACKED) · gate-delivery (DELIVERED) · payment (CONFIRMED) |
+| DW2 `execute_payment_status_update` | cancellation (REFUNDED) · payment (PAID) |
+
+### System-Owned Tables (9 core + observability)
+`system_meal_windows` (UNIQUE(service_date,meal_type)) · `system_settings` (PK key — delivery_fee/cutoffs/tz) · `system_delivery_routes` · `system_delivery_stops` (UNIQUE(route_id,stop_index)) · `system_delivery_stop_orders` (junction) · `system_agent_logs` (audit) · `system_outbound_queue` (partial idx status=QUEUED) · `system_hitl_sessions` (partial idx status=WAITING) · `system_payment_webhook_events` (UNIQUE gateway_event_id). Observability: `system_route_optimization_runs`.
+
+### Runtime / infrastructure table (shared)
+**`conversation_messages`** — unified INSERT-only chat log, **written by the runtime** (webhook logs inbound; dispatcher logs outbound incl. Master's notifications), global read. Replaces the 3 `*_chat_history` tables AND `system_inbound_messages`. Cols: message_id (PK), phone, actor_role, direction (IN/OUT), source, message_type, message_text, lat/lng, media_ref, related_order_id, wa_message_id (UNIQUE dedup), raw_payload, created_at. Index (phone, created_at DESC). Context Assembler fetches last 4-5 (escalate to 10, capped).
+
+### New enums
+window_status_enum · route_status_enum · stop_status_enum · stop_type_enum · log_severity_enum · outbound_status_enum · hitl_status_enum · hitl_interrupt_type_enum (+ direction/actor_role/source/message_type for conversation_messages).
+
+**Master gap filled:** driver stop→ARRIVED handoff = Master direct write to `system_delivery_stops`.
