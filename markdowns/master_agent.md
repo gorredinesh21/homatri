@@ -365,4 +365,44 @@ Full standalone version: [`master_tables.md`](master_tables.md).
 ### New enums
 window_status_enum · route_status_enum · stop_status_enum · stop_type_enum · log_severity_enum · outbound_status_enum · hitl_status_enum · hitl_interrupt_type_enum (+ direction/actor_role/source/message_type for conversation_messages).
 
+
 **Master gap filled:** driver stop→ARRIVED handoff = Master direct write to `system_delivery_stops`.
+
+---
+
+## 🛡️ 4. Data Integrity & Write Executors (Master Domain)
+
+### Prefixed UUID Primary Keys:
+* `system_meal_windows` $\rightarrow$ `window_id` (`VARCHAR(36)` - `win_` + UUID)
+* `system_settings` $\rightarrow$ `key` (`VARCHAR(50)` - Natural string key)
+* `system_delivery_routes` $\rightarrow$ `route_id` (`VARCHAR(36)` - `rt_` + UUID)
+* `system_delivery_stops` $\rightarrow$ `stop_id` (`VARCHAR(36)` - `stp_` + UUID)
+* `system_agent_logs` $\rightarrow$ `log_id` (`VARCHAR(36)` - `log_` + UUID)
+* `system_outbound_queue` $\rightarrow$ `message_id` (`VARCHAR(36)` - `out_` + UUID)
+* `system_hitl_sessions` $\rightarrow$ `session_id` (`VARCHAR(36)` - `hitl_` + UUID)
+* `system_payment_webhook_events` $\rightarrow$ `event_id` (`VARCHAR(36)` - `evt_` + UUID)
+* `system_route_optimization_runs` $\rightarrow$ `run_id` (`VARCHAR(36)` - `run_` + UUID)
+
+### Guard 2 Pre-Condition Assertions:
+1. `validate_meal_cutoff_clock_tool`: Assert `meal_window` IN (`'LUNCH'`, `'DINNER'`).
+2. `execute_cutoff_batch_and_route_optimization_tool`: Assert `system_meal_windows.status == 'OPEN'`; assert `CURRENT_TIMESTAMP >= cutoff_at`; assert count of confirmed orders > 0.
+3. `relay_dietary_request_to_chef_tool`: Assert `order_id` exists; assert `order.customer_phone == customer_phone`; assert `order.status` IN (`'CONFIRMED'`, `'BATCHED'`, `'COOKING'`).
+4. `process_order_cancellation_tool`: Assert `order_id` exists; assert `order.customer_phone == customer_phone`; assert `order.status` NOT IN (`'DELIVERED'`, `'CANCELLED'`).
+5. `relay_order_ready_to_driver_tool`: Assert `order_id` exists; assert `order.status == 'PACKED'`; assert assigned driver exists.
+6. `relay_gate_delivery_completed_tool`: Assert `stop_id` exists; assert `stop.stop_type == 'DROPOFF_GATE'`; assert `driver_phone` matches route driver.
+7. `relay_unlocatable_address_request_tool`: Assert `order_id` exists; assert `driver_phone` matches assigned driver.
+8. `relay_traffic_delay_alert_tool`: Assert `route_id` exists; assert `route.driver_phone == driver_phone` (Ownership); assert `delay_minutes > 0`.
+9. `process_payment_gateway_webhook_tool`: Assert `signature_verified == true`; assert `gateway_event_id` does NOT already exist in `system_payment_webhook_events` (Idempotency); assert `payment_id` exists.
+10. `delegate_cross_domain_write_tool`: Assert `requesting_role` valid; assert `target_role` valid; assert `target_table` valid.
+11. `dispatch_whatsapp_outbound_message_tool`: Assert `recipient_phone` format valid; assert `message_text` non-empty.
+12. `log_system_audit_event_tool`: Assert `event_type` non-empty; assert `severity` IN (`'INFO'`, `'WARNING'`, `'CRITICAL'`).
+
+### Master Write Executors:
+1. `execute_cutoff_batch_lock_and_routes_creation()` $\rightarrow$ `system_meal_windows`, `system_delivery_routes`, `system_delivery_stops`, `system_delivery_stop_orders`, `system_route_optimization_runs`
+2. `execute_hitl_session_create_or_resume()` $\rightarrow$ `system_hitl_sessions`
+3. `execute_stop_status_update()` $\rightarrow$ `system_delivery_stops`
+4. `execute_stop_eta_recalculation()` $\rightarrow$ `system_delivery_stops`
+5. `execute_payment_webhook_idempotency_log()` $\rightarrow$ `system_payment_webhook_events`
+6. `execute_outbound_whatsapp_enqueue()` $\rightarrow$ `system_outbound_queue`
+7. `execute_system_audit_log()` $\rightarrow$ `system_agent_logs`
+

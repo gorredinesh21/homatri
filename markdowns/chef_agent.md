@@ -314,6 +314,29 @@ Derived bottom-up from the 9 tools above. Full standalone version: [`chef_tables
 
 **New enum:** `readiness_status_enum` = (PREPARING, PACKED_READY).
 
+
 **Cross-domain reads noted → owners:** `customer_orders`/`customer_order_items` (Customer); `system_delivery_stops`/`system_delivery_stop_orders`/`system_delivery_routes` (System); `driver_profiles` (Rider).
 
 **Handoffs → Master:** Tool 6 (order→PACKED + notify driver); Tool 8 (hitl resume + counter-offer relay).
+
+---
+
+## 🛡️ 4. Data Integrity & Write Executors (Chef Domain)
+
+### Prefixed UUID Primary Keys:
+* `chef_profiles` $\rightarrow$ `chef_phone` (`VARCHAR(15)` - Normalized phone natural key)
+* `chef_menu_items` $\rightarrow$ `menu_item_id` (`VARCHAR(36)` - `itm_` + UUID)
+* `chef_daily_inventory` $\rightarrow$ `inventory_id` (`VARCHAR(36)` - `inv_` + UUID)
+* `chef_order_readiness` $\rightarrow$ `readiness_id` (`VARCHAR(36)` - `red_` + UUID)
+
+### Guard 2 Pre-Condition Assertions:
+1. `set_daily_dish_capacity_tool`: Assert `chef_phone` exists; assert `menu_item_id` exists; assert `menu_item.chef_phone == chef_phone` (Ownership); assert `max_capacity > 0`; assert `service_date >= CURRENT_DATE`.
+2. `toggle_dish_stock_tool`: Assert `menu_item_id` exists; assert `menu_item.chef_phone == chef_phone` (Ownership).
+3. `mark_order_packed_ready_tool`: Assert `order_id` exists; assert `order.chef_phone == chef_phone` (Ownership); assert `order.status` IN (`'CONFIRMED'`, `'BATCHED'`, `'COOKING'`).
+4. `respond_to_custom_request_tool`: Assert `order_id` exists; assert `order.chef_phone == chef_phone` (Ownership); assert `system_hitl_session` exists with `status == 'WAITING'`; assert `decision` IN (`'ACCEPTED'`, `'DECLINED'`, `'COUNTER_OFFER'`).
+
+### Chef Write Executors:
+1. `execute_daily_capacity_upsert()` $\rightarrow$ `chef_daily_inventory`
+2. `execute_dish_stock_toggle()` $\rightarrow$ `chef_menu_items`
+3. `execute_order_readiness_record()` $\rightarrow$ `chef_order_readiness` (Order status update delegated to Customer DW1).
+

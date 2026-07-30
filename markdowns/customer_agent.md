@@ -374,4 +374,35 @@ Derived bottom-up from the tools above. Full standalone version: [`customer_tabl
 
 **New enums:** `order_status_enum`, `payment_status_enum`, `payment_type_enum`.
 
+
 **Cross-domain reads → owners:** chef_* (Chef); system_* (System); driver_profiles (Rider). **Handoffs → Master:** payment link mint; inbound payment webhook (DW1/DW2). **New HITL interrupt types:** `AWAIT_LOCATION_PIN`, `PAYMENT_AWAIT_MASTER_APPROVAL`.
+
+---
+
+## 🛡️ 4. Data Integrity & Write Executors (Customer Domain)
+
+### Prefixed UUID Primary Keys:
+* `customer_profiles` $\rightarrow$ `customer_phone` (`VARCHAR(15)` - Normalized phone natural key)
+* `customer_orders` $\rightarrow$ `order_id` (`VARCHAR(36)` - `ord_` + UUID)
+* `customer_order_items` $\rightarrow$ `item_id` (`VARCHAR(36)` - `ori_` + UUID)
+* `customer_payments` $\rightarrow$ `payment_id` (`VARCHAR(36)` - `pay_` + UUID)
+* `customer_reviews` $\rightarrow$ `review_id` (`VARCHAR(36)` - `rev_` + UUID)
+
+### Guard 2 Pre-Condition Assertions:
+1. `register_customer_profile_tool`: Assert `name` non-empty; assert `delivery_address` non-empty.
+2. `update_customer_location_pin_tool`: Assert `customer_phone` exists; assert `latitude` between -90 and 90; assert `longitude` between -180 and 180.
+3. `find_nearby_home_kitchens_tool`: Assert `customer_phone` exists; assert `customer.is_registered == true` (has shared location pin); assert `meal_window` IN (`'LUNCH'`, `'DINNER'`).
+4. `initialize_customer_order_tool`: Assert `customer.is_registered == true`; assert `chef.active_status == true`; assert `system_meal_windows.status == 'OPEN'` (Before 12 PM / 7 PM cutoff); assert `items` list non-empty; for each item assert `quantity <= remaining_inventory`.
+5. `add_item_to_order_tool`: Assert `order_id` exists; assert `order.customer_phone == customer_phone` (Ownership); assert `order.status` IN (`'DRAFT_CART'`, `'PENDING_PAYMENT'`); assert `system_meal_windows.status == 'OPEN'`; assert `quantity <= remaining_inventory`.
+6. `generate_payment_link_tool`: Assert `order_id` exists; assert `order.customer_phone == customer_phone` (Ownership); assert `order.status` IN (`'PENDING_PAYMENT'`, `'CONFIRMED'`); assert `order.cart_subtotal > 0`.
+7. `submit_order_review_tool`: Assert `order_id` exists; assert `order.customer_phone == customer_phone` (Ownership); assert `order.status == 'DELIVERED'` (Can ONLY review delivered meals!); assert `chef_rating` between 1 and 5; assert no review row already exists for this `order_id`.
+
+### Customer Write Executors:
+1. `execute_customer_registration_and_location()` $\rightarrow$ `customer_profiles`
+2. `execute_customer_order_initialization()` $\rightarrow$ `customer_orders`, `customer_order_items`
+3. `execute_add_item_to_order()` $\rightarrow$ `customer_order_items`
+4. `execute_payment_record_creation()` $\rightarrow$ `customer_payments`
+5. `execute_submit_order_review()` $\rightarrow$ `customer_reviews`
+6. **`execute_order_status_transition()` (DW1)** $\rightarrow$ `customer_orders` (Centralized single owner for order status changes).
+7. **`execute_payment_status_update()` (DW2)** $\rightarrow$ `customer_payments` (Centralized single owner for payment ledger updates).
+

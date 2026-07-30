@@ -289,4 +289,26 @@ Derived bottom-up from the 8 tools above. Full standalone version: [`driver_tabl
 
 **New enum:** `trip_status_enum` = (ASSIGNED, EN_ROUTE_PICKUP, AT_KITCHEN, EN_ROUTE_DELIVERY, AT_GATE, COMPLETED).
 
+
 **Cross-domain reads → owners:** system_delivery_routes/system_delivery_stops/system_delivery_stop_orders/system_hitl_sessions (System); customer_orders (Customer). **Handoffs → Master:** stop status/ETA (Master direct, system_*); order status PICKED_UP/DELIVERED (Master → Customer DW1); unlocatable-address interrupt; traffic-delay relay. **Master gap:** needs a stop-status write mechanism (ARRIVED/COMPLETED/ETA) — add in Master pass.
+
+---
+
+## 🛡️ 4. Data Integrity & Write Executors (Driver Domain)
+
+### Prefixed UUID Primary Keys:
+* `driver_profiles` $\rightarrow$ `driver_phone` (`VARCHAR(15)` - Normalized phone natural key)
+* `driver_trip_status` $\rightarrow$ `trip_id` (`VARCHAR(36)` - `trp_` + UUID)
+
+### Guard 2 Pre-Condition Assertions:
+1. `get_assigned_route_itinerary_tool`: Assert `driver_phone` exists; assert `driver.active_status == true`.
+2. `dispatch_next_leg_navigation_tool`: Assert `driver_phone` matches assigned route driver; assert `current_stop_index < total_stops`.
+3. `mark_driver_reached_stop_tool`: Assert `driver_phone` matches assigned route driver; assert `stop_index == driver_trip_status.current_stop_index`; assert `stop.status == 'PENDING'`.
+4. `mark_orders_picked_up_tool`: Assert `driver_phone` matches route driver; assert `stop.stop_type == 'PICKUP_KITCHEN'`; assert `stop.status == 'ARRIVED'`; for each order assert `order.status` IN (`'PACKED'`, `'COOKING'`, `'BATCHED'`).
+5. `mark_gate_delivery_completed_tool`: Assert `driver_phone` matches route driver; assert `stop.stop_type == 'DROPOFF_GATE'`; assert `stop.status == 'ARRIVED'`; for each order assert `order.status == 'PICKED_UP'`.
+6. `report_unlocatable_address_tool`: Assert `order_id` exists on current stop; assert `driver_phone` matches route driver.
+7. `report_vehicle_delay_alert_tool`: Assert driver has active trip in progress (`driver_trip_status.status == 'IN_PROGRESS'`); assert `delay_minutes > 0`.
+
+### Driver Write Executors:
+1. `execute_driver_trip_phase_update()` $\rightarrow$ `driver_trip_status` (Updates trip phase & `current_stop_index`. Stop status updates handed off to Master Direct Write; Order status updates handed off to Customer DW1).
+

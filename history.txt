@@ -711,6 +711,7 @@ DATE: 2026-07-31
 - Guard 3: Centralized Delegated-Write Executors (Customer DW1 `execute_order_status_transition`, DW2 `execute_payment_status_update`).
 - Guard 4: Automated `pytest` Integration Test Suite verifying all 40 LLM tools.
 
+
 DOCUMENTATION UPDATED & COMMITTED:
 - `markdowns/chef_tables.md` (Finalized 4 Chef tables)
 - `markdowns/customer_tables.md` (Finalized 5 Customer tables)
@@ -719,6 +720,36 @@ DOCUMENTATION UPDATED & COMMITTED:
 - `markdowns/admin_tables.md` (Finalized 3 Admin tables)
 - `HANDOVER.md` (Marked Milestone 1 as 100% COMPLETED)
 - `history.txt` (this Section 27)
+
+--------------------------------------------------------------------------------
+[SECTION 28: PREFIXED UUID STANDARD, GUARD 2 MATRIX & 21 WRITE EXECUTORS]
+--------------------------------------------------------------------------------
+
+DATE: 2026-07-31
+
+1. PREFIXED UUID PRIMARY KEY STANDARD LOCKED (ALL 24 TABLES):
+   - Category A (3 Phone Natural Keys): `chef_profiles`, `customer_profiles`, `driver_profiles` (`VARCHAR(15)`).
+   - Category B (21 Prefixed UUID Keys): 3-letter prefix + short UUID (`VARCHAR(36)`), e.g. `ord_`, `pay_`, `itm_`, `rt_`, `stp_`, `log_`, `out_`, `hitl_`, `evt_`, `run_`, `msg_`, `adm_`, `act_`, `aiq_`.
+
+2. EXHAUSTIVE GUARD 2 ASSERTION MATRIX DEFINED:
+   - Defined exact existence, ownership, cutoff, and state transition assertions across all 40 LLM tools.
+
+3. MASTER WRITE EXECUTOR MAP (21 EXECUTORS):
+   - Chef Domain: 3 Executors (`execute_daily_capacity_upsert`, `execute_dish_stock_toggle`, `execute_order_readiness_record`).
+   - Customer Domain: 7 Executors (`execute_customer_registration_and_location`, `execute_customer_order_initialization`, `execute_add_item_to_order`, `execute_payment_record_creation`, `execute_submit_order_review`, DW1 `execute_order_status_transition`, DW2 `execute_payment_status_update`).
+   - Driver Domain: 1 Executor (`execute_driver_trip_phase_update`).
+   - Master Domain: 7 Executors (`execute_cutoff_batch_lock_and_routes_creation`, `execute_hitl_session_create_or_resume`, `execute_stop_status_update`, `execute_stop_eta_recalculation`, `execute_payment_webhook_idempotency_log`, `execute_outbound_whatsapp_enqueue`, `execute_system_audit_log`).
+   - Shared Runtime: 1 Executor (`execute_conversation_message_insert`).
+   - Admin Domain: 2 Executors (`execute_admin_profile_onboarding`, `execute_admin_activity_log`).
+
+FILES CREATED / UPDATED:
+- `markdowns/data_integrity_and_security_guards.md` (NEW — Full Integrity, Prefixed UUID & Executor Spec)
+- `markdowns/chef_agent.md` (Appended Section 4)
+- `markdowns/customer_agent.md` (Appended Section 4)
+- `markdowns/master_agent.md` (Appended Section 4)
+- `markdowns/delivery_driver_agent.md` (Appended Section 4)
+- `history.txt` (this Section 28)
+
 
 
 ALL 6 ENTITY PASSES DONE (Chef, Customer, Rider, Master/System, Admin + the runtime conversation_messages table).
