@@ -1,101 +1,289 @@
-# 👑 Master / Homaatri-System — Table Design & Query Access Map
+# 👑 Master Specification: Master / System Entity Tables & Column Schemas
 
-Milestone 1 table design for the **Homaatri/System domain** (Master Agent), derived from the Master's 12 tools. This is the consolidation pass where all accumulated handoffs, delegated executors, HITL sessions, and webhook plumbing land.
-
----
-
-## 🔑 Reconciliation (delegate-only supersedes the spec)
-The spec says Master has "Global Write Authority" and several tools literally `UPDATE customer_orders`. Per our **delegate-only** rule: **Master writes only `system_*` directly and DELEGATES every subagent-domain write** to that domain's executor (Customer DW1/DW2). All "Master updates customer_*" lines are reclassified as delegations.
-
-## 🧭 Base Rules Applied
-1. Master **owns `system_*`** → writes them directly. 2. Cross-domain writes → **delegate** to owner executor (Customer DW1/DW2). 3. Reads global. 4. Master handoff two kinds: target=System → direct; target=subagent → delegate. 5. Phone = natural key. 6. Data types: money `DECIMAL(10,2)`, lat/lng `DECIMAL(10,8)/(11,8)`, `TIMESTAMPTZ`, FK `ON DELETE RESTRICT`.
+This document contains the 100% finalized production SQL column schemas, data types, constraints, default values, foreign keys, indexes, and usage rationale for the **Master / System Domain** (Entity 4).
 
 ---
 
-## 📋 Master/System — Query List
+## 🧭 Base Architectural Rules & Category Breakdown
+1. **Master Ownership**: Master owns and writes directly **ONLY** to `system_*` tables. All subagent domain writes are **DELEGATED** to target executors (Customer DW1/DW2).
+2. **Unified Chat History**: Replaced per-domain chat history tables with the shared, runtime-written, insert-only `conversation_messages` table.
+3. **4 Functional Categories**:
+   - **Category 1**: Batch & Cutoff Orchestration (3 Tables)
+   - **Category 2**: GCP Route Solver & Stop Dispatch (3 Tables)
+   - **Category 3**: System Resilience, HITL & Webhooks (3 Tables)
+   - **Category 4**: Communications & Runtime Infrastructure (2 Tables)
 
-Two writes recur (factored out): **W-AUDIT** → `system_agent_logs` (Tools 2–10); **W-OUT** → `system_outbound_queue` (Tools 2,3,5,6,7,8,11).
+---
 
-| Q | Tool | R/W | What it does | Table(s) | Index | On list? |
+## 🗄️ Master / System Domain Tables (11 Tables)
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       MASTER / SYSTEM 11-TABLE DOMAIN                       │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       │
+  ┌───────────────────┬────────────────┴───┬───────────────────┬──────────────┐
+  ▼                   ▼                    ▼                   ▼              ▼
+CAT 1: BATCH &      CAT 2: GCP ROUTE     CAT 3: HITL,        CAT 4: COMMUNICATIONS
+CUTOFF CLOCK        & STOP DISPATCH      WEBHOOKS & LOGS     & RUNTIME CHAT
+(3 Tables)          (3 Tables)           (3 Tables)          (2 Tables)
+```
+
+---
+
+## 📂 CATEGORY 1: Batch & Cutoff Orchestration (3 Tables)
+
+### Table 1: `system_meal_windows` (Meal Window Status)
+* **Primary Key**: `window_id` (`VARCHAR(36)` - UUID)
+* **Unique Constraint**: `UNIQUE(service_date, meal_type)`
+* **Purpose**: State tracker for daily Lunch & Dinner meal windows. Controls window opening, cutoff locks (12:00 PM for Lunch, 7:00 PM for Dinner), and batch processing status (`OPEN` $\rightarrow$ `LOCKED_PROCESSING` $\rightarrow$ `COMPLETED`).
+
+| # | Column Name | Data Type | Nullable? | Default Value | Foreign Key / Index | Description & Usage Rationale |
 |---|---|---|---|---|---|---|
-| Q1 | 1 validate_cutoff | R | is window open? | `system_meal_windows` (+`system_settings`) | UNIQUE(service_date,meal_type) | ✅ own |
-| Q2 | 2 cutoff_batch | R (x-domain) | all CONFIRMED orders+items+coords for window | `customer_orders` ⋈ `customer_order_items` ⋈ `customer_profiles` ⋈ `chef_profiles` | orders(status,meal_window,service_date) | ✅ (Cust/Chef) |
-| Q3 | 2 cutoff_batch | W | lock window | `system_meal_windows` | UNIQUE | ✅ own |
-| Q4 | 2 cutoff_batch | W | insert route(s) | `system_delivery_routes` | (driver_phone,service_date,meal_type) | ✅ own |
-| Q5 | 2 cutoff_batch | W | insert stops (gate-consolidated) | `system_delivery_stops` | UNIQUE(route_id,stop_index) | ✅ own |
-| Q6 | 2 cutoff_batch | W | insert stop↔order junction | `system_delivery_stop_orders` | PK(stop_id,order_id); (order_id) | ✅ own |
-| Q7 | 2 cutoff_batch | W | log route-opt API run | `system_route_optimization_runs` | (window_id) | ✅ own |
-| — | 2 cutoff_batch | DELEGATE | orders CONFIRMED→BATCHED | → Customer DW1 | — | ❌ note · +GCP API |
-| Q8 | 3 relay_dietary | W | HITL session (DIETARY_APPROVAL, wait=CHEF) | `system_hitl_sessions` | (status,expires_at) | ✅ own |
-| Q9 | 4 cancellation | R (x-domain) | read order + payment | `customer_orders` (+`customer_payments`) | PK | ✅ (Customer) |
-| Q10 | 4 cancellation | R | window status (cutoff eligibility) | `system_meal_windows` | UNIQUE | ✅ own |
-| — | 4 cancellation | DELEGATE | order→CANCELLED · payment→REFUNDED | → Customer DW1 + DW2 | — | ❌ note · +gateway refund |
-| Q11 | 5 order_ready→driver | R | find assigned driver + stop | `system_delivery_stops` ⋈ `system_delivery_routes` (+`driver_profiles`) | stops(target_ref_id,stop_type) | ✅ own(+Rider) |
-| — | 5 order_ready→driver | DELEGATE | order→PACKED | → Customer DW1 | — | ❌ note |
-| Q12 | 6 gate_delivery | R (x-domain) | customer phones for orders | `customer_orders` (via stop_orders) | (order_id) | ✅ (Customer) |
-| Q13 | 6 gate_delivery | W | mark stop COMPLETED | `system_delivery_stops` | (route_id,status) | ✅ own |
-| — | 6 gate_delivery | DELEGATE | orders→DELIVERED | → Customer DW1 | — | ❌ note |
-| Q14 | 7 unlocatable | R (x-domain) | customer_phone for order | `customer_orders` | PK | ✅ (Customer) |
-| Q15 | 7 unlocatable | W | HITL session (UNLOCATABLE_ADDRESS, wait=CUSTOMER) | `system_hitl_sessions` | (status,expires_at) | ✅ own |
-| Q16 | 8 traffic_delay | R | remaining stops for route | `system_delivery_stops` | (route_id,status) | ✅ own |
-| Q17 | 8 traffic_delay | W | recalc ETAs | `system_delivery_stops` | (route_id) | ✅ own |
-| Q18 | 8 traffic_delay | R (x-domain) | affected customers | `customer_orders` (via stop_orders) | (order_id) | ✅ (Customer) |
-| Q19 | 9 payment_webhook | W | insert webhook event (idempotency) | `system_payment_webhook_events` | UNIQUE(gateway_event_id) | ✅ own |
-| Q20 | 9 payment_webhook | R (x-domain) | find payment + order | `customer_payments` | (gateway_payment_id) | ✅ (Customer) |
-| — | 9 payment_webhook | DELEGATE | payment→PAID · order→CONFIRMED | → Customer DW2 + DW1 | — | ❌ note |
-| Q21 | 9 payment_webhook | W | resume Customer's + Master's payment interrupts | `system_hitl_sessions` | (order_id) | ✅ own |
-| Q22 | 10 delegate_write | W | log delegation | `system_agent_logs` | (order_id,created_at) | ✅ own |
-| — | 10 delegate_write | DELEGATE | generic → target executor | → target domain executor | — | ❌ engine |
-| Q23 | 11 dispatch_wa | W | enqueue outbound message | `system_outbound_queue` | partial(status=QUEUED) | ✅ own · +Meta API |
-| Q24 | 12 log_audit | W | insert audit log | `system_agent_logs` | — | ✅ own |
-| Q25 | *(internal)* | W | stop→ARRIVED (from driver mark_reached handoff) | `system_delivery_stops` | (route_id) | ✅ own |
+| 1 | **`window_id`** | `VARCHAR(36)` | `NOT NULL` | *UUID* | `PRIMARY KEY` | Unique surrogate ID for this meal window instance. |
+| 2 | **`service_date`** | `DATE` | `NOT NULL` | *None* | B-Tree Index | Service date (e.g. `2026-07-31`). |
+| 3 | **`meal_type`** | `VARCHAR(20)` | `NOT NULL` | `'LUNCH'` | B-Tree Index | `'LUNCH'` or `'DINNER'`. |
+| 4 | **`cutoff_at`** | `TIMESTAMPTZ` | `NOT NULL` | *None* | *None* | Hard cutoff timestamp (e.g. `12:00:00+05:30`). |
+| 5 | **`status`** | `VARCHAR(30)` | `NOT NULL` | `'OPEN'` | B-Tree Index | Window status: `'OPEN'`, `'LOCKED_PROCESSING'`, `'COMPLETED'`. |
+| 6 | **`total_confirmed_orders`**| `INTEGER` | `NOT NULL` | `0` | *None* | Count of confirmed orders locked in this batch. |
+| 7 | **`total_revenue`** | `DECIMAL(10, 2)` | `YES` | `0.00` | *None* | Total order revenue collected for this batch. |
+| 8 | **`locked_at`** | `TIMESTAMPTZ` | `YES` | `NULL` | *None* | Timestamp when 12 PM / 7 PM cutoff cron locked window. |
+| 9 | **`completed_at`** | `TIMESTAMPTZ` | `YES` | `NULL` | *None* | Timestamp when all deliveries for batch finished. |
+| 10 | **`created_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Record creation timestamp. |
+| 11 | **`updated_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Last update timestamp. |
 
-**Write check:** every direct `W` writes `system_*` only ✅. Every subagent-domain write is a delegation to Customer DW1/DW2.
-
-## 🔁 Delegations → Customer executors (closes the loop)
-| Executor | Triggered by → status |
-|---|---|
-| **DW1** `execute_order_status_transition` | cutoff (BATCHED) · cancellation (CANCELLED) · order-ready (PACKED) · gate-delivery (DELIVERED) · payment (CONFIRMED) |
-| **DW2** `execute_payment_status_update` | cancellation (REFUNDED) · payment (PAID) |
+* **Indexes**: `PRIMARY KEY (window_id)`, `UNIQUE CONSTRAINT unique_date_meal (service_date, meal_type)`, `INDEX idx_window_status (status)`.
 
 ---
 
-## 🗄️ System-Owned Tables
+### Table 2: `system_settings` (Global Platform Config)
+* **Primary Key**: `key` (`VARCHAR(50)`)
+* **Purpose**: Key-value configuration store for system-wide business rules, cutoff times, delivery fees, search radii, timezones, and feature flags.
 
-**Core operational (9):**
+| # | Column Name | Data Type | Nullable? | Default Value | Foreign Key / Index | Description & Usage Rationale |
+|---|---|---|---|---|---|---|
+| 1 | **`key`** | `VARCHAR(50)` | `NOT NULL` | *None* | `PRIMARY KEY` | Setting identifier (e.g. `'delivery_fee'`, `'lunch_cutoff_time'`). |
+| 2 | **`value`** | `JSONB` | `NOT NULL` | *None* | *None* | Flexible JSON value payload e.g. `{"amount": 30.00}`. |
+| 3 | **`category`** | `VARCHAR(50)` | `NOT NULL` | `'GENERAL'` | B-Tree Index | Grouping category e.g. `'BILLING'`, `'CUTOFF'`, `'GEOGRAPHY'`. |
+| 4 | **`description`** | `TEXT` | `YES` | `NULL` | *None* | Human-readable explanation of setting. |
+| 5 | **`is_public`** | `BOOLEAN` | `NOT NULL` | `false` | *None* | True if readable by public subagent tools. |
+| 6 | **`updated_by_admin_id`**| `VARCHAR(36)`| `YES` | `NULL` | `FK(admin_users)` | Admin user ID who last modified this setting. |
+| 7 | **`updated_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Timestamp of last config update. |
 
-| Table | Columns (key) | Keys / Indexes |
-|---|---|---|
-| `system_meal_windows` | window_id (PK), service_date, meal_type `meal_window_enum`, cutoff_at, status `window_status_enum`, locked_at, total_confirmed_orders | UNIQUE(service_date, meal_type) |
-| `system_settings` | key (PK), value `JSONB`, description, updated_at | PK(key) — delivery_fee, cutoff times, radius, tz |
-| `system_delivery_routes` | route_id (PK), window_id (FK), service_date, meal_type, driver_phone (FK), total_stops, total_orders, status `route_status_enum`, optimized_at, encoded_polyline (future) | (driver_phone, service_date, meal_type); (window_id) |
-| `system_delivery_stops` | stop_id (PK), route_id (FK), stop_index, stop_type `stop_type_enum`, target_ref_id, location_name, latitude `DECIMAL(10,8)`, longitude `DECIMAL(11,8)`, estimated_arrival, actual_arrival, status `stop_status_enum` | UNIQUE(route_id, stop_index); (route_id, status); (target_ref_id, stop_type) |
-| `system_delivery_stop_orders` | stop_id (FK), order_id (FK→customer_orders) | PK(stop_id, order_id); (order_id) |
-| `system_agent_logs` | log_id (PK), event_type, source_role, target_role, order_id, payload `JSONB`, severity `log_severity_enum`, created_at | (order_id, created_at); (event_type, created_at); partial(severity=CRITICAL) |
-| `system_outbound_queue` | message_id (PK), recipient_phone, recipient_role, message_text, message_type, template_name, wa_message_id, status `outbound_status_enum`, attempts, error_detail, related_order_id, created_at, sent_at | partial(status=QUEUED, created_at); (wa_message_id) |
-| `system_hitl_sessions` | session_id (PK), thread_id, interrupt_type `hitl_interrupt_type_enum`, waiting_on_role, waiting_on_phone, order_id, payload `JSONB`, default_on_expiry `JSONB`, status `hitl_status_enum`, created_at, expires_at, resolved_at | partial(status=WAITING, expires_at); (order_id); (waiting_on_phone); (thread_id) |
-| `system_payment_webhook_events` | event_id (PK), gateway, gateway_event_id, event_type, payment_id, order_id, signature_verified, raw_payload `JSONB`, processing_status, received_at, processed_at | UNIQUE(gateway_event_id); (payment_id) |
-
-**Runtime / infrastructure (shared — NOT a single agent's domain):**
-
-| Table | Purpose | Keys / Indexes |
-|---|---|---|
-| **`conversation_messages`** | **Unified INSERT-only chat log. Written by the RUNTIME (webhook logs inbound; dispatcher logs outbound — incl. Master's notifications). Global read (Context Assembler fetches last N).** Replaces the 3 `*_chat_history` tables AND `system_inbound_messages`. | (phone, created_at DESC); UNIQUE(wa_message_id) |
-
-`conversation_messages` columns: message_id (PK `VARCHAR(36)`), phone, actor_role (CUSTOMER/CHEF/DRIVER), direction (INBOUND/OUTBOUND), source (USER/CUSTOMER_AGENT/CHEF_AGENT/DRIVER_AGENT/MASTER_AGENT/SYSTEM), message_type (TEXT/LOCATION/INTERACTIVE/IMAGE/TEMPLATE), message_text `TEXT`, latitude/longitude, media_ref, related_order_id, wa_message_id (UNIQUE, inbound dedup), raw_payload `JSONB`, created_at `TIMESTAMPTZ`. **INSERT-only — no update, no delete.** Partition by month at scale.
-
-**Observability (future):**
-
-| Table | Purpose |
-|---|---|
-| `system_route_optimization_runs` | log each GCP route-opt call (raw req/resp, cost, latency) |
+* **Indexes**: `PRIMARY KEY (key)`, `INDEX idx_settings_category (category)`.
 
 ---
 
-## 🔤 New enums (System domain)
-`window_status_enum` (OPEN, LOCKED_PROCESSING, COMPLETED) · `route_status_enum` (ASSIGNED, IN_PROGRESS, COMPLETED) · `stop_status_enum` (PENDING, ARRIVED, COMPLETED) · `stop_type_enum` (PICKUP_KITCHEN, DROPOFF_GATE) · `log_severity_enum` (INFO, WARNING, CRITICAL) · `outbound_status_enum` (QUEUED, SENT, DELIVERED, READ, FAILED) · `hitl_status_enum` (WAITING, RESUMED, EXPIRED, RESOLVED) · `hitl_interrupt_type_enum` (DIETARY_APPROVAL, CANCELLATION_APPROVAL, UNLOCATABLE_ADDRESS, AWAIT_LOCATION_PIN, PAYMENT_AWAIT_MASTER_APPROVAL, PAYMENT_AWAIT_PROVIDER) · plus `direction_enum`, `actor_role_enum`, `message_source_enum`, `message_type_enum` for `conversation_messages`.
+### Table 3: `system_route_optimization_runs` (GCP Observability Audit)
+* **Primary Key**: `run_id` (`VARCHAR(36)` - UUID)
+* **Foreign Key**: `window_id` $\rightarrow$ `system_meal_windows(window_id)`
+* **Purpose**: Audit ledger for every GCP Route Optimization API call executed during 12 PM / 7 PM batch cutoffs. Stores raw request/response payloads, latency, cost, and optimization metrics.
 
-## 📝 Notes
-- **`conversation_messages` is runtime-written**, not an agent tool action — automatic per message, captures Master's outbound too, keeps the write-invariant clean. This is a THIRD table category: **runtime/infrastructure** (alongside domain tables and delegated executors).
-- **Context Assembler**: before each LLM call, fetch last 4-5 messages (both directions) for the phone; a guardrail lets the LLM escalate to last-10 (hard cap).
-- **Master gap filled (Q25):** driver's stop→ARRIVED handoff = Master direct write to `system_delivery_stops` (system_* is Master's own).
+| # | Column Name | Data Type | Nullable? | Default Value | Foreign Key / Index | Description & Usage Rationale |
+|---|---|---|---|---|---|---|
+| 1 | **`run_id`** | `VARCHAR(36)` | `NOT NULL` | *UUID* | `PRIMARY KEY` | Unique surrogate ID for this GCP API run. |
+| 2 | **`window_id`** | `VARCHAR(36)` | `NOT NULL` | `FK(system_meal_windows)`, B-Tree Index | Meal window instance optimized by this run. |
+| 3 | **`service_date`** | `DATE` | `NOT NULL` | *None* | B-Tree Index | Service date (e.g. `2026-07-31`). |
+| 4 | **`meal_window`** | `VARCHAR(20)` | `NOT NULL` | `'LUNCH'` | *None* | `'LUNCH'` or `'DINNER'`. |
+| 5 | **`total_input_shipments`**| `INTEGER` | `NOT NULL` | *None* | *None* | Number of customer orders submitted to GCP. |
+| 6 | **`total_input_vehicles`** | `INTEGER` | `NOT NULL` | *None* | *None* | Number of active drivers submitted to GCP. |
+| 7 | **`total_routes_generated`**| `INTEGER` | `NOT NULL` | *None* | *None* | Number of optimized routes returned by GCP. |
+| 8 | **`raw_request_payload`**| `JSONB` | `NOT NULL` | *None* | *None* | Complete JSON request body sent to GCP. |
+| 9 | **`raw_response_payload`**| `JSONB` | `NOT NULL` | *None* | *None* | Complete JSON response body returned by GCP. |
+| 10 | **`api_latency_ms`** | `INTEGER` | `NOT NULL` | *None* | *None* | Execution latency in milliseconds. |
+| 11 | **`estimated_cost_usd`**| `DECIMAL(10, 4)` | `YES` | `0.0000` | *None* | Estimated GCP API bill cost for this run. |
+| 12 | **`status`** | `VARCHAR(20)` | `NOT NULL` | `'SUCCESS'` | B-Tree Index | Status: `'SUCCESS'`, `'FAILED'`, `'PARTIAL'`. |
+| 13 | **`error_detail`** | `TEXT` | `YES` | `NULL` | *None* | Error message if GCP API failed. |
+| 14 | **`executed_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Exact execution timestamp. |
+
+* **Indexes**: `PRIMARY KEY (run_id)`, `INDEX idx_route_runs_window (window_id)`.
+
+---
+
+## 📂 CATEGORY 2: GCP Route Solver & Stop Dispatch (3 Tables)
+
+### Table 4: `system_delivery_routes` (Master Driver Routes)
+* **Primary Key**: `route_id` (`VARCHAR(36)` - UUID)
+* **Foreign Key**: `window_id` $\rightarrow$ `system_meal_windows(window_id)`, `driver_phone` $\rightarrow$ `driver_profiles(driver_phone)`
+* **Purpose**: Master delivery route itinerary generated by GCP Route Optimization API at 12 PM / 7 PM cutoff. Assigned to a specific delivery driver for a specific meal window.
+
+| # | Column Name | Data Type | Nullable? | Default Value | Foreign Key / Index | Description & Usage Rationale |
+|---|---|---|---|---|---|---|
+| 1 | **`route_id`** | `VARCHAR(36)` | `NOT NULL` | *UUID* | `PRIMARY KEY` | Unique surrogate ID for this delivery route (e.g. `rt_801`). |
+| 2 | **`window_id`** | `VARCHAR(36)` | `NOT NULL` | `FK(system_meal_windows)`, B-Tree Index | Meal window instance this route belongs to. |
+| 3 | **`driver_phone`** | `VARCHAR(15)` | `NOT NULL` | `FK(driver_profiles)`, B-Tree Index | Delivery driver assigned to execute this route. |
+| 4 | **`service_date`** | `DATE` | `NOT NULL` | *None* | B-Tree Index | Service date (e.g. `2026-07-31`). |
+| 5 | **`meal_window`** | `VARCHAR(20)` | `NOT NULL` | `'LUNCH'` | B-Tree Index | `'LUNCH'` or `'DINNER'`. |
+| 6 | **`total_stops`** | `INTEGER` | `NOT NULL` | *None* | *None* | Total pickup + apartment gate drop-off stops. |
+| 7 | **`total_orders`** | `INTEGER` | `NOT NULL` | *None* | *None* | Total customer orders delivered on this route. |
+| 8 | **`total_distance_km`**| `DECIMAL(10, 2)` | `YES` | `0.00` | *None* | Total route distance calculated by GCP. |
+| 9 | **`estimated_duration_mins`**| `INTEGER` | `YES` | `NULL` | *None* | Total estimated travel + stop duration in minutes. |
+| 10 | **`status`** | `VARCHAR(20)` | `NOT NULL` | `'ASSIGNED'` | B-Tree Index | Route status: `'ASSIGNED'`, `'IN_PROGRESS'`, `'COMPLETED'`. |
+| 11 | **`encoded_polyline`**| `TEXT` | `YES` | `NULL` | *None* | Encoded Google Maps polyline string (for future map view rendering). |
+| 12 | **`optimized_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Timestamp when GCP generated route. |
+| 13 | **`created_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Record creation timestamp. |
+| 14 | **`updated_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Last update timestamp. |
+
+* **Indexes**: `PRIMARY KEY (route_id)`, `INDEX idx_routes_driver (driver_phone, service_date, meal_window)`.
+
+---
+
+### Table 5: `system_delivery_stops` (Pickup & Gate Drop-Off Stops)
+* **Primary Key**: `stop_id` (`VARCHAR(36)` - UUID)
+* **Foreign Key**: `route_id` $\rightarrow$ `system_delivery_routes(route_id)`
+* **Purpose**: Sequenced stop list for a route (`stop_index`: 1, 2, 3...). Represents both home kitchen pickups (`PICKUP_KITCHEN`) and consolidated apartment gate drop-offs (`DROPOFF_GATE`). Dispatches single-leg Google Maps navigation links (`Stop N ➔ Stop N+1`).
+
+| # | Column Name | Data Type | Nullable? | Default Value | Foreign Key / Index | Description & Usage Rationale |
+|---|---|---|---|---|---|---|
+| 1 | **`stop_id`** | `VARCHAR(36)` | `NOT NULL` | *UUID* | `PRIMARY KEY` | Unique surrogate ID for this stop. |
+| 2 | **`route_id`** | `VARCHAR(36)` | `NOT NULL` | `FK(system_delivery_routes)`, B-Tree Index | Route this stop belongs to. |
+| 3 | **`stop_index`** | `INTEGER` | `NOT NULL` | *None* | B-Tree Index | Stop sequence order number (`1`, `2`, `3`...). |
+| 4 | **`stop_type`** | `VARCHAR(20)` | `NOT NULL` | `'DROPOFF_GATE'` | B-Tree Index | `'PICKUP_KITCHEN'` or `'DROPOFF_GATE'`. |
+| 5 | **`target_ref_id`** | `VARCHAR(100)`| `NOT NULL` | *None* | B-Tree Index | Target identifier (`chef_phone` for kitchen, or `apartment_name` for gate). |
+| 6 | **`location_name`** | `VARCHAR(100)`| `NOT NULL` | *None* | *None* | Display name (e.g. "Ramesh Kitchen" or "My Home Bhooja Gate 2"). |
+| 7 | **`address`** | `TEXT` | `NOT NULL` | *None* | *None* | Full physical address of stop. |
+| 8 | **`latitude`** | `DECIMAL(10, 8)` | `NOT NULL` | *None* | *None* | GPS Latitude of stop location. |
+| 9 | **`longitude`** | `DECIMAL(11, 8)` | `NOT NULL` | *None* | *None* | GPS Longitude of stop location. |
+| 10 | **`single_leg_maps_url`**| `TEXT` | `YES` | `NULL` | *None* | Pre-generated Google Maps navigation URL for this leg (`Stop N-1 ➔ Stop N`). |
+| 11 | **`estimated_arrival`**| `TIMESTAMPTZ` | `NOT NULL` | *None* | *None* | Estimated arrival timestamp calculated by GCP. |
+| 12 | **`actual_arrival`** | `TIMESTAMPTZ` | `YES` | `NULL` | *None* | Actual arrival timestamp recorded when driver taps "Reached". |
+| 13 | **`status`** | `VARCHAR(20)` | `NOT NULL` | `'PENDING'` | B-Tree Index | Stop status: `'PENDING'`, `'ARRIVED'`, `'COMPLETED'`. |
+| 14 | **`created_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Stop creation timestamp. |
+| 15 | **`updated_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Last update timestamp. |
+
+* **Indexes**: `PRIMARY KEY (stop_id)`, `UNIQUE CONSTRAINT unique_route_stop (route_id, stop_index)`, `INDEX idx_stops_target (target_ref_id, stop_type)`.
+
+---
+
+### Table 6: `system_delivery_stop_orders` (Stop↔Order Junction)
+* **Primary Key**: `PRIMARY KEY (stop_id, order_id)`
+* **Foreign Key**: `stop_id` $\rightarrow$ `system_delivery_stops(stop_id)`, `order_id` $\rightarrow$ `customer_orders(order_id)`
+* **Purpose**: Junction table mapping delivery stops to customer order IDs. Handles consolidated apartment gate drop-offs (where 1 security gate stop delivers 5 customer orders).
+
+| # | Column Name | Data Type | Nullable? | Default Value | Foreign Key / Index | Description & Usage Rationale |
+|---|---|---|---|---|---|---|
+| 1 | **`stop_id`** | `VARCHAR(36)` | `NOT NULL` | `FK(system_delivery_stops)`, B-Tree Index | Delivery stop ID. |
+| 2 | **`order_id`** | `VARCHAR(36)` | `NOT NULL` | `FK(customer_orders)`, B-Tree Index | Customer order ID delivered at this stop. |
+| 3 | **`created_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Association creation timestamp. |
+
+* **Indexes**: `PRIMARY KEY (stop_id, order_id)`, `INDEX idx_stop_orders_order (order_id)`.
+
+---
+
+## 📂 CATEGORY 3: System Resilience, HITL & Webhooks (3 Tables)
+
+### Table 7: `system_hitl_sessions` (LangGraph Interrupt Checkpoints)
+* **Primary Key**: `session_id` (`VARCHAR(36)` - UUID)
+* **Purpose**: State persistence ledger for LangGraph Human-In-The-Loop (HITL) `interrupt()` checkpoints. Freezes state execution during async human waits (e.g. Chef dietary counter-offers, Driver unlocatable address pin requests, Customer onboarding location pin, Payment webhooks). Includes a 15-minute TTL.
+
+| # | Column Name | Data Type | Nullable? | Default Value | Foreign Key / Index | Description & Usage Rationale |
+|---|---|---|---|---|---|---|
+| 1 | **`session_id`** | `VARCHAR(36)` | `NOT NULL` | *UUID* | `PRIMARY KEY` | Unique surrogate ID for this HITL interrupt session. |
+| 2 | **`thread_id`** | `VARCHAR(100)`| `NOT NULL` | B-Tree Index | LangGraph thread checkpoint ID. |
+| 3 | **`interrupt_type`** | `VARCHAR(50)` | `NOT NULL` | *None* | B-Tree Index | Interrupt type: `'DIETARY_APPROVAL'`, `'CANCELLATION_APPROVAL'`, `'UNLOCATABLE_ADDRESS'`, `'AWAIT_LOCATION_PIN'`, `'PAYMENT_AWAIT_PROVIDER'`, `'PAYMENT_AWAIT_MASTER_APPROVAL'`. |
+| 4 | **`waiting_on_role`**| `VARCHAR(20)` | `NOT NULL` | *None* | *None* | Role holding up execution: `'CHEF'`, `'CUSTOMER'`, `'DRIVER'`, `'PROVIDER'`. |
+| 5 | **`waiting_on_phone`**| `VARCHAR(15)` | `YES` | `NULL` | B-Tree Index | Phone number of human whose reply will resume graph. |
+| 6 | **`order_id`** | `VARCHAR(36)` | `YES` | `NULL` | B-Tree Index | Associated order ID. |
+| 7 | **`payload`** | `JSONB` | `NOT NULL` | `'{}'` | *None* | Frozen state data payload passed to human on WhatsApp. |
+| 8 | **`default_on_expiry`**| `JSONB` | `YES` | `'{}'` | *None* | Fallback payload if 15-minute TTL expires without reply. |
+| 9 | **`status`** | `VARCHAR(20)` | `NOT NULL` | `'WAITING'` | B-Tree Index | Session status: `'WAITING'`, `'RESUMED'`, `'EXPIRED'`, `'RESOLVED'`. |
+| 10 | **`expires_at`** | `TIMESTAMPTZ` | `NOT NULL` | *None* | Partial Index | Hard expiration timestamp (Default: `created_at + 15 mins`). |
+| 11 | **`resolved_at`** | `TIMESTAMPTZ` | `YES` | `NULL` | *None* | Timestamp when human replied or session expired. |
+| 12 | **`created_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Session creation timestamp. |
+
+* **Indexes**: `PRIMARY KEY (session_id)`, `PARTIAL INDEX idx_hitl_waiting (expires_at) WHERE status = 'WAITING'`.
+
+---
+
+### Table 8: `system_payment_webhook_events` (Webhook Idempotency)
+* **Primary Key**: `event_id` (`VARCHAR(36)` - UUID)
+* **Unique Constraint**: `UNIQUE(gateway_event_id)`
+* **Purpose**: Idempotency & verification ledger for incoming payment gateway webhooks (Razorpay / Stripe / PhonePe). Prevents duplicate payment processing by enforcing unique gateway event IDs and storing HMAC signature verification results.
+
+| # | Column Name | Data Type | Nullable? | Default Value | Foreign Key / Index | Description & Usage Rationale |
+|---|---|---|---|---|---|---|
+| 1 | **`event_id`** | `VARCHAR(36)` | `NOT NULL` | *UUID* | `PRIMARY KEY` | Unique surrogate ID for this webhook callback. |
+| 2 | **`gateway`** | `VARCHAR(50)` | `NOT NULL` | `'RAZORPAY'` | *None* | Gateway vendor: `'RAZORPAY'`, `'STRIPE'`, `'PHONEPE'`. |
+| 3 | **`gateway_event_id`**| `VARCHAR(100)`| `NOT NULL` | `UNIQUE` | Unique B-Tree Index | Provider's unique event ID for 100% idempotency dedup. |
+| 4 | **`event_type`** | `VARCHAR(50)` | `NOT NULL` | *None* | *None* | Provider event type e.g. `'payment.captured'`. |
+| 5 | **`payment_id`** | `VARCHAR(36)` | `YES` | `NULL` | B-Tree Index | Associated `customer_payments.payment_id`. |
+| 6 | **`order_id`** | `VARCHAR(36)` | `YES` | `NULL` | B-Tree Index | Associated `customer_orders.order_id`. |
+| 7 | **`signature_verified`**| `BOOLEAN` | `NOT NULL` | `false` | *None* | True if HMAC-SHA256 signature verification passed. |
+| 8 | **`raw_payload`** | `JSONB` | `NOT NULL` | *None* | *None* | Complete raw JSON payload received from payment gateway. |
+| 9 | **`processing_status`**| `VARCHAR(20)`| `NOT NULL` | `'RECEIVED'`| B-Tree Index | Status: `'RECEIVED'`, `'PROCESSED'`, `'FAILED'`, `'DUPLICATE'`. |
+| 10 | **`error_detail`** | `TEXT` | `YES` | `NULL` | *None* | Error description if HMAC or processing failed. |
+| 11 | **`received_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Webhook arrival timestamp. |
+| 12 | **`processed_at`** | `TIMESTAMPTZ` | `YES` | `NULL` | *None* | Timestamp when Master Agent delegated DW1/DW2 status update. |
+
+* **Indexes**: `PRIMARY KEY (event_id)`, `UNIQUE INDEX (gateway_event_id)`.
+
+---
+
+### Table 9: `system_agent_logs` (System Audit & Write Delegation Log)
+* **Primary Key**: `log_id` (`VARCHAR(36)` - UUID)
+* **Purpose**: System-wide audit trail for multi-agent events, subagent handoffs, write delegations (`delegate_cross_domain_write_tool`), security exceptions, and cutoff locks.
+
+| # | Column Name | Data Type | Nullable? | Default Value | Foreign Key / Index | Description & Usage Rationale |
+|---|---|---|---|---|---|---|
+| 1 | **`log_id`** | `VARCHAR(36)` | `NOT NULL` | *UUID* | `PRIMARY KEY` | Unique surrogate ID for this audit entry. |
+| 2 | **`event_type`** | `VARCHAR(50)` | `NOT NULL` | *None* | B-Tree Index | Event type e.g. `'CUTOFF_LOCK'`, `'WRITE_DELEGATION'`, `'SECURITY_ALERT'`. |
+| 3 | **`source_role`** | `VARCHAR(20)` | `NOT NULL` | *None* | *None* | Initiating agent: `'CUSTOMER'`, `'CHEF'`, `'DRIVER'`, `'MASTER'`, `'ADMIN'`, `'SYSTEM'`. |
+| 4 | **`target_role`** | `VARCHAR(20)` | `YES` | `NULL` | *None* | Receiving agent for handoffs/delegations. |
+| 5 | **`order_id`** | `VARCHAR(36)` | `YES` | `NULL` | B-Tree Index | Associated order ID (if applicable). |
+| 6 | **`payload`** | `JSONB` | `YES` | `'{}'` | *None* | Contextual event data payload. |
+| 7 | **`severity`** | `VARCHAR(20)` | `NOT NULL` | `'INFO'` | Partial Index | Log severity: `'INFO'`, `'WARNING'`, `'CRITICAL'`. |
+| 8 | **`created_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | B-Tree Index | Log timestamp. |
+
+* **Indexes**: `PRIMARY KEY (log_id)`, `INDEX idx_logs_order (order_id, created_at)`.
+
+---
+
+## 📂 CATEGORY 4: Communications & Runtime Infrastructure (2 Tables)
+
+### Table 10: `system_outbound_queue` (WhatsApp Message Dispatcher)
+* **Primary Key**: `message_id` (`VARCHAR(36)` - UUID)
+* **Purpose**: Outbound message queue for WhatsApp communications sent via Meta WhatsApp Business Cloud API. Master Agent and system dispatchers insert queued messages here; background worker processes queue and handles retries.
+
+| # | Column Name | Data Type | Nullable? | Default Value | Foreign Key / Index | Description & Usage Rationale |
+|---|---|---|---|---|---|---|
+| 1 | **`message_id`** | `VARCHAR(36)` | `NOT NULL` | *UUID* | `PRIMARY KEY` | Unique surrogate ID for this queued message. |
+| 2 | **`recipient_phone`** | `VARCHAR(15)` | `NOT NULL` | B-Tree Index | Recipient's normalized phone number (E.164 format). |
+| 3 | **`recipient_role`** | `VARCHAR(20)` | `NOT NULL` | *None* | *None* | Role of recipient: `'CUSTOMER'`, `'CHEF'`, `'DRIVER'`. |
+| 4 | **`message_text`** | `TEXT` | `NOT NULL` | *None* | *None* | Outbound message text content. |
+| 5 | **`message_type`** | `VARCHAR(30)` | `NOT NULL` | `'TEXT'` | *None* | Type: `'TEXT'`, `'LOCATION_REQUEST'`, `'INTERACTIVE_BUTTON'`, `'TEMPLATE'`. |
+| 6 | **`template_name`** | `VARCHAR(100)`| `YES` | `NULL` | *None* | Meta approved WhatsApp template name (if applicable). |
+| 7 | **`wa_message_id`** | `VARCHAR(100)`| `YES` | `NULL` | B-Tree Index | Meta API returned message ID (e.g. `wamid.HBgL...`). |
+| 8 | **`status`** | `VARCHAR(20)` | `NOT NULL` | `'QUEUED'` | Partial Index | Status: `'QUEUED'`, `'SENT'`, `'DELIVERED'`, `'READ'`, `'FAILED'`. |
+| 9 | **`attempts`** | `INTEGER` | `NOT NULL` | `0` | *None* | Number of API dispatch retry attempts. |
+| 10 | **`error_detail`** | `TEXT` | `YES` | `NULL` | *None* | Error details if Meta Cloud API failed. |
+| 11 | **`related_order_id`**| `VARCHAR(36)`| `YES` | `NULL` | B-Tree Index | Associated order ID (if applicable). |
+| 12 | **`created_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Message enqueue timestamp. |
+| 13 | **`sent_at`** | `TIMESTAMPTZ` | `YES` | `NULL` | *None* | Timestamp when Meta API confirmed message sent. |
+
+* **Indexes**: `PRIMARY KEY (message_id)`, `PARTIAL INDEX idx_outbound_queued (created_at) WHERE status = 'QUEUED'`.
+
+---
+
+### Table 11: `conversation_messages` (Unified Shared Runtime Chat Log)
+* **Primary Key**: `message_id` (`VARCHAR(36)` - UUID)
+* **Unique Constraint**: `UNIQUE(wa_message_id)`
+* **Purpose**: Unified, **INSERT-ONLY** (no update/delete) conversation ledger for ALL incoming and outgoing WhatsApp messages across Customers, Chefs, and Drivers. Written automatically by messaging runtime. Read by Context Assembler to fetch last 4-5 messages before each LLM turn.
+
+| # | Column Name | Data Type | Nullable? | Default Value | Foreign Key / Index | Description & Usage Rationale |
+|---|---|---|---|---|---|---|
+| 1 | **`message_id`** | `VARCHAR(36)` | `NOT NULL` | *UUID* | `PRIMARY KEY` | Unique surrogate ID for this message log entry. |
+| 2 | **`phone`** | `VARCHAR(15)` | `NOT NULL` | B-Tree Index | User's normalized phone number (E.164 format). |
+| 3 | **`actor_role`** | `VARCHAR(20)` | `NOT NULL` | *None* | B-Tree Index | Role of user: `'CUSTOMER'`, `'CHEF'`, `'DRIVER'`. |
+| 4 | **`direction`** | `VARCHAR(10)` | `NOT NULL` | *None* | *None* | Direction: `'INBOUND'` (User $\rightarrow$ Agent) or `'OUTBOUND'` (Agent $\rightarrow$ User). |
+| 5 | **`source`** | `VARCHAR(30)` | `NOT NULL` | *None* | *None* | Source entity: `'USER'`, `'CUSTOMER_AGENT'`, `'CHEF_AGENT'`, `'DRIVER_AGENT'`, `'MASTER_AGENT'`, `'SYSTEM'`. |
+| 6 | **`message_type`** | `VARCHAR(30)` | `NOT NULL` | `'TEXT'` | *None* | `'TEXT'`, `'LOCATION'`, `'INTERACTIVE'`, `'IMAGE'`, `'TEMPLATE'`. |
+| 7 | **`message_text`** | `TEXT` | `YES` | `NULL` | *None* | Text content of WhatsApp message. |
+| 8 | **`latitude`** | `DECIMAL(10, 8)` | `YES` | `NULL` | *None* | GPS Latitude (if LOCATION attachment pin). |
+| 9 | **`longitude`** | `DECIMAL(11, 8)` | `YES` | `NULL` | *None* | GPS Longitude (if LOCATION attachment pin). |
+| 10 | **`media_ref`** | `TEXT` | `YES` | `NULL` | *None* | WhatsApp media ID / URL if message contains media. |
+| 11 | **`related_order_id`**| `VARCHAR(36)`| `YES` | `NULL` | B-Tree Index | Associated order ID (if applicable). |
+| 12 | **`wa_message_id`** | `VARCHAR(100)`| `YES` | `NULL` | Unique B-Tree Index | Meta WhatsApp message ID for **100% inbound webhook deduplication**. |
+| 13 | **`raw_payload`** | `JSONB` | `YES` | `'{}'` | *None* | Full raw JSON webhook payload from Meta. |
+| 14 | **`created_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | B-Tree Index | Message timestamp. |
+
+* **Indexes**: `PRIMARY KEY (message_id)`, `INDEX idx_chat_context_fetch (phone, created_at DESC)`, `UNIQUE INDEX (wa_message_id)`.

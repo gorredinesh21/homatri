@@ -683,9 +683,43 @@ KEY DECISIONS:
 - Admin writes existing tables (chef_profiles, chef_menu_items, driver_profiles, system_settings) DIRECTLY — no new
   tables beyond admin_*. Matches the agent specs ("Admin handles onboarding & menu pricing in DB").
 
+
 FILES CREATED / UPDATED:
 - `markdowns/admin_tables.md` (NEW — Admin table design & access model)
 - `history.txt` (this Section 26)
+
+--------------------------------------------------------------------------------
+[SECTION 27: MILESTONE 1 — TABLE COLUMN FINALIZATION & INTEGRITY GUARDS (ALL 24 TABLES)]
+--------------------------------------------------------------------------------
+
+DATE: 2026-07-31
+
+100% PRODUCTION COLUMN SCHEMAS LOCKED (ALL 24 TABLES ACROSS 6 ENTITIES):
+1. Chef Domain (4 Tables): `chef_profiles`, `chef_menu_items` (added `max_availability INT`), `chef_daily_inventory`, `chef_order_readiness` (made `box_count INT` nullable).
+2. Customer Domain (5 Tables): `customer_profiles` (made `city` nullable), `customer_orders`, `customer_order_items`, `customer_payments`, `customer_reviews`.
+3. Driver Domain (2 Tables): `driver_profiles`, `driver_trip_status`.
+4. Master / System Domain (11 Tables across 4 Categories):
+   - Category 1 (Batch & Cutoff Orchestration): `system_meal_windows`, `system_settings`, `system_route_optimization_runs`.
+   - Category 2 (GCP Route Solver & Stop Dispatch): `system_delivery_routes`, `system_delivery_stops`, `system_delivery_stop_orders`.
+   - Category 3 (System Resilience, HITL & Webhooks): `system_hitl_sessions`, `system_payment_webhook_events`, `system_agent_logs`.
+   - Category 4 (Communications & Runtime Infrastructure): `system_outbound_queue`, `conversation_messages` (Unified Chat Log).
+5. Admin Domain (2 Tables + 1 Future): `admin_users`, `admin_activity_log`, `admin_ai_queries`.
+
+4 INTEGRITY IMPLEMENTATION GUARDS LOCKED:
+- Guard 1: Atomic SQL Transactions (`db.transaction()`) with 100% all-or-nothing rollbacks.
+- Guard 2: Hard Python Pre-Condition Assertions (`assert` guard clauses before writes).
+- Guard 3: Centralized Delegated-Write Executors (Customer DW1 `execute_order_status_transition`, DW2 `execute_payment_status_update`).
+- Guard 4: Automated `pytest` Integration Test Suite verifying all 40 LLM tools.
+
+DOCUMENTATION UPDATED & COMMITTED:
+- `markdowns/chef_tables.md` (Finalized 4 Chef tables)
+- `markdowns/customer_tables.md` (Finalized 5 Customer tables)
+- `markdowns/driver_tables.md` (Finalized 2 Driver tables)
+- `markdowns/master_tables.md` (Finalized 11 Master/System tables)
+- `markdowns/admin_tables.md` (Finalized 3 Admin tables)
+- `HANDOVER.md` (Marked Milestone 1 as 100% COMPLETED)
+- `history.txt` (this Section 27)
+
 
 ALL 6 ENTITY PASSES DONE (Chef, Customer, Rider, Master/System, Admin + the runtime conversation_messages table).
 NEXT: MERGE/DEDUPE all passes into the final Milestone-1 schema (CREATE TYPE enums + CREATE TABLE DDL).

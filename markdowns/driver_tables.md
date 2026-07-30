@@ -1,73 +1,77 @@
-# 🚴‍♂️ Rider (Driver) Agent — Table Design & Query Access Map
+# 🚴‍♂️ Master Specification: Driver Entity Tables & Column Schemas
 
-This document is the **Milestone 1** table design for the **Driver domain**, derived bottom-up from the Driver Agent's 8 tools using the query-inventory method.
-
----
-
-## 🧭 Base Rules Applied (same for all agents)
-1. **Phone is the natural key** (`driver_phone`); transactional rows keep `VARCHAR(36)` ids.
-2. **Write invariant** — a tool WRITES only `driver_*`; every cross-domain write is a HANDOFF to Master (note only).
-3. **Reads are global** — cross-domain reads stay on the list, finalized under the owner.
-4. **Master handoff has two kinds:** if the write targets the **System** domain (Master's own), Master writes it **directly**; if it targets another **subagent** domain, Master **delegates** to that domain's executor.
-5. **`driver_locations` dropped** — no GPS; position/progress from `driver_trip_status` + `system_delivery_stops`.
-6. **Data types** — lat `DECIMAL(10,8)`/lng `DECIMAL(11,8)`; timestamps `TIMESTAMPTZ`; FKs `ON DELETE RESTRICT`.
+This document contains the 100% finalized production SQL column schemas, data types, constraints, default values, foreign keys, indexes, and usage rationale for the **Driver / Rider Domain** (Entity 3).
 
 ---
 
-## 📋 Rider Agent — Query List
-
-| Q | Tool | R/W | What it does | Table(s) | Filter/key cols | Index | On list? |
-|---|---|---|---|---|---|---|---|
-| Q1 | 1 get_profile | R | identify driver (HOT) | `driver_profiles` | driver_phone | PK(driver_phone) | ✅ |
-| Q2 | 2 get_route_itinerary | R (x-domain) | route + ordered stops (+orders per stop) | `system_delivery_routes` ⋈ `system_delivery_stops` ⋈ `system_delivery_stop_orders` | route.driver_phone, meal, date; stops by route_id, stop_index | routes(driver_phone,service_date,meal_type); stops(route_id,stop_index) | ✅ (System) |
-| Q3 | 3 dispatch_next_leg | R (x-domain) | next stop (N+1) coords + orders → build Maps link *(reply)* | `system_delivery_stops` (+`system_delivery_stop_orders`) | route_id, stop_index=current+1 | stops(route_id,stop_index) | ✅ (System) |
-| Q4 | 4 mark_reached | W | update driver trip phase (AT_KITCHEN / AT_GATE) + current_stop_index | `driver_trip_status` | driver_phone | (driver_phone, service_date) | ✅ own |
-| — | 4 mark_reached | HANDOFF | stop → ARRIVED + actual_arrival | → **Master direct** (`system_delivery_stops`, system_* = Master's own) | — | — | ❌ note |
-| Q5 | 5 picked_up | W | update driver trip phase (EN_ROUTE_DELIVERY) | `driver_trip_status` | driver_phone | (driver_phone, service_date) | ✅ own |
-| Q6 | 5 picked_up | R (x-domain) | next stop for the leg link *(reply)* | `system_delivery_stops` | route_id, stop_index+1 | stops(route_id,stop_index) | ✅ (System) |
-| — | 5 picked_up | HANDOFF | orders → PICKED_UP (order_ids) | → **Master → Customer DW1** executor (`customer_orders`) | — | — | ❌ note |
-| Q7 | 6 gate_delivered | W | update driver trip phase + current_stop_index | `driver_trip_status` | driver_phone | (driver_phone, service_date) | ✅ own |
-| — | 6 gate_delivered | HANDOFF | orders → DELIVERED (→ Customer DW1) · stop → COMPLETED (→ Master direct) · notify customers (→ Master relay) | → **Master** | — | — | ❌ note |
-| — | 7 unlocatable_addr | PAUSE/HANDOFF | `interrupt()` `UNLOCATABLE_ADDRESS` (waiting_on=CUSTOMER, checkpoint → `system_hitl_sessions`) → Master → Customer requests pin | → **Master** | — | — | ❌ note |
-| — | 8 vehicle_delay | HANDOFF | recalc stop ETAs (→ Master direct `system_delivery_stops`) · alert affected customers (→ Master relay) | → **Master** | — | — | ❌ note |
-
-**Write check:** every direct `W` (Q4, Q5, Q7) writes `driver_*` only ✅. Every operational cross-domain write (stop status, order status, ETAs) is a Master handoff.
+## 🧭 Base Architectural Rules Applied
+1. **Phone is Natural Key**: `driver_phone` (`VARCHAR(15)` - Normalized 10-digit) is the primary key for `driver_profiles`.
+2. **`driver_locations` Dropped**: Continuous live GPS telemetry streaming was dropped as impractical for motorcycle drivers in traffic.
+3. **Stop-Based Progress Tracking**: Driver progress is tracked via stop checkpoints in `driver_trip_status` (`current_stop_index`, `status`). Combined with `system_delivery_stops`, this serves as the live-tracking board read by Customer and Chef agents.
+4. **Master Delegations & Direct Writes**:
+   - Master Direct Write: `mark_driver_reached_stop_tool` updates `system_delivery_stops.status = ARRIVED`.
+   - Master Delegated Write: `mark_orders_picked_up_tool` & `mark_gate_delivery_completed_tool` trigger Customer executor **DW1** (`customer_orders.status = PICKED_UP / DELIVERED`).
 
 ---
 
-## 🗺️ Live-Tracking "Progress List" (key role of `driver_trip_status`)
+## 🗄️ Driver Domain Tables (2 Tables)
 
-`driver_trip_status` is not just the driver's own bookkeeping — it is the **live-tracking board**, read cross-domain by **Customer & Chef** agents (global read):
-
-> **Progress view = `system_delivery_stops` (ordered drop list) ⋈ `driver_trip_status` (current position + completed).**
-> Shows the full route list, which stops are ✅ COMPLETED, where the driver currently is (`current_stop_index`), and what's still PENDING. Replaces live GPS; upgrades to a **map view** later.
-
-Consumers: Customer `get_active_order_status`, Chef `get_assigned_driver_info` / `check_driver_arrival_status`.
-
----
-
-## 🗄️ Rider-Owned Tables (3 — `driver_locations` dropped)
-
-| Table | Columns | Keys / Indexes |
-|---|---|---|
-| **`driver_profiles`** | driver_phone (PK), driver_name, vehicle_info, active_status `bool`, current_assigned_route_id (FK→system_delivery_routes), created_at, updated_at | PK(driver_phone) — *Admin-onboarded; driver reads* |
-| **`driver_trip_status`** | trip_id (PK `VARCHAR(36)`), driver_phone (FK), route_id (FK→system_delivery_routes), service_date `DATE`, status `trip_status_enum`, current_stop_index `INT`, created_at, updated_at | PK; (driver_phone, service_date) |
-| ~~`driver_chat_history`~~ *(superseded)* | Replaced by the unified runtime-written **`conversation_messages`** (see [`master_tables.md`](master_tables.md)) | — |
-
-**New enum introduced:** `trip_status_enum` = (ASSIGNED, EN_ROUTE_PICKUP, AT_KITCHEN, EN_ROUTE_DELIVERY, AT_GATE, COMPLETED).
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           DRIVER DOMAIN TABLES                              │
+├─────────────────────────────────────┬───────────────────────────────────────┤
+│ 1. driver_profiles                  │ 2. driver_trip_status                 │
+│ Driver metadata, vehicle, license,  │ Trip execution phase, stop index,     │
+│ active route assignment             │ live progress board                   │
+└─────────────────────────────────────┴───────────────────────────────────────┘
+```
 
 ---
 
-## 🔗 Recorded for Later (not on Rider list)
-- **Cross-domain reads → owners:** `system_delivery_routes`, `system_delivery_stops`, `system_delivery_stop_orders`, `system_hitl_sessions` → **System**; writes route to `customer_orders` → **Customer**.
-- **Handoffs → Master (two kinds):**
-  - **Master direct** (target = System, its own domain): stop → ARRIVED (T4), stop → COMPLETED (T6), ETA recalc (T8).
-  - **Master delegates → subagent executor** (target = another domain): `customer_orders` → PICKED_UP (T5) / DELIVERED (T6) → **Customer DW1**.
-- **New `system_hitl_sessions` interrupt type:** `UNLOCATABLE_ADDRESS` (waiting_on = CUSTOMER).
-- **Master gap surfaced:** Master needs a **stop-status write mechanism** (ARRIVED / COMPLETED / ETA recalc) — not in the current 12 Master tools; add in the Master pass.
+### Table 1: `driver_profiles` (Master Driver Registry)
+* **Primary Key**: `driver_phone` (`VARCHAR(15)` - Normalized 10-digit phone)
+* **Purpose**: Master registry for onboarded delivery drivers. Stores driver identity, vehicle details, license info, active route assignments, emergency contacts, and shift availability status. Onboarded by Admin.
 
-## ✅ Resolved Decision
-- **Keep `driver_trip_status`** (not derived). It's an own-domain write (free), and doubles as the cross-domain **live-tracking progress board** for Customer & Chef (and a future map view).
+| # | Column Name | Data Type | Nullable? | Default Value | Foreign Key / Index | Description & Usage Rationale |
+|---|---|---|---|---|---|---|
+| 1 | **`driver_phone`** | `VARCHAR(15)` | `NOT NULL` | *None* | `PRIMARY KEY` | Normalized 10-digit phone (e.g. `9988776655`). Serves as natural key across all tools. |
+| 2 | **`driver_name`** | `VARCHAR(100)` | `NOT NULL` | *None* | B-Tree Index | Full legal name of the delivery driver. |
+| 3 | **`vehicle_type`** | `VARCHAR(20)` | `NOT NULL` | `'BIKE'` | *None* | Vehicle category: `'BIKE'`, `'SCOOTER'`, `'EV'`, `'THREE_WHEELER'`. |
+| 4 | **`vehicle_number`** | `VARCHAR(30)` | `NOT NULL` | *None* | *None* | License plate number (e.g. `TS 09 EQ 1234`). |
+| 5 | **`vehicle_model`** | `VARCHAR(50)` | `YES` | `NULL` | *None* | Make and model (e.g. "Hero Splendor 125"). |
+| 6 | **`driver_license_number`** | `VARCHAR(50)` | `YES` | `NULL` | *None* | Driving license number for compliance. |
+| 7 | **`alternate_phone`** | `VARCHAR(15)` | `YES` | `NULL` | *None* | Emergency contact phone number. |
+| 8 | **`bank_account_details`** | `JSONB` | `YES` | `'{}'` | *None* | UPI ID / account details for driver payouts. |
+| 9 | **`current_assigned_route_id`**| `VARCHAR(36)` | `YES` | `NULL` | `FK(system_delivery_routes)`, B-Tree Index | Active GCP delivery route ID assigned to driver for current meal window. |
+| 10 | **`is_on_shift`** | `BOOLEAN` | `NOT NULL` | `true` | *None* | True if driver is available for batch assignment. |
+| 11 | **`active_status`** | `BOOLEAN` | `NOT NULL` | `true` | B-Tree Index | Master account toggle (`true` = active driver, `false` = suspended/inactive). |
+| 12 | **`created_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Profile creation timestamp. |
+| 13 | **`updated_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Last profile update timestamp. |
 
-## 📝 Observation
-The **Rider is the most Master-mediated agent** — its only own-domain writes are trip-phase updates to `driver_trip_status`. All operational state (stop status, order status, ETAs) lives in System/Customer domains, so nearly every driver action is a Master handoff. This is the write-invariant working as designed.
+* **Indexes**: `PRIMARY KEY (driver_phone)`, `INDEX idx_driver_active_shift (active_status, is_on_shift)`, `INDEX idx_driver_current_route (current_assigned_route_id)`.
+
+---
+
+### Table 2: `driver_trip_status` (Live Trip Execution & Progress Board)
+* **Primary Key**: `trip_id` (`VARCHAR(36)` - UUID)
+* **Foreign Key**: `driver_phone` $\rightarrow$ `driver_profiles(driver_phone)`, `route_id` $\rightarrow$ `system_delivery_routes(route_id)`
+* **Purpose**: Driver trip execution & progress tracking ledger. Tracks the driver's current operational phase (`ASSIGNED` $\rightarrow$ `EN_ROUTE_PICKUP` $\rightarrow$ `AT_KITCHEN` $\rightarrow$ `EN_ROUTE_DELIVERY` $\rightarrow$ `AT_GATE` $\rightarrow$ `COMPLETED`) and `current_stop_index`. Serves as the live-tracking progress board.
+
+| # | Column Name | Data Type | Nullable? | Default Value | Foreign Key / Index | Description & Usage Rationale |
+|---|---|---|---|---|---|---|
+| 1 | **`trip_id`** | `VARCHAR(36)` | `NOT NULL` | *UUID* | `PRIMARY KEY` | Unique surrogate ID for this trip execution record. |
+| 2 | **`driver_phone`** | `VARCHAR(15)` | `NOT NULL` | `FK(driver_profiles)`, B-Tree Index | Driver executing the trip. |
+| 3 | **`route_id`** | `VARCHAR(36)` | `NOT NULL` | `FK(system_delivery_routes)`, B-Tree Index | GCP-optimized delivery route assigned to driver. |
+| 4 | **`service_date`** | `DATE` | `NOT NULL` | *None* | B-Tree Index | Service date (e.g. `2026-07-31`). |
+| 5 | **`meal_window`** | `VARCHAR(20)` | `NOT NULL` | `'LUNCH'` | B-Tree Index | Meal window: `'LUNCH'` or `'DINNER'`. |
+| 6 | **`status`** | `VARCHAR(30)` | `NOT NULL` | `'ASSIGNED'` | B-Tree Index | Trip phase: `'ASSIGNED'`, `'EN_ROUTE_PICKUP'`, `'AT_KITCHEN'`, `'EN_ROUTE_DELIVERY'`, `'AT_GATE'`, `'COMPLETED'`. |
+| 7 | **`current_stop_index`** | `INTEGER` | `NOT NULL` | `1` | *None* | Current stop sequence number driver is navigating to or at (`1`, `2`, `3`...). |
+| 8 | **`total_stops`** | `INTEGER` | `NOT NULL` | *None* | *None* | Total stops on this assigned route. |
+| 9 | **`completed_stops`** | `INTEGER` | `NOT NULL` | `0` | *None* | Number of stops completed so far. |
+| 10 | **`trip_started_at`** | `TIMESTAMPTZ` | `YES` | `NULL` | *None* | Timestamp when driver started route (`Stop 1`). |
+| 11 | **`trip_completed_at`**| `TIMESTAMPTZ` | `YES` | `NULL` | *None* | Timestamp when final stop was completed. |
+| 12 | **`delay_notes`** | `TEXT` | `YES` | `NULL` | *None* | Notes if driver reported traffic or breakdown via Tool 8. |
+| 13 | **`created_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Trip record creation timestamp. |
+| 14 | **`updated_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Last trip status update timestamp. |
+
+* **Indexes**: `PRIMARY KEY (trip_id)`, `INDEX idx_trip_driver_date (driver_phone, service_date, meal_window)`, `INDEX idx_trip_route_id (route_id)`.

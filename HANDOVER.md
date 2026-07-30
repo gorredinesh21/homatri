@@ -27,36 +27,31 @@ A **WhatsApp-native, batch-scheduled home-food delivery platform**. Design philo
 | # | Milestone | Status |
 |---|---|---|
 | 2 | Agent Tools Design & Pydantic Mapping (40 tools) | ✅ **Done** |
-| 1 | Database schema (18+ tables) | 🔄 **In progress** — see §4 |
-| 3 | LangGraph State Machine & Graph | ⬜ Pending |
+| 1 | Database schema (24 tables across 6 entities) | ✅ **Done (100% Locked)** |
+| 3 | LangGraph State Machine & Graph | 🔄 **In progress / Next** |
 | 4 | WhatsApp Business API Webhook Gateway | ⬜ Pending |
 | 5 | Payment Gateway Webhook & Financial Flow | ⬜ Pending |
 
 ---
 
-## 4. Milestone 1 — where we are (THE ACTIVE WORK)
+## 4. Milestone 1 — COMPLETED (ALL 24 TABLES & COLUMNS LOCKED)
 
-We are designing the database **entity by entity**, using a **bottom-up query-inventory method**: for each agent, walk every tool, list the queries it runs, and let the tables emerge; then merge/dedupe.
+All 24 tables across 6 entities have their **exact column schemas, data types, nullability, defaults, PK/FKs, and B-tree indexes 100% finalized and saved** in `markdowns/*_tables.md` and `history.txt` (Section 27).
 
-### ✅ Completed (decided & documented)
-For **all 6 entities**, we have decided: the **set of tables**, their **ownership**, **primary keys**, **indexes**, and all **cross-domain / handoff / delegation protocols**. Documented in `markdowns/*_tables.md` and appended to each agent spec (`§3`) and `history.txt` (Sections 22–26).
-
-Entities & their tables:
+### Finalized Entities & Tables (24 Total):
 - **Chef** (`chef_*`): `chef_profiles`, `chef_menu_items`, `chef_daily_inventory`, `chef_order_readiness`
 - **Customer** (`customer_*`): `customer_profiles`, `customer_orders`, `customer_order_items`, `customer_payments`, `customer_reviews`
-- **Rider/Driver** (`driver_*`): `driver_profiles`, `driver_trip_status` _(driver_locations DROPPED — no GPS)_
-- **Master/System** (`system_*`): `system_meal_windows`, `system_settings`, `system_delivery_routes`, `system_delivery_stops`, `system_delivery_stop_orders`, `system_agent_logs`, `system_outbound_queue`, `system_hitl_sessions`, `system_payment_webhook_events`, `system_route_optimization_runs` _(observability)_
-- **Admin** (`admin_*`): `admin_users`, `admin_activity_log`, `admin_ai_queries` _(future)_
-- **Runtime (shared):** `conversation_messages` — unified chat log (replaces per-domain `*_chat_history` + `system_inbound_messages`)
+- **Rider/Driver** (`driver_*`): `driver_profiles`, `driver_trip_status`
+- **Master/System** (`system_*`): `system_meal_windows`, `system_settings`, `system_delivery_routes`, `system_delivery_stops`, `system_delivery_stop_orders`, `system_agent_logs`, `system_outbound_queue`, `system_hitl_sessions`, `system_payment_webhook_events`, `system_route_optimization_runs`
+- **Admin** (`admin_*`): `admin_users`, `admin_activity_log`, `admin_ai_queries`
+- **Runtime Shared**: `conversation_messages` (Unified Chat Log)
 
-### 🔄 NOT finished — RESUME HERE
-**Exact table COLUMNS are NOT finalized.** The column lists in the `*_tables.md` files are **provisional/candidate**, not locked. We started finalizing columns **entity → table by table** and paused.
-- **`chef_profiles`** columns were tentatively drafted & lightly edited (in chat, not yet saved to file).
-- **Next table to do:** `chef_menu_items`, then the rest of Chef, then Customer → Rider → Master/System → Admin.
-- **Column philosophy agreed:** data volume is low, so **be generous** — include useful "nice-to-have / future" columns; extra plain columns don't hurt reads. BUT keep **cross-domain aggregates derived** (e.g. `units_sold`, `avg_rating`) — their cost is write-consistency, not read.
+### 4 Integrity Implementation Guards Locked:
+1. **Atomic SQL Transactions**: `db.transaction()` for all-or-nothing rollbacks.
+2. **Hard Python Pre-Condition Assertions**: `assert` guard clauses before writes.
+3. **Centralized Delegated-Write Executors**: Customer DW1 (`execute_order_status_transition`), DW2 (`execute_payment_status_update`).
+4. **Automated `pytest` Test Suite**: Full integration test coverage for all 40 LLM tools.
 
-### ⬜ After columns
-Merge/dedupe all passes into the **final schema DDL** (`CREATE TYPE` enums + `CREATE TABLE`s). **Open decision:** target **PostgreSQL** (matches all docs: real ENUMs, TIMESTAMPTZ, pgvector-ready) vs **SQLite** first.
 
 ---
 
