@@ -1,0 +1,1 @@
+"""Homaatri backend application package."""

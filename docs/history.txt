@@ -755,6 +755,62 @@ FILES CREATED / UPDATED:
 ALL 6 ENTITY PASSES DONE (Chef, Customer, Rider, Master/System, Admin + the runtime conversation_messages table).
 NEXT: MERGE/DEDUPE all passes into the final Milestone-1 schema (CREATE TYPE enums + CREATE TABLE DDL).
 
+--------------------------------------------------------------------------------
+[SECTION 29: MILESTONE 3 DESIGN — LANGGRAPH STATE MACHINE & GRAPH]
+--------------------------------------------------------------------------------
+
+DATE: 2026-07-31
+
+MILESTONE 3 (LangGraph runtime) DESIGNED — the "nervous system" wiring the 40 tools + 24 tables into a live,
+durable, multi-agent conversation. Full spec: `markdowns/langgraph_state_machine.md`. Designed as 5 pieces:
+
+PIECE 1 — STATE SCHEMA (`HomaatriGraphState`, 7 lean fields): messages (Annotated + add_messages reducer),
+  sender_phone, current_role, target_node, event_payload, active_order_id, current_input (structured inbound
+  {type,text,lat,lng,button_id}). PRINCIPLE: clipboard carries conversation + control-flow + identity + handoff ONLY;
+  all domain data read FRESH from Postgres inside nodes each turn (no stale copies on the clipboard).
+
+PIECE 2 — NODES (4): 3 specialist tool-loops (customer/chef/driver) + 1 master orchestrator. A node = fn(state)->state-update.
+  INNER TOOL-LOOP = OPTION B (custom ~12-line ReAct loop) LOCKED — NOT create_react_agent. Reason: need control for
+  Context Assembler, Guard-2 asserts, custom target_node/event_payload routing, interrupt() placement; uses only stable
+  low-level primitives (bind_tools/.invoke/.tool_calls/ToolMessage) => low framework lock-in; latency dominated by LLM calls
+  (loop mechanics negligible; B marginally leaner on checkpoints). Tool ISOLATION: each node binds ONLY its own agent's tools.
+  Master node = orchestrator (routes handoffs, runs delegated executors, HITL, system events), not a chatty specialist.
+
+  CONTEXT ASSEMBLER CONTRACT (every LLM call, user refinement): NEVER send bare current message. First fetch last 3-4
+  INBOUND (user) + last 3-4 OUTBOUND (agent) from conversation_messages for the phone (~6-8, both sides), merge + sort by
+  created_at, FORMAT WITH TIMESTAMPS + speaker (from direction/source), append current message, then send. Timestamps let
+  LLM reason about time (cutoff proximity); terse "yes"/"okay" resolves against the window. Escalation: default 3-4 each,
+  LLM may pull up to ~10 each if insufficient.
+
+PIECE 3 — ROUTER (edges): pattern "nodes decide, router dispatches". Single central conditional edge `route_by_target`
+  reads state.target_node -> next node or END. No node imports another node (zero circular imports). Safety: recursion_limit=10.
+
+PIECE 4 — CHECKPOINTER: AsyncPostgresSaver (matches Postgres + async FastAPI; MemorySaver for tests). thread_id = normalized
+  phone => per-user isolation + cross-turn memory + durability + HITL pause/resume. 3-WAY STATE OWNERSHIP (key decision):
+  (a) LangGraph checkpointer = live control-flow for pause/resume, kept lean (message context rebuilt per turn, not
+  accumulated); (b) conversation_messages = authoritative transcript + Context Assembler source; (c) system_hitl_sessions =
+  business HITL ledger + 15-min TTL. 15-MIN TTL + EXPIRY WORKER: interrupt() can hang forever if human ghosts; on pause stamp
+  expires_at + default_on_expiry; background worker polls WAITING+expired, resumes with safe default, marks EXPIRED (business
+  logic the generic checkpointer can't do -> why the table exists separately).
+
+PIECE 5 — ENTRY FLOW: 3 doors -> same graph. (A) WhatsApp inbound: normalize phone -> dedup+parse -> FRESH vs RESUME check
+  (pending interrupt? e.g. location pin / chef YES / payment => resume paused graph) -> resolve identity in entry_node
+  (chef_profiles? -> driver_profiles? -> customer_profiles? -> else UNKNOWN=new customer onboarding) -> run under
+  thread_id=phone. (B) Cutoff cron 12PM/7PM -> master_node (batch+route). (C) Payment webhook -> master_node -> resumes
+  customer PAYMENT_AWAIT_PROVIDER interrupt.
+
+USER DECISIONS LOCKED THIS SESSION: Postgres (not SQLite); Option B custom node loop (keep LangGraph at edges, pin version);
+  3-way state split; AsyncPostgresSaver; thread_id=phone; 15-min TTL worker; Context Assembler = both-sides timestamped window.
+
+FILES CREATED / UPDATED:
+- `markdowns/langgraph_state_machine.md` (NEW — full M3 design)
+- `docs/history.txt` (this Section 29)
+
+NOTE: M1 has finalized column schemas in markdown but NO executable schema.sql/ORM yet. M3 is DESIGNED (not coded).
+NEXT OPTIONS: (a) fix 3 minor inconsistencies (DRAFT_CART enum, IN_PROGRESS trip-status assertion, stale HANDOVER §8);
+  (b) write the actual code — scaffolding + schema.sql/models + normalize_phone + then the M3 graph; (c) design M4/M5.
+USER INTENT: start the agent/LLM (M3) code soon.
+
 
 
 

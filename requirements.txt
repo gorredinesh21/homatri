@@ -1,7 +1,37 @@
-langchain>=0.3.0
-langchain-google-vertexai>=2.1.0
-langchain-google-genai>=2.0.0
-pydantic>=2.0.0
-fastapi>=0.110.0
-uvicorn>=0.28.0
-pytest>=8.0.0
+# =============================================================================
+# Homaatri — Python dependencies (Python 3.13)
+# Human-readable intent. Exact resolved versions are pinned in requirements.lock.txt
+# Install:  pip install -r requirements.txt
+# =============================================================================
+
+# ---- LLM / Multi-Agent framework (LangGraph runtime) ----
+langgraph>=1.2,<2.0                     # the state-machine / graph runtime (M3) — major pinned (churn guard)
+langgraph-checkpoint-postgres>=3.1,<4.0 # AsyncPostgresSaver (durable HITL + per-user state)
+langchain-core>=1.5,<2.0                # tools (@tool), messages, bind_tools
+langchain-google-vertexai>=3.2,<4.0     # Gemini 3.6 Flash via GCP Vertex AI (ChatVertexAI)
+google-genai>=2.16                      # raw Google GenAI SDK (reference scripts)
+
+# ---- Observability ----
+langsmith>=0.2.0                        # tracing dashboard (LANGCHAIN_TRACING_V2)
+
+# ---- Web / API (WhatsApp + payment webhooks) ----
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+httpx>=0.28.0                           # outbound calls (Meta WhatsApp / payment gateway)
+python-multipart>=0.0.9                 # form / webhook parsing
+
+# ---- Database (PostgreSQL) ----
+sqlalchemy>=2.0.36                      # ORM / core (async)
+psycopg[binary,pool]>=3.2.0             # Postgres driver (used by SQLAlchemy + checkpointer)
+alembic>=1.14.0                         # schema migrations (git-versioned)
+
+# ---- Config ----
+pydantic>=2.10.0
+pydantic-settings>=2.7.0                # env-based config (per-environment DATABASE_URL)
+python-dotenv>=1.0.1
+
+# ---- Dev / Quality / Standardization ----
+ruff>=0.9.0                             # lint + format (black-compatible)
+pytest>=8.3.0
+pytest-asyncio>=0.25.0                  # async tests
+aiosqlite>=0.20                         # async SQLite driver (dev/test DB; Postgres in prod)
