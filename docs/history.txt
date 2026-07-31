@@ -806,10 +806,43 @@ FILES CREATED / UPDATED:
 - `markdowns/langgraph_state_machine.md` (NEW — full M3 design)
 - `docs/history.txt` (this Section 29)
 
-NOTE: M1 has finalized column schemas in markdown but NO executable schema.sql/ORM yet. M3 is DESIGNED (not coded).
-NEXT OPTIONS: (a) fix 3 minor inconsistencies (DRAFT_CART enum, IN_PROGRESS trip-status assertion, stale HANDOVER §8);
-  (b) write the actual code — scaffolding + schema.sql/models + normalize_phone + then the M3 graph; (c) design M4/M5.
-USER INTENT: start the agent/LLM (M3) code soon.
+--------------------------------------------------------------------------------
+[SECTION 30: POSTGRESQL 16 TRANSITION & 21 WRITE EXECUTORS IMPLEMENTATION (100% TEST PASS)]
+--------------------------------------------------------------------------------
+
+DATE: 2026-07-31
+
+1. SQLITE PURGED & POSTGRESQL 16 NATIVE ENVIRONMENT LOCKED:
+   - Removed `aiosqlite` dependency; enforced PostgreSQL via `asyncpg` / `psycopg`.
+   - Updated `app/core/config.py` and `app/db/session.py` to connect natively to PostgreSQL:
+     `postgresql+asyncpg://dinesh:homatri_pass@localhost:5432/homatri_db`.
+   - Created `docker-compose.yml` and `.env`; started local PostgreSQL 16 container (`homatri_postgres`).
+   - Executed `scripts/create_db.py` — ALL 24 TABLES SUCCESSFULLY CREATED IN LIVE POSTGRESQL 16!
+
+2. ALL 21 WRITE EXECUTORS IMPLEMENTED & LOCKED (`app/executors/`):
+   - Category 1 (Chef Domain - 3): `execute_daily_capacity_upsert`, `execute_dish_stock_toggle`, `execute_order_readiness_record`.
+   - Category 2 (Customer Domain & Delegated DW1/DW2 - 7): `execute_customer_registration_and_location`,
+     `execute_customer_order_initialization`, `execute_add_item_to_order`, `execute_payment_record_creation`,
+     `execute_submit_order_review`, DW1 `execute_order_status_transition`, DW2 `execute_payment_status_update`.
+   - Category 3 (Driver Domain - 3): `execute_driver_profile_upsert`, `execute_driver_trip_initialization`, `execute_driver_trip_phase_update`.
+   - Category 4 (Master / System & Shared Runtime - 8): `execute_meal_window_lock_and_creation`,
+     `execute_cutoff_batch_lock_and_routes_creation`, `execute_stop_status_update`, `execute_hitl_session_create_or_resume`,
+     `execute_payment_webhook_idempotency_log`, `execute_outbound_whatsapp_enqueue`, `execute_conversation_message_insert`, `execute_system_audit_log`.
+
+3. AUTOMATED INTEGRATION TEST SUITE (100% PASSING ON POSTGRESQL 16):
+   - Created `tests/conftest.py` with `NullPool` asyncpg fixtures for clean event-loop test isolation.
+   - Ran `pytest` suite — 16/16 tests passed cleanly in 26.53s (`test_chef_executors.py`, `test_customer_executors.py`,
+     `test_driver_executors.py`, `test_master_executors.py`).
+
+FILES CREATED / UPDATED:
+- `markdowns/executors.md` (NEW — Master Specification for all 21 Write Executors)
+- `app/executors/chef.py`, `customer.py`, `driver.py`, `master.py` (ALL 21 EXECUTORS IMPLEMENTED)
+- `tests/conftest.py`, `test_chef_executors.py`, `test_customer_executors.py`, `test_driver_executors.py`, `test_master_executors.py` (FULL TEST SUITE)
+- `docker-compose.yml`, `scripts/create_db.py`, `.env` (POSTGRESQL SETUP)
+- `docs/history.txt` (this Section 30)
+
+NEXT STEP: Implement the 40 LLM Tools (`app/tools/`) wrapping these 21 executors with Guard 2 Pre-Condition Assertions.
+
 
 
 
