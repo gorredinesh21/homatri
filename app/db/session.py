@@ -14,17 +14,16 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
 
-# SQLite in-memory needs StaticPool so all connections share ONE in-memory DB.
-if settings.is_sqlite:
-    engine = create_async_engine(
-        settings.database_url,
-        poolclass=StaticPool,
-        connect_args={"check_same_thread": False},
-    )
-else:
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True)
+# PostgreSQL async engine
+engine = create_async_engine(
+    settings.database_url,
+    pool_pre_ping=True,
+    pool_size=10,
+    max_overflow=20,
+)
 
 SessionFactory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
 
 
 @asynccontextmanager

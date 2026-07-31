@@ -34,4 +34,5 @@ python-dotenv>=1.0.1
 ruff>=0.9.0                             # lint + format (black-compatible)
 pytest>=8.3.0
 pytest-asyncio>=0.25.0                  # async tests
-aiosqlite>=0.20                         # async SQLite driver (dev/test DB; Postgres in prod)
+asyncpg>=0.29.0                         # async PostgreSQL driver
+

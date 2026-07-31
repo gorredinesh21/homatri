@@ -1,11 +1,7 @@
 """Application configuration — 100% env-driven (12-factor, cloud-friendly).
 
-Locally (office laptop) DATABASE_URL defaults to in-memory SQLite, so nothing
-needs to be installed. On the deploy machine, set DATABASE_URL to Postgres:
-
-    DATABASE_URL=postgresql+psycopg://user:pass@host:5432/homatri
-
-Everything else is read from the environment / a local .env file.
+Locally and in production, DATABASE_URL uses PostgreSQL via asyncpg/psycopg:
+    DATABASE_URL=postgresql+asyncpg://dinesh:homatri_pass@localhost:5432/homatri_db
 """
 
 from __future__ import annotations
@@ -21,8 +17,8 @@ class Settings(BaseSettings):
         case_sensitive=False,
     )
 
-    # ---- Database (swap this ONE value for Postgres on the deploy machine) ----
-    database_url: str = "sqlite+aiosqlite:///:memory:"
+    # ---- Database (PostgreSQL) ----
+    database_url: str = "postgresql+asyncpg://dinesh:homatri_pass@localhost:5432/homatri_db"
 
     # ---- LangSmith observability ----
     langchain_tracing_v2: bool = False
@@ -37,9 +33,6 @@ class Settings(BaseSettings):
     # ---- Business config fallbacks (authoritative values live in system_settings) ----
     default_delivery_fee: float = 30.00
 
-    @property
-    def is_sqlite(self) -> bool:
-        return self.database_url.startswith("sqlite")
-
 
 settings = Settings()
+
