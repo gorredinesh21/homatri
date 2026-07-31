@@ -38,6 +38,10 @@ def new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
+generate_id = new_id
+
+
 def id_factory(prefix: str):
     """Return a zero-arg callable for use as a SQLAlchemy column default."""
     return lambda: new_id(prefix)
+
