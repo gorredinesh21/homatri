@@ -119,7 +119,7 @@ This document contains the 100% finalized production SQL column schemas, data ty
 | 3 | **`chef_phone`** | `VARCHAR(15)` | `NOT NULL` | *None* | `FK(chef_profiles)`, B-Tree Index | Chef who cooked and packed this order. |
 | 4 | **`status`** | `VARCHAR(20)` | `NOT NULL` | `'PACKED_READY'` | B-Tree Index | Readiness status: `'PREPARING'`, `'PACKED_READY'`. |
 | 5 | **`packed_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Exact timestamp when food box was sealed. |
-| 6 | **`box_count`** | `INTEGER` | `YES` | `1` | *None* | Number of food containers/boxes packed for this order. |
+| 6 | **`box_count`** | `INTEGER` | `YES` | `NULL` | *None* | Number of food containers/boxes packed for this order (optional). |
 | 7 | **`special_packing_notes`**| `TEXT` | `YES` | `NULL` | *None* | Optional chef packing note (e.g. "Sauce packed separately"). |
 | 8 | **`driver_notified`** | `BOOLEAN` | `NOT NULL` | `true` | *None* | Audit flag confirming Master Agent relayed alert to driver. |
 | 9 | **`created_at`** | `TIMESTAMPTZ` | `NOT NULL` | `CURRENT_TIMESTAMP` | *None* | Record creation timestamp. |

@@ -103,6 +103,6 @@ class ChefOrderReadiness(Base):
     )
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="PACKED_READY", index=True)
     packed_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
-    box_count: Mapped[int | None] = mapped_column(Integer, default=1)
+    box_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     special_packing_notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())

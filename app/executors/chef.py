@@ -76,7 +76,7 @@ async def execute_order_readiness_record(
     *,
     order_id: str,
     chef_phone: str,
-    box_count: int = 1,
+    box_count: int | None = None,
     special_packing_notes: str | None = None,
 ) -> ChefOrderReadiness:
     """Executor #3 — record food packed & ready (PACKED_READY + packed_at)."""
