@@ -40,11 +40,11 @@ async def execute_customer_registration_and_location(
     latitude: float | None = None,
     longitude: float | None = None,
     dietary_preference: str = "VEG",
+    is_registered: bool = True,
 ) -> CustomerProfile:
     """Executor #1 — Register a customer profile or update location coordinates.
 
     Idempotent: Inserts if phone doesn't exist; updates address/location if exists.
-    Sets is_registered = True when location/address is provided.
     """
     profile = await session.get(CustomerProfile, customer_phone)
 
@@ -61,7 +61,7 @@ async def execute_customer_registration_and_location(
             latitude=Decimal(str(latitude)) if latitude is not None else None,
             longitude=Decimal(str(longitude)) if longitude is not None else None,
             dietary_preference=dietary_preference,
-            is_registered=True,
+            is_registered=is_registered,
         )
         session.add(profile)
     else:
@@ -78,7 +78,8 @@ async def execute_customer_registration_and_location(
         if longitude is not None:
             profile.longitude = Decimal(str(longitude))
         profile.dietary_preference = dietary_preference
-        profile.is_registered = True
+        profile.is_registered = is_registered
+
 
     await session.flush()
     return profile
