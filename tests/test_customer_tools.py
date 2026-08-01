@@ -5,6 +5,7 @@ from __future__ import annotations
 from decimal import Decimal
 import pytest
 
+from app.core.exceptions import LocationInterrupt
 from app.models.customer import CustomerProfile
 from app.tools import customer_tools
 
@@ -38,8 +39,8 @@ async def test_get_customer_profile_registered_and_unregistered(db_session):
     assert reg["latitude"] == 17.445
 
 
-async def test_unified_register_customer_profile_atomic_and_two_phase(db_session):
-    # Scenario A: Atomic 1-step registration (text address + location pin provided at once)
+async def test_register_customer_profile_with_direct_lat_lng(db_session):
+    # Direct registration (name, address, lat, lng provided at once)
     p_atomic = await customer_tools.register_customer_profile(
         db_session,
         customer_phone="9333333333",
@@ -51,22 +52,18 @@ async def test_unified_register_customer_profile_atomic_and_two_phase(db_session
     assert p_atomic.is_registered is True
     assert float(p_atomic.latitude) == 17.4400
 
-    # Scenario B: 2-Phase registration (Step 1: text address -> Step 2: location pin attachment)
-    p_step1 = await customer_tools.register_customer_profile(
-        db_session,
-        customer_phone="9444444444",
-        name="Phase Customer",
-        delivery_address="Flat 202, My Home Krishe",
-    )
-    assert p_step1.is_registered is False
-    assert p_step1.latitude is None
 
-    # Step 2: Attach location pin via unified tool
-    p_step2 = await customer_tools.register_customer_profile(
-        db_session,
-        customer_phone="9444444444",
-        latitude=17.4480,
-        longitude=78.3810,
-    )
-    assert p_step2.is_registered is True
-    assert float(p_step2.latitude) == 17.4480
+async def test_register_customer_profile_triggers_location_agent_interrupt(db_session):
+    # When lat/lng are missing, register_customer_profile calls location agent routine inside function,
+    # which enqueues WhatsApp prompt and raises LocationInterrupt to pause and wait for location pin.
+    with pytest.raises(LocationInterrupt) as exc_info:
+        await customer_tools.register_customer_profile(
+            db_session,
+            customer_phone="9444444444",
+            name="Interrupt Customer",
+            delivery_address="Flat 202, My Home Krishe",
+        )
+    
+    interrupt_payload = exc_info.value.payload
+    assert interrupt_payload["interrupt_type"] == "AWAIT_LOCATION_PIN"
+    assert interrupt_payload["customer_phone"] == "9444444444"

@@ -2,7 +2,7 @@
 
 Encapsulates Customer Concierge Agent tools with Guard 2 Pre-Condition Assertions.
 Tool 1: get_customer_profile_tool (Read-only, Same Domain).
-Tool 2: register_customer_profile_tool (Unified Registration & Location Pin Tool, Write Executor #4).
+Tool 2: register_customer_profile_tool (Self-contained Registration & Location Agent Flow).
 """
 
 from __future__ import annotations
@@ -14,7 +14,9 @@ from langchain_core.tools import tool
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.exceptions import LocationInterrupt
 from app.executors.customer import execute_customer_registration_and_location
+from app.executors.master import execute_conversation_message_insert, execute_outbound_whatsapp_enqueue
 from app.models.customer import CustomerProfile
 
 
@@ -86,19 +88,61 @@ async def get_customer_profile_tool(customer_phone: str) -> str:
 
 
 # =============================================================================
-# TOOL 2: register_customer_profile_tool (Unified Registration & Location Pin Tool)
+# LOCATION REQUEST AGENT ROUTINE (Called inside register_customer_profile)
+# =============================================================================
+async def request_and_await_location_pin_agent(
+    session: AsyncSession,
+    customer_phone: str,
+    customer_name: str,
+    delivery_address: str,
+) -> tuple[float, float]:
+    """Agent routine called inside registration tool to ask customer on WhatsApp and retrieve Location Pin."""
+    prompt_text = (
+        f"Thanks {customer_name}! Your delivery address ({delivery_address}) has been received. "
+        f"To complete your registration and see home kitchens near you, please tap the attachment clip on WhatsApp and share your live Location Pin."
+    )
+
+    # 1. Agent routine sends WhatsApp message asking for Location Pin
+    await execute_outbound_whatsapp_enqueue(
+        session,
+        recipient_phone=customer_phone,
+        recipient_role="CUSTOMER",
+        message_text=prompt_text,
+    )
+    await execute_conversation_message_insert(
+        session,
+        phone=customer_phone,
+        actor_role="CUSTOMER",
+        direction="OUTBOUND",
+        source="LOCATION_AGENT_ROUTINE",
+        message_text=prompt_text,
+    )
+
+    # 2. Agent routine raises LocationInterrupt to pause execution until location attachment is received
+    raise LocationInterrupt(
+        message=f"Awaiting Location Pin attachment from customer {customer_phone}",
+        payload={
+            "interrupt_type": "AWAIT_LOCATION_PIN",
+            "customer_phone": customer_phone,
+            "prompt": prompt_text,
+        },
+    )
+
+
+# =============================================================================
+# TOOL 2: register_customer_profile_tool
 # =============================================================================
 class RegisterCustomerProfileInput(BaseModel):
     customer_phone: str = Field(
         ...,
         description="Normalized 10-digit phone number of the customer (e.g. '9111111111')",
     )
-    name: Optional[str] = Field(
-        default=None,
+    name: str = Field(
+        ...,
         description="Customer's full name (e.g. 'Dinesh')",
     )
-    delivery_address: Optional[str] = Field(
-        default=None,
+    delivery_address: str = Field(
+        ...,
         description="Full street address (e.g. 'Flat 301, My Home Bhooja, Hitech City')",
     )
     apartment_name: Optional[str] = Field(
@@ -119,11 +163,11 @@ class RegisterCustomerProfileInput(BaseModel):
     )
     latitude: Optional[float] = Field(
         default=None,
-        description="GPS Latitude coordinate from WhatsApp location attachment (e.g. 17.4450)",
+        description="GPS Latitude if already provided (otherwise agent routine will request via WhatsApp)",
     )
     longitude: Optional[float] = Field(
         default=None,
-        description="GPS Longitude coordinate from WhatsApp location attachment (e.g. 78.3800)",
+        description="GPS Longitude if already provided (otherwise agent routine will request via WhatsApp)",
     )
     dietary_preference: Optional[str] = Field(
         default="VEG",
@@ -135,8 +179,8 @@ async def register_customer_profile(
     session: AsyncSession,
     *,
     customer_phone: str,
-    name: str | None = None,
-    delivery_address: str | None = None,
+    name: str,
+    delivery_address: str,
     apartment_name: str | None = None,
     flat_number: str | None = None,
     landmark: str | None = None,
@@ -145,51 +189,44 @@ async def register_customer_profile(
     longitude: float | None = None,
     dietary_preference: str | None = "VEG",
 ) -> CustomerProfile:
-    """Unified registration executor with Guard 2 Pre-Condition Assertions.
+    """Unified registration tool with Guard 2 Pre-Condition Assertions.
 
-    If lat/lng provided, sets is_registered = True in a single atomic write.
-    If lat/lng missing, saves text details with is_registered = False until location pin is received.
+    If lat/lng are missing, calls location agent routine inside function to request & await location pin.
+    Once location is retrieved, performs a single complete registration insert with is_registered = True!
     """
-    assert customer_phone and len(customer_phone) >= 10, f"Invalid customer phone number: {customer_phone}"
-
-    existing = await session.get(CustomerProfile, customer_phone)
-    if existing is None:
-        assert name and len(name.strip()) >= 2, f"Customer name required and must be >= 2 chars, got '{name}'"
-        assert delivery_address and len(delivery_address.strip()) >= 5, (
-            f"Delivery address required and must be >= 5 chars, got '{delivery_address}'"
-        )
-        final_name = name.strip()
-        final_address = delivery_address.strip()
-    else:
-        final_name = name.strip() if name else existing.name
-        final_address = delivery_address.strip() if delivery_address else existing.delivery_address
-
-    if latitude is not None:
-        assert -90.0 <= latitude <= 90.0, f"Invalid latitude: {latitude}"
-    if longitude is not None:
-        assert -180.0 <= longitude <= 180.0, f"Invalid longitude: {longitude}"
+    assert name and len(name.strip()) >= 2, f"Customer name must be >= 2 chars, got '{name}'"
+    assert delivery_address and len(delivery_address.strip()) >= 5, (
+        f"Delivery address must be >= 5 chars, got '{delivery_address}'"
+    )
     if dietary_preference:
         assert dietary_preference in {"VEG", "NON_VEG", "BOTH"}, f"Invalid dietary preference: {dietary_preference}"
 
-    # Determine registration status: True ONLY if lat & lng are both saved
-    has_location = (
-        (latitude is not None and longitude is not None)
-        or (existing is not None and existing.latitude is not None and existing.longitude is not None)
-    )
+    # If latitude or longitude are missing, call Location Agent Routine INSIDE the function!
+    if latitude is None or longitude is None:
+        latitude, longitude = await request_and_await_location_pin_agent(
+            session,
+            customer_phone=customer_phone,
+            customer_name=name.strip(),
+            delivery_address=delivery_address.strip(),
+        )
 
+    assert -90.0 <= latitude <= 90.0, f"Invalid latitude: {latitude}"
+    assert -180.0 <= longitude <= 180.0, f"Invalid longitude: {longitude}"
+
+    # Complete single registration write with is_registered = True!
     profile = await execute_customer_registration_and_location(
         session,
         customer_phone=customer_phone,
-        name=final_name,
-        delivery_address=final_address,
-        apartment_name=apartment_name if apartment_name is not None else (existing.apartment_name if existing else None),
-        flat_number=flat_number if flat_number is not None else (existing.flat_number if existing else None),
-        landmark=landmark if landmark is not None else (existing.landmark if existing else None),
-        city=city or (existing.city if existing else "Hyderabad"),
-        latitude=latitude if latitude is not None else (float(existing.latitude) if existing and existing.latitude is not None else None),
-        longitude=longitude if longitude is not None else (float(existing.longitude) if existing and existing.longitude is not None else None),
-        dietary_preference=dietary_preference or (existing.dietary_preference if existing else "VEG"),
-        is_registered=has_location,
+        name=name.strip(),
+        delivery_address=delivery_address.strip(),
+        apartment_name=apartment_name,
+        flat_number=flat_number,
+        landmark=landmark,
+        city=city or "Hyderabad",
+        latitude=latitude,
+        longitude=longitude,
+        dietary_preference=dietary_preference or "VEG",
+        is_registered=True,
     )
     return profile
 
@@ -197,8 +234,8 @@ async def register_customer_profile(
 @tool("register_customer_profile_tool", args_schema=RegisterCustomerProfileInput)
 async def register_customer_profile_tool(
     customer_phone: str,
-    name: Optional[str] = None,
-    delivery_address: Optional[str] = None,
+    name: str,
+    delivery_address: str,
     apartment_name: Optional[str] = None,
     flat_number: Optional[str] = None,
     landmark: Optional[str] = None,
@@ -207,7 +244,7 @@ async def register_customer_profile_tool(
     longitude: Optional[float] = None,
     dietary_preference: Optional[str] = "VEG",
 ) -> str:
-    """Register a new customer or update address and location pin details in a single unified tool."""
+    """Register a new customer profile. If location pin is missing, calls location agent routine inside function to request & receive pin."""
     from app.db.session import transaction
 
     async with transaction() as session:
@@ -224,18 +261,9 @@ async def register_customer_profile_tool(
             longitude=longitude,
             dietary_preference=dietary_preference,
         )
-
-        if profile.is_registered:
-            return (
-                f"Registration COMPLETE for {profile.name} ({profile.customer_phone})!\n"
-                f"Delivery Address: {profile.delivery_address}\n"
-                f"Location Pin: Saved (Lat {profile.latitude}, Lng {profile.longitude}).\n"
-                f"Ready to discover home kitchens near you!"
-            )
-        else:
-            return (
-                f"Profile details saved for {profile.name} ({profile.customer_phone}).\n"
-                f"Status: PENDING_LOCATION_PIN.\n"
-                f"Prompt Message to Customer: \"Thanks {profile.name}! Your delivery address ({profile.delivery_address}) is saved. "
-                f"To complete registration and find home kitchens near you, please tap the attachment clip on WhatsApp and share your live Location Pin.\""
-            )
+        return (
+            f"Registration COMPLETE for {profile.name} ({profile.customer_phone})!\n"
+            f"Delivery Address: {profile.delivery_address}\n"
+            f"Location Pin: Saved (Lat {profile.latitude}, Lng {profile.longitude}).\n"
+            f"Ready to discover home kitchens near you!"
+        )
