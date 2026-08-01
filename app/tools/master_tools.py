@@ -2,19 +2,24 @@
 
 Encapsulates Master Orchestrator & System Shared Tools with Guard 2 Pre-Condition Assertions.
 Tool 1: dispatch_whatsapp_outbound_message_tool (Write Executor #20, System Shared Outbound Messaging Tool).
+Tool 2: get_master_kitchen_availability_summary_tool (Read-only, Same Domain).
+Tool 3: get_master_order_pipeline_summary_tool (Read-only, Same Domain).
 """
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Optional
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.executors.master import execute_conversation_message_insert, execute_outbound_whatsapp_enqueue
+from app.models.chef import ChefDailyInventory, ChefMenuItem, ChefProfile
+from app.models.customer import CustomerOrder
 from app.models.system import SystemOutboundQueue
-
 
 
 # =============================================================================
@@ -84,9 +89,9 @@ async def dispatch_whatsapp_outbound_message_tool(
     related_order_id: Optional[str] = None,
 ) -> str:
     """Dispatch an outbound WhatsApp message to any customer, chef, or driver and log it in the chat ledger."""
-    from app.db.session import transaction
+    from app.db.session import SessionFactory
 
-    async with transaction() as session:
+    async with SessionFactory() as session:
         outbound = await dispatch_whatsapp_outbound_message(
             session,
             recipient_phone=recipient_phone,
@@ -97,4 +102,183 @@ async def dispatch_whatsapp_outbound_message_tool(
         return (
             f"Successfully queued outbound WhatsApp message [{outbound.message_id}] for {recipient_role} ({recipient_phone}):\n"
             f"\"{outbound.message_text}\""
+        )
+
+
+# =============================================================================
+# TOOL 2: get_master_kitchen_availability_summary_tool
+# =============================================================================
+class GetMasterKitchenAvailabilityInput(BaseModel):
+    service_date: Optional[str] = Field(
+        default=None,
+        description="Optional service date in ISO format YYYY-MM-DD (e.g. '2026-08-01')",
+    )
+    meal_window: Optional[str] = Field(
+        default=None,
+        description="Optional meal window: 'LUNCH' or 'DINNER'",
+    )
+
+
+async def get_master_kitchen_availability_summary(
+    session: AsyncSession,
+    *,
+    service_date: str | None = None,
+    meal_window: str | None = None,
+) -> dict[str, Any]:
+    """Retrieve platform-wide active kitchen, menu item, and inventory metrics with Guard 2 Assertions."""
+    if meal_window:
+        assert meal_window in {"LUNCH", "DINNER"}, f"Invalid meal window: '{meal_window}'. Must be LUNCH or DINNER"
+
+    # 1. Query total and active kitchen counts
+    stmt_total_chefs = select(func.count(ChefProfile.chef_phone))
+    total_chefs = (await session.execute(stmt_total_chefs)).scalar_one() or 0
+
+    stmt_active_chefs = select(func.count(ChefProfile.chef_phone)).where(ChefProfile.active_status.is_(True))
+    active_chefs = (await session.execute(stmt_active_chefs)).scalar_one() or 0
+
+    # 2. Query menu item count
+    stmt_items = select(func.count(ChefMenuItem.menu_item_id)).where(ChefMenuItem.is_available.is_(True))
+    if meal_window:
+        stmt_items = stmt_items.where(ChefMenuItem.meal_type.in_([meal_window, "BOTH"]))
+    active_menu_items = (await session.execute(stmt_items)).scalar_one() or 0
+
+    # 3. Query inventory totals if service_date provided
+    total_portions_capacity = 0
+    remaining_portions_capacity = 0
+    if service_date:
+        date_obj = date.fromisoformat(service_date)
+        stmt_inv = select(
+            func.sum(ChefDailyInventory.allocated_quantity),
+            func.sum(ChefDailyInventory.remaining_quantity),
+        ).where(ChefDailyInventory.service_date == date_obj)
+        if meal_window:
+            stmt_inv = stmt_inv.where(ChefDailyInventory.meal_window == meal_window)
+
+        res_inv = (await session.execute(stmt_inv)).first()
+        if res_inv and res_inv[0] is not None:
+            total_portions_capacity = int(res_inv[0])
+            remaining_portions_capacity = int(res_inv[1])
+
+    return {
+        "total_kitchens": total_chefs,
+        "active_kitchens": active_chefs,
+        "active_menu_items": active_menu_items,
+        "service_date": service_date,
+        "meal_window": meal_window,
+        "total_portions_capacity": total_portions_capacity,
+        "remaining_portions_capacity": remaining_portions_capacity,
+    }
+
+
+@tool("get_master_kitchen_availability_summary_tool", args_schema=GetMasterKitchenAvailabilityInput)
+async def get_master_kitchen_availability_summary_tool(
+    service_date: Optional[str] = None,
+    meal_window: Optional[str] = None,
+) -> str:
+    """Retrieve platform-wide active home kitchen metrics, dish counts, and daily portion capacity summaries."""
+    from app.db.session import SessionFactory
+
+    async with SessionFactory() as session:
+        data = await get_master_kitchen_availability_summary(
+            session,
+            service_date=service_date,
+            meal_window=meal_window,
+        )
+
+        filter_str = f" for {data['service_date'] or 'Today'} ({data['meal_window'] or 'All Windows'})"
+        inv_str = (
+            f"Portion Capacity: {data['remaining_portions_capacity']} / {data['total_portions_capacity']} portions remaining\n"
+            if data["service_date"]
+            else ""
+        )
+
+        return (
+            f"Platform Kitchen Availability Summary{filter_str}:\n"
+            f"Active Kitchens: {data['active_kitchens']} / {data['total_kitchens']} registered\n"
+            f"Active Dishes Available: {data['active_menu_items']} items\n"
+            f"{inv_str}"
+        )
+
+
+# =============================================================================
+# TOOL 3: get_master_order_pipeline_summary_tool
+# =============================================================================
+class GetMasterOrderPipelineSummaryInput(BaseModel):
+    service_date: Optional[str] = Field(
+        default=None,
+        description="Optional service date in ISO format YYYY-MM-DD (e.g. '2026-08-01')",
+    )
+    meal_window: Optional[str] = Field(
+        default=None,
+        description="Optional meal window: 'LUNCH' or 'DINNER'",
+    )
+
+
+async def get_master_order_pipeline_summary(
+    session: AsyncSession,
+    *,
+    service_date: str | None = None,
+    meal_window: str | None = None,
+) -> dict[str, Any]:
+    """Retrieve order volume breakdown and GMV revenue pipeline metrics with Guard 2 Assertions."""
+    if meal_window:
+        assert meal_window in {"LUNCH", "DINNER"}, f"Invalid meal window: '{meal_window}'. Must be LUNCH or DINNER"
+
+    stmt = select(
+        CustomerOrder.status,
+        func.count(CustomerOrder.order_id),
+        func.sum(CustomerOrder.total_amount),
+    )
+
+    if service_date:
+        date_obj = date.fromisoformat(service_date)
+        stmt = stmt.where(CustomerOrder.service_date == date_obj)
+    if meal_window:
+        stmt = stmt.where(CustomerOrder.meal_window == meal_window)
+
+    stmt = stmt.group_by(CustomerOrder.status)
+    rows = (await session.execute(stmt)).all()
+
+    status_counts = {}
+    total_pipeline_orders = 0
+    total_pipeline_gmv = 0.0
+
+    for status_name, count_val, gmv_val in rows:
+        status_counts[status_name] = count_val
+        total_pipeline_orders += count_val
+        if gmv_val is not None:
+            total_pipeline_gmv += float(gmv_val)
+
+    return {
+        "service_date": service_date,
+        "meal_window": meal_window,
+        "total_orders": total_pipeline_orders,
+        "total_gmv": round(total_pipeline_gmv, 2),
+        "by_status": status_counts,
+    }
+
+
+@tool("get_master_order_pipeline_summary_tool", args_schema=GetMasterOrderPipelineSummaryInput)
+async def get_master_order_pipeline_summary_tool(
+    service_date: Optional[str] = None,
+    meal_window: Optional[str] = None,
+) -> str:
+    """Retrieve platform-wide order volume breakdown by status and gross merchandise value (GMV) revenue."""
+    from app.db.session import SessionFactory
+
+    async with SessionFactory() as session:
+        data = await get_master_order_pipeline_summary(
+            session,
+            service_date=service_date,
+            meal_window=meal_window,
+        )
+
+        filter_str = f" for {data['service_date'] or 'All Dates'} ({data['meal_window'] or 'All Windows'})"
+        breakdown_text = "\n".join(f"  - {status}: {count} orders" for status, count in data["by_status"].items())
+
+        return (
+            f"Platform Order Pipeline Summary{filter_str}:\n"
+            f"Total Orders: {data['total_orders']}\n"
+            f"Total Pipeline GMV: ₹{data['total_gmv']:.2f}\n"
+            f"Status Breakdown:\n{breakdown_text or '  - No orders in pipeline'}"
         )
