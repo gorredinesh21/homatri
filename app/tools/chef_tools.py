@@ -12,7 +12,8 @@ Tool 7: get_chef_earnings_summary_tool (Read-only, Same Domain).
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
+
 from decimal import Decimal
 from typing import Any, Optional
 
@@ -22,8 +23,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.executors.chef import execute_daily_capacity_upsert, execute_dish_stock_toggle, execute_order_readiness_record
+from app.executors.master import execute_conversation_message_insert, execute_outbound_whatsapp_enqueue
 from app.models.chef import ChefDailyInventory, ChefMenuItem, ChefOrderReadiness, ChefProfile
 from app.models.customer import CustomerOrder, CustomerOrderItem
+
 
 
 # =============================================================================
@@ -582,3 +585,466 @@ async def get_chef_earnings_summary_tool(
             f"Kitchen Gross Earnings: ₹{data['total_revenue']:.2f}\n"
             f"Average Order Value: ₹{data['average_order_value']:.2f}"
         )
+
+
+# =============================================================================
+# TOOL 8: relay_order_ready_to_driver_tool
+# =============================================================================
+class RelayOrderReadyToDriverInput(BaseModel):
+    chef_phone: str = Field(
+        ...,
+        description="Normalized 10-digit phone number of home chef (e.g. '9876543210')",
+    )
+    order_id: str = Field(
+        ...,
+        description="Target CustomerOrder ID (e.g. 'ord_123456')",
+    )
+    packed_containers_count: int = Field(
+        ...,
+        description="Total count of packed tiffin containers (e.g. 3)",
+    )
+    special_notes: Optional[str] = Field(
+        default=None,
+        description="Handover instructions for driver (e.g. 'Hot rasam packed separately in thermal pouch')",
+    )
+
+
+async def relay_order_ready_to_driver(
+    session: AsyncSession,
+    *,
+    chef_phone: str,
+    order_id: str,
+    packed_containers_count: int,
+    special_notes: str | None = None,
+) -> dict[str, Any]:
+    """Transition order status to PACKED via DW1, locate assigned driver, and enqueue WhatsApp alerts to Driver & Customer."""
+    assert chef_phone and len(chef_phone) >= 10, f"Invalid chef_phone: {chef_phone}"
+    assert order_id, "order_id cannot be empty"
+    assert packed_containers_count >= 1, f"packed_containers_count must be at least 1, got {packed_containers_count}"
+
+    order = await session.get(CustomerOrder, order_id)
+    assert order is not None, f"Order not found: {order_id}"
+    assert order.chef_phone == chef_phone, f"Order {order_id} belongs to chef {order.chef_phone}, not chef {chef_phone}"
+    assert order.status in {"CONFIRMED", "BATCHED", "COOKING"}, f"Cannot mark order ready in status '{order.status}'"
+
+    # 1. Transition Order Status to PACKED via Delegated Executor DW1
+    from app.executors.customer import execute_order_status_transition
+
+    await execute_order_status_transition(
+        session,
+        order_id=order_id,
+        target_status="PACKED",
+        actor_role="CHEF",
+        reason=f"Chef marked ready with {packed_containers_count} packed containers",
+    )
+
+    # 2. Locate Assigned Driver on Delivery Route via SystemDeliveryStopOrder
+    from app.models.system import SystemDeliveryRoute, SystemDeliveryStop, SystemDeliveryStopOrder
+
+    stmt_stop_order = select(SystemDeliveryStopOrder.stop_id).where(
+        SystemDeliveryStopOrder.order_id == order_id
+    )
+    stop_id = (await session.execute(stmt_stop_order)).scalar_one_or_none()
+
+    driver_phone = None
+    driver_notified = False
+
+    if stop_id:
+        stop = await session.get(SystemDeliveryStop, stop_id)
+        if stop and stop.route_id:
+            route = await session.get(SystemDeliveryRoute, stop.route_id)
+            if route and route.driver_phone:
+                driver_phone = route.driver_phone
+
+
+    # 3. Enqueue Outbound WhatsApp Alert to Driver (if assigned)
+    notes_str = f" Handover note: \"{special_notes.strip()}\"." if special_notes else ""
+    if driver_phone:
+        driver_msg = (
+            f"🍱 ORDER PACKED & READY FOR PICKUP!\n"
+            f"Kitchen: {order.kitchen_name} ({chef_phone})\n"
+            f"Order #{order_id} ({packed_containers_count} containers).{notes_str}\n"
+            f"Please proceed for pickup."
+        )
+        await execute_outbound_whatsapp_enqueue(
+            session,
+            recipient_phone=driver_phone,
+            recipient_role="DRIVER",
+            message_text=driver_msg,
+        )
+        await execute_conversation_message_insert(
+            session,
+            phone=driver_phone,
+            actor_role="DRIVER",
+            direction="OUTBOUND",
+            source="SYSTEM_ALERT",
+            message_text=driver_msg,
+        )
+        driver_notified = True
+
+    # 4. Enqueue Outbound WhatsApp Notice to Customer
+    cust_msg = (
+        f"👩‍🍳 YOUR MEAL IS FRESHLY PACKED!\n"
+        f"Chef ({order.kitchen_name}) has packed your order ({packed_containers_count} containers).\n"
+        f"Order #{order_id} is ready and your delivery driver is on the way!"
+    )
+    await execute_outbound_whatsapp_enqueue(
+        session,
+        recipient_phone=order.customer_phone,
+        recipient_role="CUSTOMER",
+        message_text=cust_msg,
+    )
+    await execute_conversation_message_insert(
+        session,
+        phone=order.customer_phone,
+        actor_role="CUSTOMER",
+        direction="OUTBOUND",
+        source="SYSTEM_ALERT",
+        message_text=cust_msg,
+    )
+
+    # 5. Record Audit Event via Master Executor #8
+    from app.executors.master import execute_system_audit_log
+
+    await execute_system_audit_log(
+        session,
+        event_type="ORDER_PACKED_READY",
+        source_role="CHEF",
+        target_role="DRIVER" if driver_phone else "SYSTEM",
+        payload={
+            "order_id": order_id,
+            "chef_phone": chef_phone,
+            "packed_containers_count": packed_containers_count,
+            "driver_phone": driver_phone,
+            "driver_notified": driver_notified,
+        },
+        severity="INFO",
+    )
+
+    return {
+        "order_id": order_id,
+        "status": "PACKED",
+        "chef_phone": chef_phone,
+        "packed_containers_count": packed_containers_count,
+        "driver_notified": driver_notified,
+        "driver_phone": driver_phone,
+    }
+
+
+@tool("relay_order_ready_to_driver_tool", args_schema=RelayOrderReadyToDriverInput)
+async def relay_order_ready_to_driver_tool(
+    chef_phone: str,
+    order_id: str,
+    packed_containers_count: int,
+    special_notes: Optional[str] = None,
+) -> str:
+    """Relay food readiness status from home chef to assigned delivery driver and customer via WhatsApp."""
+    from app.db.session import transaction
+
+    async with transaction() as session:
+        res = await relay_order_ready_to_driver(
+            session,
+            chef_phone=chef_phone,
+            order_id=order_id,
+            packed_containers_count=packed_containers_count,
+            special_notes=special_notes,
+        )
+        driver_str = f"Driver ({res['driver_phone']}) notified via WhatsApp." if res['driver_notified'] else "Driver assignment pending."
+        return (
+            f"✅ Order #{res['order_id']} Marked PACKED & READY!\n"
+            f"Kitchen: {res['chef_phone']} | Containers: {res['packed_containers_count']}\n"
+            f"{driver_str}\n"
+            f"Customer notification dispatched."
+        )
+
+
+# =============================================================================
+# TOOL 9: respond_to_custom_request_tool
+# =============================================================================
+class RespondToCustomRequestInput(BaseModel):
+    hitl_session_id: str = Field(
+        ...,
+        description="ID of the active HITL custom dish inquiry session (e.g. 'hitl_12345')",
+    )
+    chef_phone: str = Field(
+        ...,
+        description="Normalized 10-digit phone number of home chef (e.g. '9876543210')",
+    )
+    decision: str = Field(
+        ...,
+        description="3-way decision enum: 'ACCEPTED', 'DECLINED', or 'COUNTER_OFFER'",
+    )
+    custom_dish_name: Optional[str] = Field(
+        default=None,
+        description="Name of accepted custom dish or counter-offered alternative dish",
+    )
+    custom_dish_price: Optional[Decimal] = Field(
+        default=None,
+        description="Price per portion in INR (required if ACCEPTED or COUNTER_OFFER)",
+    )
+    chef_message: Optional[str] = Field(
+        default=None,
+        description="Personal message from chef to customer explaining decision or counter-offer",
+    )
+
+
+async def respond_to_custom_request(
+    session: AsyncSession,
+    *,
+    hitl_session_id: str,
+    chef_phone: str,
+    decision: str,
+    custom_dish_name: str | None = None,
+    custom_dish_price: Decimal | None = None,
+    chef_message: str | None = None,
+) -> dict[str, Any]:
+    """Resolve HITL custom dish request session with 3-way decision (ACCEPTED/DECLINED/COUNTER_OFFER) and notify customer on WhatsApp."""
+    assert hitl_session_id, "hitl_session_id cannot be empty"
+    assert chef_phone and len(chef_phone) >= 10, f"Invalid chef_phone: {chef_phone}"
+    assert decision in {"ACCEPTED", "DECLINED", "COUNTER_OFFER"}, f"Invalid decision: '{decision}'. Must be ACCEPTED, DECLINED, or COUNTER_OFFER"
+
+    if decision in {"ACCEPTED", "COUNTER_OFFER"}:
+        assert custom_dish_price is not None and custom_dish_price > Decimal("0.00"), "custom_dish_price must be > 0.00 when decision is ACCEPTED or COUNTER_OFFER"
+
+    from app.models.system import SystemHitlSession
+    hitl = await session.get(SystemHitlSession, hitl_session_id)
+    assert hitl is not None, f"HITL session not found: {hitl_session_id}"
+    assert hitl.status == "WAITING", f"HITL session {hitl_session_id} is already in status '{hitl.status}'"
+
+    customer_phone = hitl.payload.get("customer_phone") or hitl.waiting_on_phone
+    assert customer_phone, "Customer phone number missing in HITL session payload"
+
+
+    # 1. Update HITL Session Status to RESOLVED
+    hitl.status = "RESOLVED"
+    hitl.resolved_at = datetime.now()
+
+    # 2. Build Customer WhatsApp Notification
+    chef = await session.get(ChefProfile, chef_phone)
+    kitchen_name = chef.kitchen_name if chef else "Home Kitchen"
+    message_str = f" Chef note: \"{chef_message.strip()}\"." if chef_message else ""
+
+    if decision == "ACCEPTED":
+        cust_msg = (
+            f"🎉 CUSTOM DISH ACCEPTED BY CHEF ({kitchen_name})!\n"
+            f"Dish: {custom_dish_name or 'Custom Special'}\n"
+            f"Price per portion: ₹{custom_dish_price:.2f}.{message_str}\n"
+            f"You can now proceed to add this to your order!"
+        )
+    elif decision == "COUNTER_OFFER":
+        cust_msg = (
+            f"💡 CHEF COUNTER-OFFER ({kitchen_name}):\n"
+            f"Alternative Dish: {custom_dish_name or 'Special Alternative'}\n"
+            f"Price per portion: ₹{custom_dish_price:.2f}.{message_str}\n"
+            f"Reply YES to accept or NO to decline."
+        )
+    else:  # DECLINED
+        cust_msg = (
+            f"❌ CUSTOM REQUEST DECLINED ({kitchen_name}):\n"
+            f"Chef Sunita is unable to prepare the requested custom dish at this time.{message_str}\n"
+            f"Please feel free to choose from the regular daily menu!"
+        )
+
+    # 3. Enqueue WhatsApp message to Customer
+    await execute_outbound_whatsapp_enqueue(
+        session,
+        recipient_phone=customer_phone,
+        recipient_role="CUSTOMER",
+        message_text=cust_msg,
+    )
+    await execute_conversation_message_insert(
+        session,
+        phone=customer_phone,
+        actor_role="CUSTOMER",
+        direction="OUTBOUND",
+        source="SYSTEM_ALERT",
+        message_text=cust_msg,
+    )
+
+    # 4. Record Audit Event via Master Executor #8
+    from app.executors.master import execute_system_audit_log
+    await execute_system_audit_log(
+        session,
+        event_type="CHEF_CUSTOM_REQUEST_RESOLVED",
+        source_role="CHEF",
+        target_role="CUSTOMER",
+        payload={
+            "session_id": hitl_session_id,
+            "chef_phone": chef_phone,
+            "customer_phone": customer_phone,
+            "decision": decision,
+            "custom_dish_name": custom_dish_name,
+            "custom_dish_price": float(custom_dish_price) if custom_dish_price else None,
+        },
+        severity="INFO",
+    )
+
+    return {
+        "hitl_session_id": hitl_session_id,
+        "chef_phone": chef_phone,
+        "customer_phone": customer_phone,
+        "decision": decision,
+        "custom_dish_name": custom_dish_name,
+        "custom_dish_price": custom_dish_price,
+        "status": "RESOLVED",
+    }
+
+
+@tool("respond_to_custom_request_tool", args_schema=RespondToCustomRequestInput)
+async def respond_to_custom_request_tool(
+    hitl_session_id: str,
+    chef_phone: str,
+    decision: str,
+    custom_dish_name: Optional[str] = None,
+    custom_dish_price: Optional[Decimal] = None,
+    chef_message: Optional[str] = None,
+) -> str:
+    """Respond to a customer's custom dish inquiry with an ACCEPTED, DECLINED, or COUNTER_OFFER decision, resolving the HITL pause session."""
+    from app.db.session import transaction
+
+    async with transaction() as session:
+        res = await respond_to_custom_request(
+            session,
+            hitl_session_id=hitl_session_id,
+            chef_phone=chef_phone,
+            decision=decision,
+            custom_dish_name=custom_dish_name,
+            custom_dish_price=custom_dish_price,
+            chef_message=chef_message,
+        )
+        price_str = f" @ ₹{res['custom_dish_price']:.2f}" if res['custom_dish_price'] else ""
+        return (
+            f"✅ Custom Request HITL Session [{res['hitl_session_id']}] RESOLVED!\n"
+            f"Decision: {res['decision']}{price_str}\n"
+            f"Customer ({res['customer_phone']}) notified on WhatsApp."
+        )
+
+
+# =============================================================================
+# TOOL 10: get_assigned_driver_eta_tool
+# =============================================================================
+class GetAssignedDriverEtaInput(BaseModel):
+    chef_phone: str = Field(
+        ...,
+        description="Normalized 10-digit phone number of home chef (e.g. '9876543210')",
+    )
+    order_id: Optional[str] = Field(
+        default=None,
+        description="Target CustomerOrder ID (e.g. 'ord_123456')",
+    )
+    service_date: Optional[str] = Field(
+        default=None,
+        description="Service date in ISO format YYYY-MM-DD (e.g. '2026-08-02')",
+    )
+    meal_window: Optional[str] = Field(
+        default=None,
+        description="'LUNCH' or 'DINNER'",
+    )
+
+
+async def get_assigned_driver_eta(
+    session: AsyncSession,
+    *,
+    chef_phone: str,
+    order_id: str | None = None,
+    service_date: str | None = None,
+    meal_window: str | None = None,
+) -> dict[str, Any]:
+    """Query assigned delivery driver info, pickup stop status, and estimated arrival time for a kitchen."""
+    assert chef_phone and len(chef_phone) >= 10, f"Invalid chef_phone: {chef_phone}"
+    assert order_id or (service_date and meal_window), "Must provide either order_id or both service_date and meal_window"
+
+    chef = await session.get(ChefProfile, chef_phone)
+    assert chef is not None, f"Kitchen profile not found for phone: {chef_phone}"
+
+    from app.models.driver import DriverProfile
+    from app.models.system import SystemDeliveryRoute, SystemDeliveryStop, SystemDeliveryStopOrder
+
+    target_stop = None
+
+    if order_id:
+        stmt_so = select(SystemDeliveryStopOrder.stop_id).where(SystemDeliveryStopOrder.order_id == order_id)
+        stop_id = (await session.execute(stmt_so)).scalar_one_or_none()
+        if stop_id:
+            target_stop = await session.get(SystemDeliveryStop, stop_id)
+    else:
+        date_obj = date.fromisoformat(service_date)
+        stmt_stops = (
+            select(SystemDeliveryStop)
+            .join(SystemDeliveryRoute, SystemDeliveryStop.route_id == SystemDeliveryRoute.route_id)
+            .where(
+                SystemDeliveryStop.target_ref_id == chef_phone,
+                SystemDeliveryStop.stop_type == "PICKUP_KITCHEN",
+                SystemDeliveryRoute.service_date == date_obj,
+                SystemDeliveryRoute.meal_window == meal_window,
+            )
+        )
+        target_stop = (await session.execute(stmt_stops)).scalar_one_or_none()
+
+    if target_stop is None:
+        return {
+            "chef_phone": chef_phone,
+            "kitchen_name": chef.kitchen_name,
+            "has_assigned_driver": False,
+            "message": "No pickup delivery stop found for this kitchen and window yet.",
+        }
+
+    route = await session.get(SystemDeliveryRoute, target_stop.route_id)
+    if route is None or not route.driver_phone:
+        return {
+            "chef_phone": chef_phone,
+            "kitchen_name": chef.kitchen_name,
+            "has_assigned_driver": False,
+            "message": "Delivery route created but driver assignment is in progress.",
+        }
+
+    driver = await session.get(DriverProfile, route.driver_phone)
+    driver_name = driver.driver_name if driver else "Assigned Driver"
+    vehicle_info = f"{driver.vehicle_type} ({driver.vehicle_number})" if driver else "Vehicle Info"
+
+    eta_time = target_stop.estimated_arrival.strftime("%I:%M %p") if target_stop.estimated_arrival else "Pending"
+
+    return {
+        "chef_phone": chef_phone,
+        "kitchen_name": chef.kitchen_name,
+        "has_assigned_driver": True,
+        "driver_name": driver_name,
+        "driver_phone": route.driver_phone,
+        "vehicle_info": vehicle_info,
+        "estimated_arrival": eta_time,
+        "stop_status": target_stop.status,
+        "route_status": route.status,
+    }
+
+
+@tool("get_assigned_driver_eta_tool", args_schema=GetAssignedDriverEtaInput)
+async def get_assigned_driver_eta_tool(
+    chef_phone: str,
+    order_id: Optional[str] = None,
+    service_date: Optional[str] = None,
+    meal_window: Optional[str] = None,
+) -> str:
+    """Retrieve assigned driver contact info, vehicle details, and pickup ETA for a kitchen."""
+    from app.db.session import SessionFactory
+
+    async with SessionFactory() as session:
+        data = await get_assigned_driver_eta(
+            session,
+            chef_phone=chef_phone,
+            order_id=order_id,
+            service_date=service_date,
+            meal_window=meal_window,
+        )
+        if not data["has_assigned_driver"]:
+            return f"ℹ️ {data['kitchen_name']}: {data['message']}"
+
+        return (
+            f"🛵 ASSIGNED DRIVER ETA FOR {data['kitchen_name']}:\n"
+            f"Driver: {data['driver_name']} ({data['driver_phone']})\n"
+            f"Vehicle: {data['vehicle_info']}\n"
+            f"Estimated Arrival at Kitchen: {data['estimated_arrival']}\n"
+            f"Pickup Status: {data['stop_status']} (Route {data['route_status']})"
+        )
+
+
+

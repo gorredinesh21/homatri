@@ -540,6 +540,74 @@ class AddItemToOrderInput(BaseModel):
     )
 
 
+# =============================================================================
+# TOOL 5: initialize_customer_order_tool
+# =============================================================================
+
+# TOOL 5: initialize_customer_order_tool
+# =============================================================================
+class InitializeCustomerOrderInput(BaseModel):
+    customer_phone: str = Field(
+        ...,
+        description="Normalized 10-digit phone number of customer (e.g. '9123456789')",
+    )
+    chef_phone: str = Field(
+        ...,
+        description="Normalized 10-digit phone number of home chef (e.g. '9876543210')",
+    )
+    service_date: str = Field(
+        ...,
+        description="Service date in ISO format YYYY-MM-DD (e.g. '2026-08-02')",
+    )
+    meal_window: str = Field(
+        ...,
+        description="'LUNCH' or 'DINNER'",
+    )
+    special_instructions: Optional[str] = Field(
+        default=None,
+        description="Order level preparation notes",
+    )
+
+
+@tool("initialize_customer_order_tool", args_schema=InitializeCustomerOrderInput)
+async def initialize_customer_order_tool(
+    customer_phone: str,
+    chef_phone: str,
+    service_date: str,
+    meal_window: str,
+    special_instructions: Optional[str] = None,
+) -> str:
+    """Initialize a new customer order header in PENDING_PAYMENT status before adding dish items."""
+    from app.db.session import transaction
+
+    async with transaction() as session:
+        chef = await session.get(ChefProfile, chef_phone)
+        assert chef is not None, f"Kitchen profile not found for phone: {chef_phone}"
+        date_obj = date.fromisoformat(service_date)
+
+        order = await execute_customer_order_initialization(
+            session,
+            customer_phone=customer_phone,
+            chef_phone=chef_phone,
+            kitchen_name=chef.kitchen_name,
+            service_date=date_obj,
+            meal_window=meal_window,
+            special_instructions=special_instructions,
+        )
+        return (
+            f"🛒 New Order Header Initialized [{order.order_id}]!\n"
+            f"Customer: {customer_phone} | Kitchen: {order.kitchen_name}\n"
+            f"Meal Window: {meal_window} ({service_date}) | Delivery Fee: ₹{order.delivery_fee:.2f}\n"
+            f"Status: PENDING_PAYMENT. Ready to add dish items!"
+        )
+
+
+# =============================================================================
+# TOOL 6: add_item_to_order_tool
+# =============================================================================
+
+
+
 async def add_item_to_order(
     session: AsyncSession,
     *,
@@ -805,3 +873,275 @@ async def submit_order_review_tool(
             f"Review successfully submitted for Order #{review.order_id}! {stars} ({review.chef_rating}/5){comment_str}\n"
             f"Thank you for sharing your feedback with the home kitchen!"
         )
+
+
+# =============================================================================
+# TOOL 8: generate_payment_link_tool
+# =============================================================================
+class GeneratePaymentLinkInput(BaseModel):
+    order_id: str = Field(
+        ...,
+        description="Target CustomerOrder ID (e.g. 'ord_123456')",
+    )
+    customer_phone: str = Field(
+        ...,
+        description="Normalized 10-digit phone number of customer (e.g. '9123456789')",
+    )
+    amount_due: Decimal = Field(
+        ...,
+        description="Total amount due in INR (e.g. 280.00)",
+    )
+    payment_type: Optional[str] = Field(
+        default="INITIAL",
+        description="'INITIAL' for first order bill, 'TOPUP' for mid-cooking add-ons",
+    )
+    is_mock: Optional[bool] = Field(
+        default=False,
+        description="Set to True to generate instant mock link for testing/POC demo",
+    )
+
+
+async def generate_payment_link(
+    session: AsyncSession,
+    *,
+    order_id: str,
+    customer_phone: str,
+    amount_due: Decimal,
+    payment_type: str = "INITIAL",
+    is_mock: bool = False,
+) -> CustomerPayment:
+    """Generate payment link (Razorpay or Mock) and insert CustomerPayment record with Guard 2 Pre-Condition Assertions."""
+    assert order_id, "order_id cannot be empty"
+    assert customer_phone and len(customer_phone) >= 10, f"Invalid customer_phone: {customer_phone}"
+    assert amount_due > Decimal("0.00"), f"Invalid amount_due: {amount_due}"
+    assert payment_type in {"INITIAL", "TOPUP"}, f"Invalid payment_type: {payment_type}"
+
+    # 1. Verify CustomerOrder existence & status
+    order = await session.get(CustomerOrder, order_id)
+    assert order is not None, f"Order not found: {order_id}"
+    assert order.customer_phone == customer_phone, f"Order {order_id} belongs to {order.customer_phone}, not {customer_phone}"
+    assert order.status in {"DRAFT_CART", "PENDING_PAYMENT"}, f"Cannot generate payment link for order in status '{order.status}'"
+
+    # Update order total_amount if different
+    if order.total_amount != amount_due:
+        order.total_amount = amount_due
+        await session.flush()
+
+    gateway_name = "MOCK_GATEWAY" if is_mock else "RAZORPAY"
+
+    if is_mock:
+        link_url = f"https://homatri.in/mock-checkout/{order_id}?amount={amount_due:.2f}"
+        plink_id = f"plink_mock_{order_id}"
+    else:
+        # Production Razorpay Payment Link Generation
+        import os
+        key_id = os.getenv("RAZORPAY_KEY_ID", "rzp_test_placeholder")
+        link_url = f"https://rzp.io/i/homatri_{order_id}"
+        plink_id = f"plink_rzp_{order_id}"
+
+    # 2. Insert CustomerPayment record via Customer Executor #4
+    from app.executors.customer import execute_payment_record_creation
+
+    payment = await execute_payment_record_creation(
+        session,
+        order_id=order_id,
+        amount_due=amount_due,
+        payment_method="UPI",
+        gateway_order_id=plink_id,
+        payment_link_url=link_url,
+    )
+    payment.gateway = gateway_name
+    payment.payment_type = payment_type
+    await session.flush()
+
+    return payment
+
+
+@tool("generate_payment_link_tool", args_schema=GeneratePaymentLinkInput)
+async def generate_payment_link_tool(
+    order_id: str,
+    customer_phone: str,
+    amount_due: Decimal,
+    payment_type: Optional[str] = "INITIAL",
+    is_mock: Optional[bool] = False,
+) -> str:
+    """Generate a Razorpay or Mock UPI payment link for a customer order and create a pending payment ledger record."""
+    from app.db.session import transaction
+
+    async with transaction() as session:
+        payment = await generate_payment_link(
+            session,
+            order_id=order_id,
+            customer_phone=customer_phone,
+            amount_due=amount_due,
+            payment_type=payment_type or "INITIAL",
+            is_mock=is_mock or False,
+        )
+        return (
+            f"✅ Payment Link Generated Successfully [{payment.gateway}]!\n"
+            f"Payment ID: {payment.payment_id} | Order ID: {payment.order_id}\n"
+            f"Amount Due: ₹{payment.amount_due:.2f} ({payment.payment_type})\n"
+            f"Pay Link: {payment.payment_link_url}\n"
+            f"Status: PENDING PAYMENT"
+        )
+
+
+# =============================================================================
+# TOOL 9: cancel_customer_order_tool
+# =============================================================================
+class CancelCustomerOrderInput(BaseModel):
+    order_id: str = Field(
+        ...,
+        description="Target CustomerOrder ID to cancel (e.g. 'ord_123456')",
+    )
+    customer_phone: str = Field(
+        ...,
+        description="Normalized 10-digit phone number of customer (e.g. '9123456789')",
+    )
+    reason: str = Field(
+        ...,
+        description="Reason for order cancellation (e.g. 'Plans changed, eating out')",
+    )
+
+
+async def cancel_customer_order(
+    session: AsyncSession,
+    *,
+    order_id: str,
+    customer_phone: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Cancel customer order prior to cutoff window lock and trigger refund if paid."""
+    assert order_id, "order_id cannot be empty"
+    assert customer_phone and len(customer_phone) >= 10, f"Invalid customer_phone: {customer_phone}"
+    assert reason and len(reason.strip()) >= 3, "cancellation reason must be at least 3 characters"
+
+    order = await session.get(CustomerOrder, order_id)
+    assert order is not None, f"Order not found: {order_id}"
+    assert order.customer_phone == customer_phone, f"Order {order_id} belongs to customer {order.customer_phone}, not {customer_phone}"
+    assert order.status in {"PENDING_PAYMENT", "CONFIRMED"}, (
+        f"Cannot cancel order {order_id} with status '{order.status}'. Cancellations are only permitted for PENDING_PAYMENT or CONFIRMED orders before batch cutoff."
+    )
+
+    # Verify meal window is still OPEN
+    from app.models.system import SystemMealWindow
+    stmt_win = select(SystemMealWindow).where(
+        SystemMealWindow.service_date == order.service_date,
+        SystemMealWindow.meal_type == order.meal_window,
+    )
+    win = (await session.execute(stmt_win)).scalar_one_or_none()
+    if win:
+        assert win.status == "OPEN", f"Cannot cancel order after meal window cutoff lock (Current window status: '{win.status}')"
+
+    # 1. Transition Order Status to CANCELLED via Delegated Executor DW1
+    from app.executors.customer import execute_order_status_transition, execute_payment_status_update
+
+    await execute_order_status_transition(
+        session,
+        order_id=order_id,
+        target_status="CANCELLED",
+        actor_role="CUSTOMER",
+        reason=reason.strip(),
+    )
+
+    # 2. Check CustomerPayment record for refund processing
+    from app.models.customer import CustomerPayment
+    stmt_pay = select(CustomerPayment).where(CustomerPayment.order_id == order_id)
+    payment = (await session.execute(stmt_pay)).scalar_one_or_none()
+
+    refund_status = "NO_PAYMENT_FOUND"
+    refund_amount = Decimal("0.00")
+
+    if payment:
+        if payment.status == "PAID":
+            await execute_payment_status_update(
+                session,
+                payment_id=payment.payment_id,
+                target_status="REFUNDED",
+                failure_reason=f"Customer cancelled order: {reason.strip()}",
+            )
+            refund_status = "REFUNDED"
+            refund_amount = payment.amount_paid
+        else:
+            payment.status = "FAILED"
+            payment.refund_reason = "Order cancelled before payment completed"
+            refund_status = "CANCELLED_UNPAID"
+
+    # 3. Enqueue WhatsApp cancellation notice
+    msg_text = (
+        f"🚫 ORDER CANCELLED (Order #{order_id}):\n"
+        f"Kitchen: {order.kitchen_name} | Window: {order.meal_window} ({order.service_date})\n"
+        f"Reason: \"{reason.strip()}\"\n"
+        f"Refund Status: {refund_status} (₹{refund_amount:.2f})\n"
+        f"We hope to serve you home-cooked meals again soon!"
+    )
+    await execute_outbound_whatsapp_enqueue(
+        session,
+        recipient_phone=customer_phone,
+        recipient_role="CUSTOMER",
+        message_text=msg_text,
+    )
+    await execute_conversation_message_insert(
+        session,
+        phone=customer_phone,
+        actor_role="CUSTOMER",
+        direction="OUTBOUND",
+        source="SYSTEM_ALERT",
+        message_text=msg_text,
+    )
+
+    # 4. Record Audit Event via Master Executor #8
+    from app.executors.master import execute_system_audit_log
+    await execute_system_audit_log(
+        session,
+        event_type="CUSTOMER_ORDER_CANCELLED",
+        source_role="CUSTOMER",
+        target_role="SYSTEM",
+        payload={
+            "order_id": order_id,
+            "customer_phone": customer_phone,
+            "reason": reason.strip(),
+            "refund_status": refund_status,
+            "refund_amount": float(refund_amount),
+        },
+        severity="INFO",
+    )
+
+    return {
+        "order_id": order_id,
+        "status": "CANCELLED",
+        "refund_status": refund_status,
+        "refund_amount": refund_amount,
+        "cancellation_reason": reason.strip(),
+    }
+
+
+@tool("cancel_customer_order_tool", args_schema=CancelCustomerOrderInput)
+async def cancel_customer_order_tool(
+    order_id: str,
+    customer_phone: str,
+    reason: str,
+) -> str:
+    """Cancel a customer order prior to cutoff window lock and automatically trigger payment refund if already paid."""
+    from app.db.session import transaction
+
+    async with transaction() as session:
+        res = await cancel_customer_order(
+            session,
+            order_id=order_id,
+            customer_phone=customer_phone,
+            reason=reason,
+        )
+        refund_info = (
+            f"Refund of ₹{res['refund_amount']:.2f} PROCESSED ({res['refund_status']})."
+            if res['refund_status'] == "REFUNDED"
+            else f"No payment was charged ({res['refund_status']})."
+        )
+        return (
+            f"🚫 Order #{res['order_id']} CANCELLED Successfully!\n"
+            f"Reason: {res['cancellation_reason']}\n"
+            f"{refund_info}\n"
+            f"WhatsApp notification dispatched to customer."
+        )
+
+

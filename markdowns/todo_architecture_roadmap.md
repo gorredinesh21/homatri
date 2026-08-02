@@ -1,22 +1,23 @@
 # 📋 Homaatri Pending Architecture & Implementation Roadmap
 
-This document tracks the status of the **5 Key Architectural Milestones** required to complete the system design before writing production backend code.
+This document tracks the status of the **6 Key Architectural Milestones** required to complete the platform.
 
 ---
 
 ## 🗺️ Master Roadmap Status
 
 ```
- ┌─────────────────────────────────────────────────────────────────────────┐
- │                       ARCHITECTURE ROADMAP STATUS                       │
- └────────────────────────────────────┬────────────────────────────────────┘
-                                      │
-  ┌───────────────────┬───────────────┴───┬───────────────────┬───────────────────┐
-  ▼                   ▼                   ▼                   ▼                   ▼
-1. DB COLUMN SCHEMAS 2. LLM AGENT TOOLS  3. LANGGRAPH STATE  4. WHATSAPP WEBHOOK 5. PAYMENT & BILLING
-   & SQL DDL DEFS       DESIGN & MAPPING    GRAPH STRUCTURE     GATEWAY ENGINE      INTEGRITY ENGINE
-   [✅ 100% COMPLETED] [✅ 100% COMPLETED] [PENDING / NEXT]    [PENDING]           [PENDING]
+ ┌─────────────────────────────────────────────────────────────────────────────────────────────────┐
+ │                                   ARCHITECTURE ROADMAP STATUS                                   │
+ └────────────────────────────────────────────────┬────────────────────────────────────────────────┘
+                                                  │
+  ┌──────────────┬──────────────┬─────────────────┴───┬──────────────┬──────────────┬──────────────┐
+  ▼              ▼              ▼                     ▼              ▼              ▼              ▼
+1. DB SCHEMA  2. AGENT TOOLS 3. LANGGRAPH STATE   4. WA WEBHOOK  5. PAYMENTS    6. ADMIN DASHBOARD
+   [✅ 100%]    [✅ 100%]      [PENDING / NEXT]      [PENDING]      [PENDING]      & WA CHAT PORTAL
 ```
+
+
 
 ---
 
@@ -114,3 +115,21 @@ Design the asynchronous payment verification and programmatic billing engine.
 3. **Order Status Transition**:
    - Automatically transition orders from `PENDING_PAYMENT` ➔ `CONFIRMED` upon payment verification.
    - Handle incremental top-up payments for mid-cooking dish additions.
+
+---
+
+## 🖥️ Milestone 6: Admin Dashboard & WhatsApp Live Chat Viewer Portal
+
+### Goal:
+Build a full web administration dashboard allowing ops staff to manage platform profiles (Chefs & Delivery Drivers) and inspect complete real-time WhatsApp chat conversations.
+
+### Detailed Requirements:
+1. **Chef & Driver Management Portal**:
+   - **Chefs Management**: Add new home chefs, edit kitchen details, set operating days, set dish portion capacities, and toggle kitchen availability.
+   - **Driver Management**: Register delivery drivers, assign vehicle details, set shift status (`ON_DUTY` / `OFF_DUTY`), and view active batch delivery routes.
+   - **Operations & Revenue Dashboard**: Real-time view of 12 PM / 7 PM cutoff windows, live order volume pipeline, and platform GMV revenue.
+2. **WhatsApp-Style Live Chat Conversation Viewer**:
+   - Real-time chat viewer UI connected to the `conversation_messages` unified chat ledger.
+   - **Phone Lookup & Filtering**: Search or select any phone number (Customer, Chef, Driver).
+   - **Full Transcript Display**: Render complete chronological chat streams in a familiar WhatsApp Web UI layout (showing inbound user messages, agent responses, system alert notices, and HITL prompt checkpoints).
+

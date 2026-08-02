@@ -111,6 +111,13 @@ async def execute_cutoff_batch_lock_and_routes_creation(
 
     for idx, stop_info in enumerate(stops_data, start=1):
         stop_id = generate_id("stp")
+        est_arr = stop_info["estimated_arrival"]
+        if isinstance(est_arr, str):
+            if "T" in est_arr:
+                est_arr = datetime.fromisoformat(est_arr)
+            else:
+                parts = est_arr.split(":")
+                est_arr = datetime(service_date.year, service_date.month, service_date.day, int(parts[0]), int(parts[1]))
         stop = SystemDeliveryStop(
             stop_id=stop_id,
             route_id=route_id,
@@ -122,9 +129,11 @@ async def execute_cutoff_batch_lock_and_routes_creation(
             latitude=Decimal(str(stop_info["latitude"])),
             longitude=Decimal(str(stop_info["longitude"])),
             single_leg_maps_url=stop_info.get("single_leg_maps_url"),
-            estimated_arrival=stop_info["estimated_arrival"],
+            estimated_arrival=est_arr,
             status="PENDING",
         )
+
+
         session.add(stop)
         await session.flush()
 

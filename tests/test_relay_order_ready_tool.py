@@ -1,0 +1,140 @@
+"""Integration test suite for Chef Tool 7: relay_order_ready_to_driver_tool."""
+
+import pytest
+from datetime import date, datetime
+from decimal import Decimal
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.chef import ChefProfile
+from app.models.customer import CustomerOrder, CustomerProfile
+from app.models.driver import DriverProfile
+from app.models.system import (
+    SystemAgentLog,
+    SystemDeliveryRoute,
+    SystemDeliveryStop,
+    SystemMealWindow,
+    SystemOutboundQueue,
+)
+from app.tools.chef_tools import relay_order_ready_to_driver
+
+
+@pytest.mark.asyncio
+async def test_relay_order_ready_to_driver_success(db_session: AsyncSession):
+    session = db_session
+
+    # 1. Seed Chef, Customer, Driver, Order, Route & Stop
+    chef = ChefProfile(
+        chef_phone="9876543210",
+        kitchen_name="Indravati Tiffins",
+        chef_name="Chef Sunita",
+        address="Sector 4, Ghansoli",
+        latitude=Decimal("19.1190086"),
+        longitude=Decimal("72.9934054"),
+    )
+    cust = CustomerProfile(
+        customer_phone="9123456789",
+        name="Ramesh Test",
+        delivery_address="Indravati CHS, Ghansoli",
+        latitude=Decimal("19.1214684"),
+        longitude=Decimal("73.0036295"),
+    )
+    driver = DriverProfile(
+        driver_phone="9111222333",
+        driver_name="Vikram Driver",
+        vehicle_type="BIKE",
+        vehicle_number="MH43AB1234",
+    )
+
+    session.add_all([chef, cust, driver])
+    await session.flush()
+
+    win = SystemMealWindow(
+        window_id="win_ready_01",
+        service_date=date(2026, 8, 2),
+        meal_type="LUNCH",
+        cutoff_at=datetime.now(),
+        status="LOCKED_PROCESSING",
+    )
+    session.add(win)
+    await session.flush()
+
+    order = CustomerOrder(
+        order_id="ord_ready_test_01",
+        customer_phone=cust.customer_phone,
+        chef_phone=chef.chef_phone,
+        kitchen_name=chef.kitchen_name,
+        meal_window="LUNCH",
+        service_date=date(2026, 8, 2),
+        status="COOKING",
+        cart_subtotal=Decimal("250.00"),
+        delivery_fee=Decimal("30.00"),
+        total_amount=Decimal("280.00"),
+    )
+    session.add(order)
+    await session.flush()
+
+    route = SystemDeliveryRoute(
+        route_id="rt_ready_01",
+        window_id=win.window_id,
+        service_date=date(2026, 8, 2),
+        meal_window="LUNCH",
+        driver_phone=driver.driver_phone,
+        total_stops=2,
+        total_orders=1,
+        status="ASSIGNED",
+    )
+
+
+    session.add(route)
+    await session.flush()
+
+    from app.models.system import SystemDeliveryStopOrder
+
+    stop = SystemDeliveryStop(
+        stop_id="stp_ready_01",
+        route_id=route.route_id,
+        stop_index=1,
+        stop_type="PICKUP_KITCHEN",
+        target_ref_id=chef.chef_phone,
+        location_name=chef.kitchen_name,
+        address=chef.address,
+        latitude=chef.latitude,
+        longitude=chef.longitude,
+        estimated_arrival=datetime.now(),
+    )
+    stop_order = SystemDeliveryStopOrder(
+        stop_id=stop.stop_id,
+        order_id=order.order_id,
+    )
+    session.add_all([stop, stop_order])
+    await session.flush()
+
+
+    # 2. Relay Order Ready to Driver
+    res = await relay_order_ready_to_driver(
+        session,
+        chef_phone=chef.chef_phone,
+        order_id=order.order_id,
+        packed_containers_count=3,
+        special_notes="Packed hot in thermal bag",
+    )
+
+    # 3. Verify Status Transition to PACKED
+    assert res["status"] == "PACKED"
+    assert res["driver_notified"] is True
+    assert res["driver_phone"] == driver.driver_phone
+
+    await session.refresh(order)
+    assert order.status == "PACKED"
+
+    # 4. Verify Outbound WhatsApp Alerts to Driver & Customer
+    stmt_driver_msg = select(SystemOutboundQueue).where(SystemOutboundQueue.recipient_phone == driver.driver_phone)
+    driver_out = (await session.execute(stmt_driver_msg)).scalar_one_or_none()
+    assert driver_out is not None
+    assert "ORDER PACKED & READY FOR PICKUP" in driver_out.message_text
+
+    stmt_cust_msg = select(SystemOutboundQueue).where(SystemOutboundQueue.recipient_phone == cust.customer_phone)
+    cust_out = (await session.execute(stmt_cust_msg)).scalar_one_or_none()
+    assert cust_out is not None
+    assert "YOUR MEAL IS FRESHLY PACKED" in cust_out.message_text
