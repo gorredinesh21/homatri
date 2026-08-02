@@ -62,7 +62,7 @@ async def test_generate_payment_link_mock_success(db_session: AsyncSession):
     assert payment is not None
     assert payment.order_id == order.order_id
     assert payment.customer_phone == cust.customer_phone
+    assert "ord_pay_link_01" in payment.payment_link_url
     assert payment.gateway == "MOCK_GATEWAY"
     assert payment.status == "PENDING"
-    assert "https://homatri.in/mock-checkout/ord_pay_link_01" in payment.payment_link_url
     assert payment.amount_due == Decimal("280.00")

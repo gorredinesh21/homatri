@@ -1,0 +1,41 @@
+================================================================================
+                    HOMAATRI ENGINE SESSION & REPO HISTORY LOG
+================================================================================
+
+[SESSION LOG - 2026-08-02]
+
+1. MILESTONE 5: DUAL-MODE RAZORPAY PAYMENT GATEWAY & WEBHOOK ENGINE (100% COMPLETED)
+--------------------------------------------------------------------------------
+- Built dual-mode Razorpay Payment Gateway client (`app/services/payment_service.py`) supporting both production REST API calls (`https://api.razorpay.com/v1/payment_links`) and simulated checkout links.
+- Created interactive Razorpay dark-theme checkout simulator UI (`app/static/mock_payment.html`) featuring UPI, Cards, and Netbanking mock payment options.
+- Implemented Razorpay Webhook Router endpoint (`POST /api/v1/webhooks/razorpay`) in `app/api/v1/payments.py` with HMAC SHA-256 signature verification (`X-Razorpay-Signature`).
+- Integrated `process_payment_gateway_webhook_tool` to update order status to PAID/CONFIRMED and dispatch instant WhatsApp confirmation notifications.
+
+2. WHATSAPP WEB CLONE FRONTEND & MANDATORY PHONE AUTH POPUP
+--------------------------------------------------------------------------------
+- Created single-page WhatsApp Web Clone UI (`app/static/index.html`) mounted at `/static` and served at root `GET /`.
+- Added mandatory Customer Phone Login Popup on initial load allowing customers to log in using any 10-digit number.
+- Added role verification modal calling `/api/v1/auth/verify_role` for Chef and Driver portals.
+- Integrated Method A (1-click HTML5 Geolocation API pin) and Method B (text address prompt fallback) for location capture.
+
+3. GHANSOLI SECTOR 6 SEED DATA ENGINE
+--------------------------------------------------------------------------------
+- Created automated seed script (`app/scripts/seed_ghansoli_data.py`) that truncates PostgreSQL tables and seeds 4 Home Chefs & 2 Delivery Drivers centered at Ghansoli Sector 6, Navi Mumbai:
+  1. Chef Sunita Sharma (9876543210) — Indravati Pure Veg Tiffins (Sector 6)
+  2. Chef Ananya Naik (9876543211) — Konkan Coastal Flavors (Sector 5)
+  3. Chef Rajesh Grewal (9876543212) — Desi Punjabi Dhaba Tiffins (Sector 4)
+  4. Chef Meenakshi Iyer (9876543213) — Dakshin Annapoorna Tiffins (Sector 7)
+  5. Driver Vikram Solanki (9111222333) — Honda Activa 6G (ON_DUTY)
+  6. Driver Amit Kumar (9111222334) — TVS Jupiter (ON_DUTY)
+
+4. DATABASE LIFESPAN & INSTANT AGENT FAILOVER
+--------------------------------------------------------------------------------
+- Updated `app/main.py` lifespan manager to execute `Base.metadata.create_all` on FastAPI startup.
+- Added zero-latency agent failover and `max_retries=0` in `app/agents/nodes.py` for instant responses.
+- Verified Customer registration status checking: prompts unregistered users to register with Name and Delivery Address.
+
+5. INTEGRATION TEST SUITE PASSED 100% GREEN
+--------------------------------------------------------------------------------
+- Executed full test suite across all 70 integration tests: 70/70 passed green in 78.50s.
+
+================================================================================

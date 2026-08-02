@@ -14,15 +14,17 @@ from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
 
+from sqlalchemy.pool import NullPool
+
 # PostgreSQL async engine
 engine = create_async_engine(
     settings.database_url,
     pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
+    poolclass=NullPool,
 )
 
 SessionFactory = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+
 
 
 

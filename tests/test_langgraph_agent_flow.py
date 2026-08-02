@@ -21,7 +21,8 @@ async def test_master_router_node_customer_default(db_session: AsyncSession):
         "active_phone": "9199999999",
         "active_role": "CUSTOMER",
     }
-    res = await master_router_node(state)
+    res = await master_router_node(state, session=session)
+
     assert res["active_role"] == "CUSTOMER"
 
 
@@ -45,7 +46,8 @@ async def test_master_router_node_chef(db_session: AsyncSession):
         "active_phone": chef.chef_phone,
         "active_role": "CUSTOMER",
     }
-    res = await master_router_node(state)
+    res = await master_router_node(state, session=session)
+
     assert res["active_role"] == "CHEF"
 
 
@@ -67,7 +69,8 @@ async def test_master_router_node_driver(db_session: AsyncSession):
         "active_phone": driver.driver_phone,
         "active_role": "CUSTOMER",
     }
-    res = await master_router_node(state)
+    res = await master_router_node(state, session=session)
+
     assert res["active_role"] == "DRIVER"
 
 

@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Razorpay Checkout — Homaatri Payment Gateway</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --rzp-navy: #0c2340;
+            --rzp-blue: #3395ff;
+            --rzp-blue-hover: #1f7ae6;
+            --rzp-dark-bg: #12161f;
+            --rzp-card-bg: #1a212d;
+            --rzp-text: #ffffff;
+            --rzp-subtext: #8b99b0;
+            --rzp-border: #283344;
+            --rzp-green: #10b981;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', system-ui, sans-serif;
+        }
+
+        body {
+            background-color: var(--rzp-dark-bg);
+            color: var(--rzp-text);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .checkout-card {
+            background-color: var(--rzp-card-bg);
+            border: 1px solid var(--rzp-border);
+            width: 100%;
+            max-width: 440px;
+            border-radius: 16px;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.6);
+            overflow: hidden;
+        }
+
+        .checkout-header {
+            background-color: var(--rzp-navy);
+            padding: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--rzp-border);
+        }
+
+        .merchant-brand h2 {
+            font-size: 1.1rem;
+            font-weight: 700;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .merchant-brand p {
+            font-size: 0.78rem;
+            color: var(--rzp-subtext);
+            margin-top: 2px;
+        }
+
+        .badge-secure {
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--rzp-green);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+
+        .checkout-body {
+            padding: 24px;
+        }
+
+        .amount-hero {
+            text-align: center;
+            padding: 16px 0 24px 0;
+            border-bottom: 1px dashed var(--rzp-border);
+            margin-bottom: 20px;
+        }
+
+        .amount-hero .label {
+            font-size: 0.8rem;
+            color: var(--rzp-subtext);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .amount-hero .val {
+            font-size: 2.2rem;
+            font-weight: 800;
+            color: white;
+            margin-top: 4px;
+        }
+
+        .order-meta-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 24px;
+            font-size: 0.82rem;
+        }
+
+        .meta-item {
+            background: rgba(0,0,0,0.2);
+            padding: 10px 14px;
+            border-radius: 8px;
+            border: 1px solid var(--rzp-border);
+        }
+
+        .meta-item span {
+            display: block;
+            color: var(--rzp-subtext);
+            font-size: 0.72rem;
+            margin-bottom: 2px;
+        }
+
+        .meta-item strong {
+            color: white;
+            word-break: break-all;
+        }
+
+        .payment-methods h4 {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: var(--rzp-subtext);
+            margin-bottom: 12px;
+        }
+
+        .method-opt {
+            background: var(--rzp-navy);
+            border: 1px solid var(--rzp-border);
+            padding: 12px 16px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 10px;
+            cursor: pointer;
+            transition: border-color 0.2s ease;
+        }
+
+        .method-opt:hover, .method-opt.selected {
+            border-color: var(--rzp-blue);
+            background: rgba(51, 149, 255, 0.08);
+        }
+
+        .method-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-weight: 600;
+            font-size: 0.9rem;
+        }
+
+        .pay-btn {
+            width: 100%;
+            background-color: var(--rzp-blue);
+            color: white;
+            border: none;
+            padding: 14px;
+            border-radius: 10px;
+            font-size: 1rem;
+            font-weight: 700;
+            cursor: pointer;
+            margin-top: 10px;
+            transition: background 0.2s ease, transform 0.1s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .pay-btn:hover {
+            background-color: var(--rzp-blue-hover);
+        }
+
+        .pay-btn:active {
+            transform: scale(0.98);
+        }
+
+        /* Success Screen */
+        .success-box {
+            text-align: center;
+            padding: 30px 20px;
+            display: none;
+        }
+
+        .success-icon {
+            width: 64px;
+            height: 64px;
+            background: rgba(16, 185, 129, 0.15);
+            color: var(--rzp-green);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.2rem;
+            margin: 0 auto 16px auto;
+            border: 2px solid var(--rzp-green);
+        }
+
+        .success-box h3 {
+            font-size: 1.25rem;
+            color: white;
+            margin-bottom: 8px;
+        }
+
+        .success-box p {
+            font-size: 0.85rem;
+            color: var(--rzp-subtext);
+            margin-bottom: 24px;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="checkout-card">
+        <div class="checkout-header">
+            <div class="merchant-brand">
+                <h2>🟢 Homaatri Tiffins</h2>
+                <p>Razorpay Trusted Merchant</p>
+            </div>
+            <div class="badge-secure">🔒 256-Bit SSL</div>
+        </div>
+
+        <div class="checkout-body" id="payment-form">
+            <div class="amount-hero">
+                <div class="label">Amount to Pay</div>
+                <div class="val" id="disp-amount">₹0.00</div>
+            </div>
+
+            <div class="order-meta-grid">
+                <div class="meta-item">
+                    <span>Order Reference</span>
+                    <strong id="disp-order-id">ORD-UNKNOWN</strong>
+                </div>
+                <div class="meta-item">
+                    <span>Customer Phone</span>
+                    <strong id="disp-phone">+91 9123456789</strong>
+                </div>
+            </div>
+
+            <div class="payment-methods">
+                <h4>SELECT PAYMENT METHOD</h4>
+                <div class="method-opt selected">
+                    <div class="method-left">
+                        <span>📱</span> UPI (GPay / PhonePe / Paytm)
+                    </div>
+                    <span>✓</span>
+                </div>
+                <div class="method-opt">
+                    <div class="method-left">
+                        <span>💳</span> Credit / Debit Cards
+                    </div>
+                </div>
+                <div class="method-opt">
+                    <div class="method-left">
+                        <span>🏛️</span> Net Banking
+                    </div>
+                </div>
+            </div>
+
+            <button class="pay-btn" onclick="executeRazorpayPayment()">
+                <span>🔒 Pay Securely</span>
+                <span id="btn-amount">₹0.00</span>
+            </button>
+        </div>
+
+        <!-- Success Screen -->
+        <div class="success-box" id="success-screen">
+            <div class="success-icon">✓</div>
+            <h3>Payment Successful!</h3>
+            <p id="success-msg">Razorpay transaction verified. Your meal order is now CONFIRMED!</p>
+            <button class="pay-btn" style="background-color: var(--rzp-green);" onclick="window.close() || (window.location.href='/')">
+                Return to WhatsApp Chat
+            </button>
+        </div>
+    </div>
+
+    <script>
+        const urlParams = new URLSearchParams(window.location.search);
+        const orderId = urlParams.get('order_id') || 'ord_demo_101';
+        const amount = urlParams.get('amount') || '250.00';
+        const phone = urlParams.get('phone') || '9123456789';
+        const plinkId = urlParams.get('plink_id') || `plink_mock_${orderId}`;
+
+        document.getElementById('disp-amount').innerText = `₹${parseFloat(amount).toFixed(2)}`;
+        document.getElementById('btn-amount').innerText = `₹${parseFloat(amount).toFixed(2)}`;
+        document.getElementById('disp-order-id').innerText = orderId;
+        document.getElementById('disp-phone').innerText = `+91 ${phone}`;
+
+        async function executeRazorpayPayment() {
+            const btn = document.querySelector('.pay-btn');
+            btn.innerText = 'Processing Payment...';
+            btn.disabled = true;
+
+            const webhookUrl = `${window.location.origin}/api/v1/webhooks/razorpay`;
+            const mockTxnId = `pay_mock_${Math.random().toString(36).substr(2, 9)}`;
+
+            const payload = {
+                event: "payment_link.paid",
+                payload: {
+                    payment_link: {
+                        entity: {
+                            id: plinkId,
+                            order_id: orderId,
+                            amount: Math.round(parseFloat(amount) * 100),
+                            status: "paid"
+                        }
+                    },
+                    payment: {
+                        entity: {
+                            id: mockTxnId,
+                            amount: Math.round(parseFloat(amount) * 100),
+                            currency: "INR",
+                            status: "captured",
+                            method: "upi",
+                            bank: "HDFC"
+                        }
+                    }
+                }
+            };
+
+            try {
+                const res = await fetch(webhookUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+
+                document.getElementById('payment-form').style.display = 'none';
+                document.getElementById('success-screen').style.display = 'block';
+            } catch (err) {
+                alert('Payment Webhook Execution Failed: ' + err.message);
+                btn.innerText = 'Retry Payment';
+                btn.disabled = false;
+            }
+        }
+    </script>
+</body>
+</html>

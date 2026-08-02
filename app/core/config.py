@@ -33,6 +33,13 @@ class Settings(BaseSettings):
     # ---- Business config fallbacks (authoritative values live in system_settings) ----
     default_delivery_fee: float = 30.00
 
+    # ---- Razorpay Payment Gateway ----
+    razorpay_key_id: str = "rzp_test_mock_12345"
+    razorpay_key_secret: str = "mock_secret_67890"
+    razorpay_webhook_secret: str = "mock_webhook_secret_9999"
+    razorpay_mock_mode: bool = True
+
+
 
 settings = Settings()
 

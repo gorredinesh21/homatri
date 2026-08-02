@@ -12,7 +12,7 @@ Tool 7: submit_order_review_tool (Write Executor #8, Same Domain).
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 import math
 from typing import Any, Optional
@@ -584,6 +584,22 @@ async def initialize_customer_order_tool(
         chef = await session.get(ChefProfile, chef_phone)
         assert chef is not None, f"Kitchen profile not found for phone: {chef_phone}"
         date_obj = date.fromisoformat(service_date)
+        req_meal = meal_window.strip().upper()
+
+        now = datetime.now()
+        # Bracket 1 Cutoff Check: Today's LUNCH cutoff is 12:00 PM
+        if date_obj == now.date() and req_meal == "LUNCH" and now.hour >= 12:
+            return (
+                f"❌ Order Rejected: Today's Lunch cutoff (12:00 PM) has passed (Current time: {now.strftime('%I:%M %p')}). "
+                f"You can order for Today's Dinner (delivered at 7:30 PM) or Tomorrow's Lunch!"
+            )
+
+        # Bracket 2 Cutoff Check: Today's DINNER cutoff is 7:00 PM (19:00)
+        if date_obj == now.date() and req_meal == "DINNER" and now.hour >= 19:
+            return (
+                f"❌ Order Rejected: Today's Dinner cutoff (7:00 PM) has passed (Current time: {now.strftime('%I:%M %p')}). "
+                f"Please place your order for Tomorrow's Lunch!"
+            )
 
         order = await execute_customer_order_initialization(
             session,
@@ -591,15 +607,16 @@ async def initialize_customer_order_tool(
             chef_phone=chef_phone,
             kitchen_name=chef.kitchen_name,
             service_date=date_obj,
-            meal_window=meal_window,
+            meal_window=req_meal,
             special_instructions=special_instructions,
         )
         return (
             f"🛒 New Order Header Initialized [{order.order_id}]!\n"
             f"Customer: {customer_phone} | Kitchen: {order.kitchen_name}\n"
-            f"Meal Window: {meal_window} ({service_date}) | Delivery Fee: ₹{order.delivery_fee:.2f}\n"
+            f"Meal Window: {req_meal} ({service_date}) | Delivery Fee: ₹{order.delivery_fee:.2f}\n"
             f"Status: PENDING_PAYMENT. Ready to add dish items!"
         )
+
 
 
 # =============================================================================
@@ -927,19 +944,20 @@ async def generate_payment_link(
         order.total_amount = amount_due
         await session.flush()
 
-    gateway_name = "MOCK_GATEWAY" if is_mock else "RAZORPAY"
+    # 2. Invoke RazorpayPaymentService (Dual-Mode: Real API or Mock Simulator)
+    from app.services.payment_service import razorpay_service
+    res = await razorpay_service.create_payment_link(
+        order_id=order_id,
+        amount_in_rupees=float(amount_due),
+        customer_phone=customer_phone,
+        description=f"Homaatri Food Order Payment [{order_id}]",
+    )
+    link_url = res["short_url"]
+    plink_id = res["payment_link_id"]
+    gateway_name = "MOCK_GATEWAY" if is_mock else f"RAZORPAY_{res['mode']}"
 
-    if is_mock:
-        link_url = f"https://homatri.in/mock-checkout/{order_id}?amount={amount_due:.2f}"
-        plink_id = f"plink_mock_{order_id}"
-    else:
-        # Production Razorpay Payment Link Generation
-        import os
-        key_id = os.getenv("RAZORPAY_KEY_ID", "rzp_test_placeholder")
-        link_url = f"https://rzp.io/i/homatri_{order_id}"
-        plink_id = f"plink_rzp_{order_id}"
 
-    # 2. Insert CustomerPayment record via Customer Executor #4
+    # 3. Insert CustomerPayment record via Customer Executor #4
     from app.executors.customer import execute_payment_record_creation
 
     payment = await execute_payment_record_creation(
@@ -955,6 +973,7 @@ async def generate_payment_link(
     await session.flush()
 
     return payment
+
 
 
 @tool("generate_payment_link_tool", args_schema=GeneratePaymentLinkInput)
