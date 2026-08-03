@@ -62,7 +62,15 @@ Status: 🆕 to build · ✅ bedrock (executor exists) · ⏳ later flow.
 | `mark_order_ready(order_id, box_count?, notes?)` 🆕 | WRITE(own) | `execute_order_readiness_record` ✅ | then triggers Master `relay_order_ready_to_driver` |
 
 ## Driver Agent tools
-_(to be derived — Flow 7)_
+
+### From Flow 7 — Delivery
+| Tool | Type | Reuses (bedrock) | Notes |
+|---|---|---|---|
+| `get_driver_route(driver)` 🆕 | READ | — | reads routes/stops; **surfaces only the next leg** (Maps link) |
+| `confirm_pickup(driver, stop_id)` 🆕 | WRITE(own)+delegate | `execute_driver_trip_phase_update` ✅ + delegate DW1 + stop-update | orders → PICKED_UP; reveal next leg |
+| `confirm_delivery(driver, stop_id, undelivered_ids?)` 🆕 | WRITE(own)+delegate | delegate DW1 (bulk) + `execute_stop_status_update` + Master notify | orders → DELIVERED **bulk, with individual exceptions**; reveal next / finish |
+| `ask_chef_status(driver, chef)` 🆕 | RELAY | — | → Master → chef |
+| `report_address_issue(driver, stop_id, order_id)` 🆕 | RELAY | — | → Master → customer (`send_and_await_reply` LOCATION_PIN) |
 
 ## Master Agent tools
 
@@ -90,7 +98,20 @@ _(to be derived — Flow 7)_
 | `relay_dietary_request(order_id, note)` 🆕 | RELAY (deterministic) | `execute_hitl_session_create_or_resume` ✅; on accept delegates note-write to customer executor | routes customer↔chef, holds HITL, enforces 2-turn cap |
 | `relay_order_ready_to_driver(order_id)` 🆕 | RELAY (deterministic) | reads route → `execute_outbound_whatsapp_enqueue` ✅ | notifies assigned driver food is packed |
 
-_(more Master tools — Flow 7 relays + Flow 8)_
+### From Flow 7 — Relays (deterministic routers)
+| Tool | Type | Reuses | Notes |
+|---|---|---|---|
+| `relay_driver_query_to_chef(...)` 🆕 | RELAY (det.) | `execute_outbound_whatsapp_enqueue` ✅ | routes driver↔chef |
+| `relay_address_issue_to_customer(...)` 🆕 | RELAY (det.) | `send_and_await_reply`; on pin → delegate customer-table update | request fresh location pin |
+| `relay_delivery_completed_to_customer(...)` 🆕 | RELAY (det.) | `execute_outbound_whatsapp_enqueue` ✅ | notify customers on gate delivery |
+
+### Master standing tools (operator / oversight — not tied to one flow)
+| Tool | Type | Reuses | Notes |
+|---|---|---|---|
+| `escalate_to_admin(context)` 🆕 | **Master LLM turn** | `execute_hitl_session_create_or_resume` ✅ | the ONE place Master reasons — escalate exceptions to the human Admin |
+| `delegate_write(target, payload)` 🆕 | delegation wrapper (det.) | owner executor + `execute_system_audit_log` ✅ | thin choke-point every cross-domain write flows through (Master→target owner executor + audit) |
+
+**Reuses across Master:** `execute_system_audit_log` ✅, `execute_outbound_whatsapp_enqueue` ✅, `execute_stop_status_update` ✅, `execute_hitl_session_create_or_resume` ✅.
 
 ---
 
