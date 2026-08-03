@@ -93,6 +93,14 @@ async def execute_cutoff_batch_lock_and_routes_creation(
 
     Also transitions all confirmed orders in the batch to 'BATCHED' via Customer DW1!
     """
+    # Lock the meal window (honest to this executor's name; sets locked_at).
+    window = await session.get(SystemMealWindow, window_id)
+    if window and window.status == "OPEN":
+        window.status = "LOCKED_PROCESSING"
+        if window.locked_at is None:
+            window.locked_at = datetime.now()
+        await session.flush()
+
     route_id = generate_id("rt")
     route = SystemDeliveryRoute(
         route_id=route_id,

@@ -105,4 +105,5 @@ class ChefOrderReadiness(Base):
     packed_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     box_count: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     special_packing_notes: Mapped[str | None] = mapped_column(Text)
+    driver_notified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
