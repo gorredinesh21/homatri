@@ -3,7 +3,7 @@
 Tools **derived from the flows** in [user_flows.md](user_flows.md) via the sequence-diagram method (§12). Grows one flow at a time. This is the contract for the rebuild's tool layer.
 
 Legend — Type: **READ** (any table, no restriction) · **WRITE** (own domain only) · **RELAY** (cross-domain, Master-mediated) · **PRIMITIVE** (shared runtime atom).
-Status: 🆕 to build · ✅ bedrock (executor exists) · ⏳ later flow.
+Status: 🆕 to build · ✅ Foundation (executor exists) · ⏳ later flow.
 
 ---
 
@@ -23,16 +23,16 @@ Status: 🆕 to build · ✅ bedrock (executor exists) · ⏳ later flow.
 ## Customer Agent tools
 
 ### From Flow 1 — Onboarding
-| Tool | Type | Reuses (bedrock) | Notes |
+| Tool | Type | Reuses (Foundation) | Notes |
 |---|---|---|---|
 | `get_customer_profile(phone)` 🆕 | READ | — | existence + identity check; returns profile or NOT_FOUND |
 | `register_customer(phone, name, address)` 🆕 | WRITE | `execute_customer_registration_and_location` ✅ | validates basics → calls `send_and_await_reply(..., LOCATION_PIN)` → validates lat/lng → saves → **auto-chains** to `find_nearby_kitchens` (no pause) |
 | `find_nearby_kitchens(phone, window)` 🆕 | READ | — | Haversine over `chef_profiles`; **filtered to current time-pool window**; rating = **avg of that chef's `customer_reviews`**; sorted nearest-first; **top 5**, no hard radius; returns name + cuisine + rating + distance |
 
-**Bedrock executors reused (no new code):** `execute_conversation_message_insert`, `execute_customer_registration_and_location`, `execute_outbound_whatsapp_enqueue`.
+**Foundation executors reused (no new code):** `execute_conversation_message_insert`, `execute_customer_registration_and_location`, `execute_outbound_whatsapp_enqueue`.
 
 ### From Flows 2–3 — Time-pool, Browse & Order
-| Tool | Type | Reuses (bedrock) | Notes |
+| Tool | Type | Reuses (Foundation) | Notes |
 |---|---|---|---|
 | `resolve_time_pool()` 🆕 | READ | — | reads cutoffs from **`system_settings`**; returns `{window, is_open, message}` per §5 table |
 | `view_chef_menu(chef_phone, window)` 🆕 | READ | — | reads `chef_menu_items` + `chef_daily_inventory` (stock, availability) |
@@ -55,7 +55,7 @@ Status: 🆕 to build · ✅ bedrock (executor exists) · ⏳ later flow.
 ## Chef Agent tools
 
 ### From Flow 6 — Batch view, dietary response, ready-relay
-| Tool | Type | Reuses (bedrock) | Notes |
+| Tool | Type | Reuses (Foundation) | Notes |
 |---|---|---|---|
 | `get_chef_batch(chef, window, date)` 🆕 | READ | — | **order-wise** (items + address per order) + consolidated cook-summary at bottom |
 | `respond_to_dietary_request(hitl_id, decision, counter?)` 🆕 | WRITE(sys HITL) | `execute_hitl_session_create_or_resume` ✅ | accept / reject / counter |
@@ -64,7 +64,7 @@ Status: 🆕 to build · ✅ bedrock (executor exists) · ⏳ later flow.
 ## Driver Agent tools
 
 ### From Flow 7 — Delivery
-| Tool | Type | Reuses (bedrock) | Notes |
+| Tool | Type | Reuses (Foundation) | Notes |
 |---|---|---|---|
 | `get_driver_route(driver)` 🆕 | READ | — | reads routes/stops; **surfaces only the next leg** (Maps link) |
 | `confirm_pickup(driver, stop_id)` 🆕 | WRITE(own)+delegate | `execute_driver_trip_phase_update` ✅ + delegate DW1 + stop-update | orders → PICKED_UP; reveal next leg |
@@ -75,14 +75,14 @@ Status: 🆕 to build · ✅ bedrock (executor exists) · ⏳ later flow.
 ## Master Agent tools
 
 ### From Flow 4 — Payment (Master owns the gateway, both legs)
-| Tool | Type | Reuses (bedrock/infra) | Notes |
+| Tool | Type | Reuses (Foundation/infra) | Notes |
 |---|---|---|---|
 | `mint_payment_link(order_id, amount, phone)` 🆕 | WRITE(sys)+delegate | `payment_service` ✅; delegates `execute_payment_record_creation` ✅ + `execute_system_audit_log` ✅ | calls Razorpay, stores `plink_id` on `customer_payments` via delegation, returns link |
 | `process_payment_webhook(payload)` 🆕 | WRITE(sys)+delegate | `payment_service` HMAC ✅; `execute_payment_webhook_idempotency_log` ✅; delegates DW2→DW1 ✅ | verify + idempotent; on PAID → payment PAID + order CONFIRMED → **resumes the customer's paused thread** via `Command(resume, thread_id=phone)` |
 
 ### From Flow 5 — Cutoff & Batch (scheduled background engine — no user-facing latency)
 **Trigger:** GCP **Cloud Scheduler** at 11:30 / 18:30 → internal endpoint. Runs as a background job; even if it takes tens of seconds (Maps API), nobody waits.
-| Tool | Type | Reuses (bedrock/infra) |
+| Tool | Type | Reuses (Foundation/infra) |
 |---|---|---|
 | `run_cutoff_batch(window, date)` 🆕 | engine | orchestrates the steps below |
 | `allocate_driver(window, date)` 🆕 | WRITE via delegate | `execute_driver_trip_initialization` ✅ (driver table) |

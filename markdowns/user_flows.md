@@ -2,7 +2,7 @@
 
 **Branch:** `homatri_1.0` · **Status:** living design doc · **Supersedes:** the old per-agent tool specs and the 40-tool file (never built).
 
-This document captures the **execution flows** exactly as the founder walked through them. Tools are **derived from these flows** (see §12), not the other way around. The frozen bedrock (models/tables + 21 executors) stays; everything above it is rebuilt from here.
+This document captures the **execution flows** exactly as the founder walked through them. Tools are **derived from these flows** (see §12), not the other way around. The frozen Foundation (models/tables + 21 executors) stays; everything above it is rebuilt from here.
 
 ---
 
@@ -20,7 +20,7 @@ This document captures the **execution flows** exactly as the founder walked thr
 1. **Orchestration, not choreography.** One central conductor — the **Master agent** — mediates every cross-domain interaction. No agent talks to another agent directly.
 2. **Master is the operator, not a dumb pipe.** Master = COO / General Manager / Security Officer of Homaatri. It owns the cutoff clock, the payment gateway, route optimization, policy enforcement, delegation, and audit. Mediation is only *one* of its jobs.
 3. **Agent-in-the-loop, with deterministic Master relays.** Cross-domain requests pause via HITL and are relayed through Master. **Master relays are deterministic routing + HITL/turn-management (no LLM turn)** — the *domain judgment* stays at the spokes (e.g. the Chef decides a dietary request; the Customer parses it). **Master takes an LLM turn only for genuinely Master-level decisions** — escalating to the human **Admin**, or ambiguous exceptions. Admin is a separate system/persona (the founder), distinct from the Master AI. → keeps latency low (relays ≈ ms).
-4. **Table access rules (locked).** **Any agent may READ any table.** An agent may **WRITE only its own tables.** Any **cross-domain write** goes **Master → target owner** (delegated to the owning domain's executor, DW1/DW2/etc.) — never written directly. Bedrock already enforces single-owner writes.
+4. **Table access rules (locked).** **Any agent may READ any table.** An agent may **WRITE only its own tables.** Any **cross-domain write** goes **Master → target owner** (delegated to the owning domain's executor, DW1/DW2/etc.) — never written directly. The Foundation already enforces single-owner writes.
 5. **Legend used below:** 🛡️ guardrail · 🧠 LLM decision · 🔧 tool · 🔗 cross-domain relay (via Master) · ⏸️ pause & resume (interrupt + checkpoint) · ⏰ time-pool
 
 ---
