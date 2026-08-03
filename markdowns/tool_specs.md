@@ -93,13 +93,181 @@ Full spec for every tool: inputs, outputs, reads/writes, guards, pauses. Organiz
 ---
 
 # CHEF DOMAIN (3 tools)
-_(to spec next)_
+
+## Same-domain (1)
+
+### `get_chef_batch`
+- **Purpose:** the chef's locked batch — order-wise list + cook-summary.
+- **Inputs:** `chef_phone, window, service_date`
+- **Outputs:** `{status: OK|NO_BATCH, orders:[{order_id, customer_name, address, items:[{dish, qty, notes}]}], summary:[{dish, total_qty}], message}`
+- **Guards:** window not locked / no orders → `"no batch yet for <window>"`.
+- **AI inside:** no · **Reads:** `customer_orders`, `customer_order_items` (this chef, BATCHED) · **Writes:** none · **Pause:** no · **Executors:** none.
+
+## Cross-domain (2)
+
+### `respond_to_dietary_request`
+- **Purpose:** chef's decision on a customer dietary request; resumes the waiting customer.
+- **Inputs:** `hitl_session_id, decision: ACCEPTED|REJECTED|COUNTER, counter_note?`
+- **Outputs:** `{status: RESOLVED|COUNTER_SENT, message}`
+- **Guards:** hitl missing/expired → `"request expired"`; COUNTER without `counter_note` → `"add your counter details"`.
+- **AI inside:** no · **Reads:** `system_hitl_sessions` · **Writes:** HITL update (**delegate** → `execute_hitl_session_create_or_resume`); on ACCEPT the note → `customer_order_items` (**delegate**) · **Pause:** no — **resumes the customer's paused thread** via Master · **Relay:** → Master.
+
+### `mark_order_ready`
+- **Purpose:** mark food packed; notify the assigned driver.
+- **Inputs:** `order_id, box_count?, notes?`
+- **Outputs:** `{status: READY|ALREADY_READY|NOT_COOKING, message}`
+- **Guards:** order ∉ {BATCHED, COOKING} → `"not ready to pack yet"`; already ready → idempotent.
+- **AI inside:** no · **Reads:** `customer_orders`, `system_delivery_stops` (driver) · **Writes:** `chef_order_readiness` (**direct**, `execute_order_readiness_record`); order → PACKED (**delegate** DW1) · **Pause:** no · **Relay:** → `Master.relay_order_ready_to_driver`.
+
+---
 
 # DRIVER DOMAIN (5 tools)
-_(to spec next)_
 
-# MASTER DOMAIN (12 tools)
-_(to spec next)_
+## Same-domain (1)
 
-# OTHER — primitives / scheduled / external (send_and_await_reply, run_cutoff_batch, call_maps_route, delegate_write)
-_(to spec next)_
+### `get_driver_route`
+- **Purpose:** the driver's route — surface **only the next leg**.
+- **Inputs:** `driver_phone`
+- **Outputs:** `{status: OK|NO_ROUTE, route_id, next_stop:{index, type, location, address, maps_url, orders:[...]}, progress, message}`
+- **Guards:** no assigned route → `"no route assigned yet"`.
+- **AI inside:** no · **Reads:** `system_delivery_routes`, `system_delivery_stops`, `system_delivery_stop_orders` · **Writes:** none · **Pause:** no · **Executors:** none.
+
+## Cross-domain (4)
+
+### `confirm_pickup`
+- **Purpose:** driver picked up at the kitchen; advance + reveal next leg.
+- **Inputs:** `driver_phone, stop_id`
+- **Outputs:** `{status: PICKED_UP|WRONG_STOP|ALREADY_DONE, next_stop?, message}`
+- **Guards:** stop not this driver's / not PICKUP → template; already completed → idempotent.
+- **AI inside:** no · **Reads:** stops, stop_orders, routes · **Writes:** `driver_trip_status` (**direct**, `execute_driver_trip_phase_update`); orders → PICKED_UP (**delegate** DW1); stop → COMPLETED (**delegate** `execute_stop_status_update`) · **Pause:** no.
+
+### `confirm_delivery`
+- **Purpose:** gate delivery — bulk DELIVERED with individual exceptions; reveal next / finish.
+- **Inputs:** `driver_phone, stop_id, undelivered_ids?`
+- **Outputs:** `{status: DELIVERED|PARTIAL|WRONG_STOP, delivered_ids, undelivered_ids, next_stop?, message}`
+- **Guards:** stop not driver's / not DROPOFF → template; already completed → idempotent.
+- **AI inside:** no · **Reads:** stops, stop_orders · **Writes:** orders → DELIVERED **bulk except `undelivered_ids`** (**delegate** DW1); stop → COMPLETED (**delegate**); `driver_trip_status` (**direct**) · **Pause:** no · **Relay:** → `Master.relay_delivery_completed_to_customer`.
+
+### `ask_chef_status`
+- **Purpose:** driver asks the chef "ready?" before/at pickup.
+- **Inputs:** `driver_phone, chef_phone`
+- **Outputs:** `{status: SENT, message}`
+- **Guards:** chef not on driver's route → `"not your assigned kitchen"`.
+- **AI inside:** no · **Reads:** routes/stops · **Writes:** none direct · **Pause:** optional (await `CHEF_REPLY`) · **Relay:** → `Master.relay_driver_query_to_chef`.
+
+### `report_address_issue`
+- **Purpose:** address not found → request a fresh location pin from the customer.
+- **Inputs:** `driver_phone, stop_id, order_id`
+- **Outputs:** `{status: PIN_REQUESTED|RESOLVED, new_location?, message}`
+- **Guards:** stop not driver's / order not at stop → template.
+- **AI inside:** no · **Reads:** stops, orders · **Writes:** on new pin → customer location (**delegate**) · **Pause:** waits for the customer's pin (customer-side `send_and_await_reply`) · **Relay:** → `Master.relay_address_issue_to_customer`.
+
+---
+
+# MASTER DOMAIN (11 tools)
+
+## Same-domain (1)
+
+### `call_maps_route`  *(external helper)*
+- **Purpose:** Google Maps route optimization; ordered stops + legs.
+- **Inputs:** `stops:[{lat, lng}]`
+- **Outputs:** `{ordered_stops, total_distance_km, duration_mins, maps_url}`
+- **Guards:** `<2` stops → single leg; API error → haversine fallback order.
+- **AI inside:** no · **Reads:** none · **Writes:** none (engine persists) · **External:** Google Maps.
+
+## Cross-domain (10)
+
+### `mint_payment_link`
+- **Purpose:** create a Razorpay link; store the payment record.
+- **Inputs:** `order_id, amount, customer_phone`
+- **Outputs:** `{status: LINK_CREATED|BAD_ORDER, link, plink_id, message}`
+- **Guards:** order ≠ PENDING_PAYMENT → template; amount ≤ 0 → template.
+- **AI inside:** no · **Reads:** `customer_orders` · **Writes:** `customer_payments` (**delegate** `execute_payment_record_creation`) + audit · **External:** Razorpay (`payment_service`) · **Executors:** `execute_payment_record_creation`, `execute_system_audit_log`.
+
+### `process_payment_webhook`
+- **Purpose:** verify + confirm payment; resume the customer.
+- **Inputs:** `payload{gateway_event_id, order_id, payment_id, amount, signature}`
+- **Outputs:** `{status: SUCCESS|IDEMPOTENT_SKIPPED|INVALID_SIGNATURE, order_status, message}`
+- **Guards:** bad HMAC → INVALID_SIGNATURE; duplicate event → IDEMPOTENT_SKIPPED.
+- **AI inside:** no · **Reads:** `customer_orders`, `customer_payments` · **Writes:** `system_payment_webhook_events` (**direct**); payment → PAID + order → CONFIRMED (**delegate** DW2→DW1) · **Resumes** the customer thread via `Command(resume, thread_id=phone)` · **External:** `payment_service` HMAC · **Executors:** `execute_payment_webhook_idempotency_log`, DW2 `execute_payment_status_update`(→DW1), `execute_system_audit_log`.
+
+### `run_cutoff_batch`  *(scheduled engine — Cloud Scheduler)*
+- **Purpose:** at cutoff — lock window, allocate driver, optimize route, create route/stops, dispatch chef & driver.
+- **Inputs:** `window, service_date` (from scheduler)
+- **Outputs:** `{status: BATCHED|NO_ORDERS, route_id?, total_orders, total_stops, message}`
+- **Guards:** no CONFIRMED orders → NO_ORDERS (skip); window already locked → idempotent.
+- **AI inside:** no · **Reads:** `customer_orders`(CONFIRMED), `chef_profiles`, `customer_profiles`(loc) · **Writes:** `system_meal_windows` lock + routes/stops/stop_orders (**direct**); order → BATCHED (**delegate** DW1); driver trip (**delegate**) · **Uses:** `allocate_driver`, `call_maps_route`, `execute_outbound_whatsapp_enqueue` · **Executors:** `execute_meal_window_lock_and_creation`, `execute_cutoff_batch_lock_and_routes_creation`(→DW1), `execute_outbound_whatsapp_enqueue`, `execute_system_audit_log`.
+
+### `allocate_driver`
+- **Purpose:** assign a driver to the batch (1:1, by location).
+- **Inputs:** `window, service_date, chef_phone`
+- **Outputs:** `{status: ASSIGNED|NO_DRIVER, driver_phone?, message}`
+- **Guards:** no available driver → NO_DRIVER → `escalate_to_admin`.
+- **AI inside:** no · **Reads:** `driver_profiles`, `driver_trip_status` · **Writes:** `driver_trip_status` (**delegate** `execute_driver_trip_initialization`) · **Executors:** `execute_driver_trip_initialization`.
+
+### `relay_dietary_request`
+- **Purpose:** route customer's dietary note to the chef; hold HITL; enforce 2-turn cap; resume customer.
+- **Inputs:** `order_id, customer_phone, note, turn?`
+- **Outputs:** `{status: SENT_TO_CHEF|RESOLVED|KEPT_ORIGINAL, decision?, message}`
+- **Guards:** `turn > 2` → KEPT_ORIGINAL; chef not found → template.
+- **AI inside:** no · **Reads:** `customer_orders` · **Writes:** `system_hitl_sessions` (**direct**); on ACCEPT note → `customer_order_items` (**delegate**); outbound · **Executors:** `execute_hitl_session_create_or_resume`, `execute_outbound_whatsapp_enqueue`.
+
+### `relay_order_ready_to_driver`
+- **Purpose:** notify the assigned driver food is packed.
+- **Inputs:** `order_id`
+- **Outputs:** `{status: DRIVER_NOTIFIED|NO_DRIVER, driver_phone?, message}`
+- **AI inside:** no · **Reads:** `system_delivery_stops/routes` · **Writes:** outbound (**direct**) · **Executors:** `execute_outbound_whatsapp_enqueue`.
+
+### `relay_driver_query_to_chef`
+- **Purpose:** route a driver's "ready?" query to the chef.
+- **Inputs:** `driver_phone, chef_phone, query`
+- **Outputs:** `{status: SENT, message}`
+- **AI inside:** no · **Writes:** outbound · **Executors:** `execute_outbound_whatsapp_enqueue`.
+
+### `relay_address_issue_to_customer`
+- **Purpose:** ask the customer for a fresh location pin; on pin, update + notify driver.
+- **Inputs:** `order_id, customer_phone, driver_phone`
+- **Outputs:** `{status: PIN_REQUESTED|UPDATED, new_location?, message}`
+- **AI inside:** no · **Writes:** on pin → customer location (**delegate**); outbound · **Pause:** customer-side `send_and_await_reply(LOCATION_PIN)` · **Executors:** outbound + delegated customer update.
+
+### `relay_delivery_completed_to_customer`
+- **Purpose:** notify customers their gate delivery is done.
+- **Inputs:** `order_ids, gate_name`
+- **Outputs:** `{status: CUSTOMERS_NOTIFIED, count, message}`
+- **AI inside:** no · **Writes:** outbound · **Executors:** `execute_outbound_whatsapp_enqueue`.
+
+### `escalate_to_admin`  *(the ONE Master reasoning turn)*
+- **Purpose:** escalate an exception (no driver, repeated failure, ambiguous case) to the human **Admin**.
+- **Inputs:** `context{type, refs, summary}`
+- **Outputs:** `{status: ESCALATED, hitl_id, message}`
+- **AI note:** the *decision to escalate* is a **Master agent-level** reasoning turn — the tool itself is still pure code (records the escalation).
+- **Reads:** relevant refs · **Writes:** `system_hitl_sessions` (**direct**, `waiting_on=ADMIN`) + audit · **Executors:** `execute_hitl_session_create_or_resume`, `execute_system_audit_log`.
+
+---
+
+# SHARED INFRASTRUCTURE (2 primitives — not a domain)
+
+### `send_and_await_reply`
+- **Purpose:** send an outbound WhatsApp message, then **pause** until a specific reply type arrives.
+- **Inputs:** `recipient_phone, message, await_type: LOCATION_PIN|PAYMENT_CONFIRM|CHEF_DECISION|CHEF_REPLY, timeout_mins`
+- **Outputs (on resume):** the awaited payload, or `TIMEOUT`.
+- **Mechanism:** enqueue outbound → `interrupt(await_type)` → resume via `Command(resume, thread_id)`. On timeout / superseding message → **pending-state rollback**.
+- **AI inside:** no · **Executors:** `execute_outbound_whatsapp_enqueue`, `execute_hitl_session_create_or_resume`, `execute_conversation_message_insert`.
+
+### `delegate_write`
+- **Purpose:** the single choke-point for **cross-domain writes** — routes an agent's cross-domain write to the owner executor + audits it.
+- **Inputs:** `requesting_role, target(owner executor/table), payload`
+- **Outputs:** `{status: WRITTEN|DENIED, result, message}`
+- **Guards:** `requesting_role` not permitted for `target` → DENIED.
+- **AI inside:** no · **Writes:** via the owner executor + audit · **Executors:** (owner executor) + `execute_system_audit_log`.
+
+---
+
+# ⚠️ Tools NOT covered by the 7 flows (decide separately)
+The 7 flows covered the **order lifecycle happy path**. These real capabilities weren't derived yet — several map to Foundation executors that otherwise have no caller:
+- **Customer:** `submit_order_review` (→ `execute_submit_order_review`), `cancel_order`, `get_order_status` (live status — a known gap from the audit).
+- **Chef:** `get_chef_profile` / `register_chef` (onboarding), `set_daily_capacity` (→ `execute_daily_capacity_upsert`), `toggle_dish_stock` (→ `execute_dish_stock_toggle`).
+- **Driver:** `get_driver_profile` / `register_driver` (→ `execute_driver_profile_upsert`), `update_duty_status` (→ `execute_driver_trip_phase_update`).
+- **Master (oversight reads):** `get_kitchen_availability_summary`, `get_order_pipeline_summary`.
+
+→ We should decide whether to spec these now or after the core is built.
