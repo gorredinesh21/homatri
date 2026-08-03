@@ -14,9 +14,9 @@ Full spec for every tool: inputs, outputs, reads/writes, guards, pauses. Organiz
 
 ---
 
-# CUSTOMER DOMAIN (10 tools)
+# CUSTOMER DOMAIN (13 tools)
 
-## Same-domain (8)
+## Same-domain (10)
 
 ### `get_customer_profile`
 - **Purpose:** identify caller / check existence.
@@ -74,7 +74,21 @@ Full spec for every tool: inputs, outputs, reads/writes, guards, pauses. Organiz
 - **Guards:** order not found → `"no active order"`.
 - **AI inside:** no · **Reads:** `customer_orders`, `customer_order_items` · **Writes:** none · **Pause:** no · **Executors:** none.
 
-## Cross-domain (2)
+### `submit_order_review`  *(customer feedback)*
+- **Purpose:** capture customer feedback — chef & driver ratings + optional written comment.
+- **Inputs:** `order_id, chef_rating(1-5), driver_rating(1-5), comment?`
+- **Outputs:** `{status: SAVED|NOT_DELIVERED|ALREADY_REVIEWED|BAD_RATING, message}`
+- **Guards:** order ≠ DELIVERED → `"you can review after delivery"`; already reviewed → idempotent; rating ∉ 1..5 → template; **if chef_rating ≤ 2 or driver_rating ≤ 2 → also `escalate_to_admin` (cross)**.
+- **AI inside:** no · **Reads:** `customer_orders` · **Writes:** `customer_reviews` (**direct**, `execute_submit_order_review`); low rating → escalate (**delegate**) · **Pause:** no · **Executors:** `execute_submit_order_review` (+ conditional `escalate_to_admin`).
+
+### `get_order_status`
+- **Purpose:** live status of the active order (kitchen readiness, driver leg, ETA).
+- **Inputs:** `customer_phone` (or `order_id`)
+- **Outputs:** `{status: OK|NO_ACTIVE_ORDER, order_status, kitchen_state, driver_state, eta, message}`
+- **Guards:** no active order → `"no active order"`.
+- **AI inside:** no · **Reads:** `customer_orders`, `chef_order_readiness`, `system_delivery_stops` · **Writes:** none · **Pause:** no · **Executors:** none.
+
+## Cross-domain (3)
 
 ### `request_payment`
 - **Purpose:** get a payment link from Master, then wait for confirmation.
@@ -90,11 +104,18 @@ Full spec for every tool: inputs, outputs, reads/writes, guards, pauses. Organiz
 - **Guards:** order status ∉ {CONFIRMED, BATCHED, COOKING} → `"too late / not yet confirmed to change"`.
 - **AI inside:** no · **Reads:** `customer_orders` · **Writes:** on ACCEPT the note is saved to the order via **delegate** · **Pause:** yes — `CHEF_DECISION` (≤2 turns; else KEPT_ORIGINAL) · **Relay:** → `Master.relay_dietary_request` (deterministic).
 
+### `cancel_order`
+- **Purpose:** cancel before cutoff (auto-cancel + refund); reject after cutoff/cooking.
+- **Inputs:** `order_id, reason`
+- **Outputs:** `{status: CANCELLED_REFUNDED|CANCELLED|REJECTED_AFTER_CUTOFF, refund_amount?, message}`
+- **Guards:** order DELIVERED/CANCELLED → `"cannot cancel"`; window locked & cooking → `REJECTED_AFTER_CUTOFF`; else cancel.
+- **AI inside:** no · **Reads:** `customer_orders`, `system_meal_windows` · **Writes:** order → CANCELLED (**delegate** DW1); if paid → refund (**delegate** DW2 REFUNDED + Razorpay refund via Master) · **Pause:** no · **Relay:** → Master (refund) · **Executors:** DW1, DW2, `payment_service` refund.
+
 ---
 
-# CHEF DOMAIN (3 tools)
+# CHEF DOMAIN (6 tools)
 
-## Same-domain (1)
+## Same-domain (4)
 
 ### `get_chef_batch`
 - **Purpose:** the chef's locked batch — order-wise list + cook-summary.
@@ -102,6 +123,25 @@ Full spec for every tool: inputs, outputs, reads/writes, guards, pauses. Organiz
 - **Outputs:** `{status: OK|NO_BATCH, orders:[{order_id, customer_name, address, items:[{dish, qty, notes}]}], summary:[{dish, total_qty}], message}`
 - **Guards:** window not locked / no orders → `"no batch yet for <window>"`.
 - **AI inside:** no · **Reads:** `customer_orders`, `customer_order_items` (this chef, BATCHED) · **Writes:** none · **Pause:** no · **Executors:** none.
+
+### `get_chef_profile`
+- **Purpose:** identify a chef on inbound.
+- **Inputs:** `chef_phone`
+- **Outputs:** `{status: FOUND|NOT_FOUND, profile?, message}`
+- **AI inside:** no · **Reads:** `chef_profiles` · **Writes:** none · **Executors:** none.
+
+### `set_daily_capacity`
+- **Purpose:** chef sets max portions per dish for a date/window.
+- **Inputs:** `chef_phone, menu_item_id, service_date, window, max_capacity, is_unlimited?`
+- **Outputs:** `{status: SET, message}`
+- **Guards:** not this chef's dish → template; `max_capacity < 0` → template.
+- **AI inside:** no · **Reads:** `chef_menu_items` · **Writes:** `chef_daily_inventory` (**direct**) · **Executors:** `execute_daily_capacity_upsert`.
+
+### `toggle_dish_stock`
+- **Purpose:** mark a dish in/out of stock mid-day.
+- **Inputs:** `chef_phone, menu_item_id, is_available`
+- **Outputs:** `{status: UPDATED, message}`
+- **AI inside:** no · **Reads:** `chef_menu_items` · **Writes:** `chef_daily_inventory` (**direct**) · **Executors:** `execute_dish_stock_toggle`.
 
 ## Cross-domain (2)
 
@@ -121,9 +161,28 @@ Full spec for every tool: inputs, outputs, reads/writes, guards, pauses. Organiz
 
 ---
 
-# DRIVER DOMAIN (5 tools)
+# DRIVER DOMAIN (8 tools)
 
-## Same-domain (1)
+## Same-domain (4)
+
+### `get_driver_profile`
+- **Purpose:** identify a driver on inbound.
+- **Inputs:** `driver_phone`
+- **Outputs:** `{status: FOUND|NOT_FOUND, profile?, message}`
+- **AI inside:** no · **Reads:** `driver_profiles` · **Writes:** none · **Executors:** none.
+
+### `register_driver`
+- **Purpose:** onboard a driver (name, vehicle).
+- **Inputs:** `driver_phone, driver_name, vehicle_type, vehicle_number`
+- **Outputs:** `{status: REGISTERED|EXISTS|INVALID, message}`
+- **Guards:** missing fields → template; exists → template.
+- **AI inside:** no · **Reads:** `driver_profiles` · **Writes:** `driver_profiles` (**direct**) · **Executors:** `execute_driver_profile_upsert`.
+
+### `update_duty_status`
+- **Purpose:** driver goes on/off duty (availability).
+- **Inputs:** `driver_phone, on_duty: bool`
+- **Outputs:** `{status: ON_DUTY|OFF_DUTY, message}`
+- **AI inside:** no · **Writes:** `driver_profiles` (**direct**) · **Executors:** `execute_driver_profile_upsert`.
 
 ### `get_driver_route`
 - **Purpose:** the driver's route — surface **only the next leg**.
@@ -164,9 +223,9 @@ Full spec for every tool: inputs, outputs, reads/writes, guards, pauses. Organiz
 
 ---
 
-# MASTER DOMAIN (11 tools)
+# MASTER DOMAIN (13 tools)
 
-## Same-domain (1)
+## Same-domain (3)
 
 ### `call_maps_route`  *(external helper)*
 - **Purpose:** Google Maps route optimization; ordered stops + legs.
@@ -174,6 +233,18 @@ Full spec for every tool: inputs, outputs, reads/writes, guards, pauses. Organiz
 - **Outputs:** `{ordered_stops, total_distance_km, duration_mins, maps_url}`
 - **Guards:** `<2` stops → single leg; API error → haversine fallback order.
 - **AI inside:** no · **Reads:** none · **Writes:** none (engine persists) · **External:** Google Maps.
+
+### `get_kitchen_availability_summary`  *(oversight read)*
+- **Purpose:** capacity/stock across kitchens for a window.
+- **Inputs:** `window, service_date`
+- **Outputs:** `{kitchens:[{chef, dishes_available, capacity_left}], message}`
+- **AI inside:** no · **Reads:** `chef_profiles`, `chef_menu_items`, `chef_daily_inventory` · **Writes:** none · **Executors:** none.
+
+### `get_order_pipeline_summary`  *(oversight read)*
+- **Purpose:** order counts by status for a window.
+- **Inputs:** `window, service_date`
+- **Outputs:** `{counts:{PENDING_PAYMENT, CONFIRMED, BATCHED, COOKING, PACKED, PICKED_UP, DELIVERED, CANCELLED}, message}`
+- **AI inside:** no · **Reads:** `customer_orders` · **Writes:** none · **Executors:** none.
 
 ## Cross-domain (10)
 
@@ -263,11 +334,7 @@ Full spec for every tool: inputs, outputs, reads/writes, guards, pauses. Organiz
 
 ---
 
-# ⚠️ Tools NOT covered by the 7 flows (decide separately)
-The 7 flows covered the **order lifecycle happy path**. These real capabilities weren't derived yet — several map to Foundation executors that otherwise have no caller:
-- **Customer:** `submit_order_review` (→ `execute_submit_order_review`), `cancel_order`, `get_order_status` (live status — a known gap from the audit).
-- **Chef:** `get_chef_profile` / `register_chef` (onboarding), `set_daily_capacity` (→ `execute_daily_capacity_upsert`), `toggle_dish_stock` (→ `execute_dish_stock_toggle`).
-- **Driver:** `get_driver_profile` / `register_driver` (→ `execute_driver_profile_upsert`), `update_duty_status` (→ `execute_driver_trip_phase_update`).
-- **Master (oversight reads):** `get_kitchen_availability_summary`, `get_order_pipeline_summary`.
-
-→ We should decide whether to spec these now or after the core is built.
+# NOTES & OPEN FOUNDATION GAP
+- **Customer feedback** = `submit_order_review` (ratings + written comment), with **auto-escalation to Admin** when a rating ≤ 2.
+- **Chef onboarding & menu catalog are Admin/seed-managed.** There is **no `chef_profiles` or `chef_menu_items` write executor** in the frozen 21 — so there is deliberately **no `register_chef` or dish-CRUD agent tool**; chefs are onboarded and their menus created by Admin/seed. If self-service chef onboarding is wanted later, it needs **one new executor** (a controlled unfreeze). *Decision parked.*
+- **Grand total specced: 42 tools** — Customer 13, Chef 6, Driver 8, Master 13, Shared infra 2.

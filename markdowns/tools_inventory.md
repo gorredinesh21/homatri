@@ -1,6 +1,8 @@
 # Homaatri — Derived Tool Inventory
 
-Tools **derived from the flows** in [user_flows.md](user_flows.md) via the sequence-diagram method (§12). Grows one flow at a time. This is the contract for the rebuild's tool layer.
+Tools **derived from the flows** in [user_flows.md](user_flows.md) via the sequence-diagram method (§12).
+
+> **⚠️ SUPERSEDED (as canonical spec) by [tool_specs.md](tool_specs.md).** This file is kept as the flow-by-flow *derivation history* (how each tool was discovered). For the authoritative, domain-organized tool list with full inputs/outputs/guards, use `tool_specs.md`.
 
 Legend — Type: **READ** (any table, no restriction) · **WRITE** (own domain only) · **RELAY** (cross-domain, Master-mediated) · **PRIMITIVE** (shared runtime atom).
 Status: 🆕 to build · ✅ Foundation (executor exists) · ⏳ later flow.
