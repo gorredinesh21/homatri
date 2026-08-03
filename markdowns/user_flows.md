@@ -20,7 +20,7 @@ This document captures the **execution flows** exactly as the founder walked thr
 1. **Orchestration, not choreography.** One central conductor — the **Master agent** — mediates every cross-domain interaction. No agent talks to another agent directly.
 2. **Master is the operator, not a dumb pipe.** Master = COO / General Manager / Security Officer of Homaatri. It owns the cutoff clock, the payment gateway, route optimization, policy enforcement, delegation, and audit. Mediation is only *one* of its jobs.
 3. **Agent-in-the-loop.** Cross-domain requests are human-in-the-loop where **Master plays the human/approver**, and can escalate to a **real human (Admin)** when needed. Admin is a separate system/persona (the founder), distinct from the Master AI.
-4. **Least-privilege write delegation (locked).** Each agent may write **only its own tables**. Any cross-domain write is **delegated through Master** to the owning domain's executor (DW1/DW2/etc.) — never written directly. Bedrock already enforces single-owner writes.
+4. **Table access rules (locked).** **Any agent may READ any table.** An agent may **WRITE only its own tables.** Any **cross-domain write** goes **Master → target owner** (delegated to the owning domain's executor, DW1/DW2/etc.) — never written directly. Bedrock already enforces single-owner writes.
 5. **Legend used below:** 🛡️ guardrail · 🧠 LLM decision · 🔧 tool · 🔗 cross-domain relay (via Master) · ⏸️ pause & resume (interrupt + checkpoint) · ⏰ time-pool
 
 ---
@@ -35,7 +35,7 @@ This document captures the **execution flows** exactly as the founder walked thr
 
 ## 4. Flow 1 — Customer onboarding
 1. User: **"hi"** → 🛡️ Customer agent checks if the profile exists.
-2. **Not registered** → 🔗 relay to **Master** → 🧠 Master sends a welcome / "register with us — share your details" message.
+2. **Not registered** → 🧠 **Customer Agent sends the welcome directly** (onboarding is within the customer domain — no Master hop): *"register with us — share your name & address."*
 3. Customer sends **name + address** → 🔧 register function:
    - validates the basics arrived, then calls a **reusable `send_and_await_reply` primitive** → sends *"tap the clip and share your location pin"* → ⏸️ **pauses** until the pin arrives.
    - **No LLM in this step** — it's deterministic code sending a fixed message.
@@ -101,11 +101,31 @@ At the cutoff (11:30 / 6:30), Master:
 
 ---
 
-## 11. The cross-domain relay pattern (the mechanism)
-Every 🔗 relay works the same way:
-> A tool (may use the LLM to compose the message) hands off to Master → Master routes to the target agent → **the graph PAUSES via `interrupt()` + saves a checkpoint** (the origin thread is frozen) → when the reply arrives as a *new inbound WhatsApp event*, the graph **RESUMES** the frozen thread.
+## 11. The cross-domain wait mechanism — save & resume (core of the runtime)
 
-The "wait" is a **durable checkpoint**, never a blocked function call — because replies can arrive minutes/hours later. This is why LangGraph + a Postgres checkpointer are required (the piece the old build was missing entirely).
+There are **two kinds of wait**; never conflate them:
+- **Fast wait (~1s):** getting a value back (e.g. Master mints the payment link and returns it). A normal call that returns. Easy.
+- **Slow wait (minutes/hours):** waiting for a real-world event (payment done, location pin sent, chef decision). **Never a blocked call.**
+
+The slow wait is handled by **save & resume** (like pausing + saving a video game):
+1. The agent does its part (e.g. sends the link), then calls **`interrupt()`** → LangGraph **saves the entire thread state to the Postgres checkpointer**, keyed by **`thread_id = customer phone`** (the "save slot"), and the agent **stops running**. Nothing is blocked.
+2. Later the awaited event arrives — a **user message** (location pin) *or* a **system event** (Razorpay webhook). The handler calls **`Command(resume=<result>, thread_id=<phone>)`** → LangGraph reloads the save and the agent **continues from the exact line after `interrupt()`**.
+
+```python
+# paused agent node:
+link = call_master_to_mint(order_id, amount)     # fast wait — returns the link
+send_whatsapp(user, link)
+result = interrupt({"awaiting": "PAYMENT_CONFIRM", "order_id": order_id})  # PAUSE + SAVE, stop
+send_whatsapp(user, "Payment received — order CONFIRMED!")                 # runs on resume
+
+# separate webhook endpoint, minutes later:
+res = master.process_payment_webhook(payload)    # verify + DB update
+if res.paid:
+    await graph.ainvoke(Command(resume={"status": "PAID"}),
+                        config={"configurable": {"thread_id": res.customer_phone}})  # WAKE it
+```
+
+**This one mechanism powers every ⏸️ in the system** (payment, location pin, dietary). It is why LangGraph + a **Postgres checkpointer** are mandatory — the exact piece the old build never had (audit X1/R1). Subject to the ⭐ pending-state-rollback invariant: a timeout or a superseding new message discards the saved checkpoint cleanly.
 
 ---
 
