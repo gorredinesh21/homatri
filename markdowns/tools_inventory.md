@@ -45,10 +45,21 @@ Status: 🆕 to build · ✅ bedrock (executor exists) · ⏳ later flow.
 |---|---|---|---|
 | `request_payment(order_id)` 🆕 | RELAY | — | invokes Master `mint_payment_link`; sends link to user; then **`interrupt()`** awaiting `PAYMENT_CONFIRM` (resumed by the webhook via Master — see user_flows §11) |
 
+### From Flow 6 — Dietary request (Customer side)
+| Tool | Type | Reuses | Notes |
+|---|---|---|---|
+| `request_dietary_change(order_id, note)` 🆕 | RELAY | — | hands note to Master; ⏸️ awaits `CHEF_DECISION`; handles counter-offer (max 2 turns; else keep original) |
+
 ---
 
 ## Chef Agent tools
-_(to be derived — Flow 6)_
+
+### From Flow 6 — Batch view, dietary response, ready-relay
+| Tool | Type | Reuses (bedrock) | Notes |
+|---|---|---|---|
+| `get_chef_batch(chef, window, date)` 🆕 | READ | — | **order-wise** (items + address per order) + consolidated cook-summary at bottom |
+| `respond_to_dietary_request(hitl_id, decision, counter?)` 🆕 | WRITE(sys HITL) | `execute_hitl_session_create_or_resume` ✅ | accept / reject / counter |
+| `mark_order_ready(order_id, box_count?, notes?)` 🆕 | WRITE(own) | `execute_order_readiness_record` ✅ | then triggers Master `relay_order_ready_to_driver` |
 
 ## Driver Agent tools
 _(to be derived — Flow 7)_
@@ -61,7 +72,25 @@ _(to be derived — Flow 7)_
 | `mint_payment_link(order_id, amount, phone)` 🆕 | WRITE(sys)+delegate | `payment_service` ✅; delegates `execute_payment_record_creation` ✅ + `execute_system_audit_log` ✅ | calls Razorpay, stores `plink_id` on `customer_payments` via delegation, returns link |
 | `process_payment_webhook(payload)` 🆕 | WRITE(sys)+delegate | `payment_service` HMAC ✅; `execute_payment_webhook_idempotency_log` ✅; delegates DW2→DW1 ✅ | verify + idempotent; on PAID → payment PAID + order CONFIRMED → **resumes the customer's paused thread** via `Command(resume, thread_id=phone)` |
 
-_(more Master tools — Flows 5, 8, and the relays)_
+### From Flow 5 — Cutoff & Batch (scheduled background engine — no user-facing latency)
+**Trigger:** GCP **Cloud Scheduler** at 11:30 / 18:30 → internal endpoint. Runs as a background job; even if it takes tens of seconds (Maps API), nobody waits.
+| Tool | Type | Reuses (bedrock/infra) |
+|---|---|---|
+| `run_cutoff_batch(window, date)` 🆕 | engine | orchestrates the steps below |
+| `allocate_driver(window, date)` 🆕 | WRITE via delegate | `execute_driver_trip_initialization` ✅ (driver table) |
+| `call_maps_route(stops)` 🆕 | external | Google Maps infra |
+
+**Reuses existing:** `execute_meal_window_lock_and_creation` ✅, `execute_cutoff_batch_lock_and_routes_creation` ✅ (→ DW1 order→BATCHED), `execute_outbound_whatsapp_enqueue` ✅, `execute_system_audit_log` ✅.
+
+**Write ownership (Flow 5):** `system_*` (window, routes, stops, stop_orders, outbound, audit) = **direct**; order → BATCHED = **delegate DW1**; driver trip = **delegate `execute_driver_trip_initialization`**.
+
+### From Flow 6 — Relays (deterministic routers)
+| Tool | Type | Reuses | Notes |
+|---|---|---|---|
+| `relay_dietary_request(order_id, note)` 🆕 | RELAY (deterministic) | `execute_hitl_session_create_or_resume` ✅; on accept delegates note-write to customer executor | routes customer↔chef, holds HITL, enforces 2-turn cap |
+| `relay_order_ready_to_driver(order_id)` 🆕 | RELAY (deterministic) | reads route → `execute_outbound_whatsapp_enqueue` ✅ | notifies assigned driver food is packed |
+
+_(more Master tools — Flow 7 relays + Flow 8)_
 
 ---
 
@@ -70,3 +99,7 @@ _(more Master tools — Flows 5, 8, and the relays)_
 - No write cycles in Flows 1–3 (onboarding + ordering are linear chains).
 - **SCC #1 = {Customer Agent, Master Agent}** (Flow 4): Customer calls Master to mint; Master resumes Customer on the webhook → mutual dependency → **designed together**.
 - **Resume triggers:** a paused thread (`interrupt()`) resumes on EITHER a user inbound message OR a system event (payment webhook), via `Command(resume=..., thread_id=phone)`.
+- **Flow 5 (cutoff):** background/scheduled (Cloud Scheduler); Master writes `system_*` directly and delegates order→BATCHED (DW1) + driver-trip (driver executor). No cycle; no user latency.
+- **Latency model:** interactive turn ≈ 2–6 s (1–2 LLM calls); each extra *synchronous* agent hop adds ~1–3 s → keep mechanical relays deterministic. Slow waits use save/resume (no spinner). Scheduled flows = 0 user latency.
+- **Master relays are deterministic** (routing + HITL/turn-management, no LLM turn). Master takes an LLM turn only for Master-level decisions (escalate to Admin, exceptions). Domain judgment stays at the spokes.
+- **SCC collapse:** because Master mediates every cross-domain path, {Customer, Chef, Driver, Master} form **one cluster through Master** → design Master + its relays as one coherent unit, then the spokes.
