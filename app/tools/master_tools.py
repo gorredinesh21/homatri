@@ -25,7 +25,25 @@ from app.executors.customer import (
     execute_payment_status_update,
 )
 from app.models.customer import CustomerOrder, CustomerPayment
+from app.services.maps_service import maps_service
 from app.services.payment_service import razorpay_service
+
+
+# =============================================================================
+# HELPER: call_maps_route  (Master · same-domain · external helper, no DB)
+#
+# Optimize a kitchen -> deliveries route. Real Google Routes API when a key is
+# set, else a deterministic nearest-neighbour mock (see app/services/maps_service).
+# Used internally by run_cutoff_batch; not an LLM-facing @tool (raw coordinates).
+# =============================================================================
+async def _call_maps_route(
+    *, origin: dict[str, float], stops: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Return {mode, order, total_distance_km, estimated_duration_mins, maps_url}.
+
+    `order` is the stops' original indices in optimized visit order.
+    """
+    return await maps_service.optimize_route(origin=origin, stops=stops)
 
 
 # =============================================================================

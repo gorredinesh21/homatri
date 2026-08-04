@@ -39,6 +39,11 @@ class Settings(BaseSettings):
     razorpay_webhook_secret: str = "mock_webhook_secret_9999"
     razorpay_mock_mode: bool = True
 
+    # ---- Google Maps (Routes API) ----
+    # Empty -> maps_service runs in MOCK mode (nearest-neighbour). Set a real key
+    # (GCP: enable Routes API + billing) to switch to live route optimization.
+    google_maps_api_key: str = ""
+
 
 
 settings = Settings()
