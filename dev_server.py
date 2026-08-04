@@ -6,7 +6,7 @@ like real WhatsApp. Ingress = app.api.whatsapp.parse_webhook; routing =
 app.router.route. Only the `run_agent` runtime here is harness-specific
 (Kimi K2 on Bedrock via boto3).
 
-- Tools bound: get_customer_profile, register_customer, find_nearby_kitchens.
+- Tools bound: Flows 1-3 (register, find kitchens, view menu, create/add/view cart).
 - DB: local SQLite poc.db  (seed first:  python dev_seed.py)
 
 Run:  python dev_seed.py
@@ -27,31 +27,63 @@ import app.tools.customer_tools  # noqa: F401  (registers the finish_registratio
 from app.agents.prompts import CUSTOMER_PROMPT
 from app.api.whatsapp import normalize_phone, parse_webhook, verify_challenge
 from app.router import route
-from app.tools.customer_tools import find_nearby_kitchens, get_customer_profile, register_customer
+from app.tools.customer_tools import (
+    add_item_to_order,
+    create_order,
+    find_nearby_kitchens,
+    get_customer_profile,
+    register_customer,
+    view_cart,
+    view_chef_menu,
+)
 from app.tools.pause import Pause, clear_pending, get_pending
 
-KIMI = "moonshot.kimi-k2-thinking"
+KIMI = "moonshotai.kimi-k2.5"   # non-thinking Kimi — ~5x faster than kimi-k2-thinking, same tool support
 WEBHOOK_VERIFY_TOKEN = "homatri_verify"
 _br = boto3.Session(profile_name="homatri-bedrock").client("bedrock-runtime", region_name="us-east-1")
 
-TOOLS = {t.name: t for t in [get_customer_profile, register_customer, find_nearby_kitchens]}
+TOOLS = {t.name: t for t in [
+    get_customer_profile, register_customer, find_nearby_kitchens, view_chef_menu,
+    create_order, add_item_to_order, view_cart,
+]}
 CONVOS: dict[str, list] = {}  # phone -> [{role, text}]  (text-only history per phone)
 
 
 def _toolconfig() -> dict:
+    """Full JSON schema per tool (from the Pydantic args_schema) so nested/list
+    args like create_order.items=[{item_id, quantity}] reach Kimi intact."""
     specs = []
     for name, t in TOOLS.items():
-        props = t.args
+        schema = t.args_schema.model_json_schema()
         specs.append({"toolSpec": {"name": name, "description": t.description,
-            "inputSchema": {"json": {"type": "object",
-                "properties": {k: {"type": v.get("type", "string")} for k, v in props.items()},
-                "required": list(props.keys())}}}})
+            "inputSchema": {"json": schema}}})
     return {"tools": specs}
 
 
 def _clean(t: str) -> str:
     t = re.sub(r"<think>.*?</think>", "", t, flags=re.DOTALL)
     return t.replace("<think>", "").replace("</think>", "").strip()
+
+
+def _window_messages(hist: list, n: int = 4) -> list:
+    """Context window: last `n` USER + last `n` ASSISTANT turns (chronological).
+
+    Returned as valid alternating Bedrock messages — starts with a user turn,
+    consecutive same-role turns merged. (In-memory stand-in for the real
+    DB-backed Context Assembler over conversation_messages.)
+    """
+    user_idx = [i for i, h in enumerate(hist) if h["role"] == "user"][-n:]
+    bot_idx = [i for i, h in enumerate(hist) if h["role"] == "assistant"][-n:]
+    windowed = [hist[i] for i in sorted(set(user_idx) | set(bot_idx))]
+    while windowed and windowed[0]["role"] != "user":
+        windowed.pop(0)
+    msgs: list = []
+    for h in windowed:
+        if msgs and msgs[-1]["role"] == h["role"]:
+            msgs[-1]["content"][0]["text"] += "\n" + h["text"]
+        else:
+            msgs.append({"role": h["role"], "content": [{"text": h["text"]}]})
+    return msgs
 
 
 async def run_agent(phone: str, user_text: str) -> dict:
@@ -62,8 +94,25 @@ async def run_agent(phone: str, user_text: str) -> dict:
         f"\n\nThe current customer's phone number is {phone}. Always pass this exact phone to any tool "
         f"needing customer_phone. At the start of a conversation call get_customer_profile to check if they "
         f"are registered. If NOT_FOUND or INCOMPLETE, ask for their name and full delivery address, then call "
-        f"register_customer(customer_phone, name, delivery_address).")}]
-    messages = [{"role": h["role"], "content": [{"text": h["text"]}]} for h in hist]
+        f"register_customer(customer_phone, name, delivery_address). If get_customer_profile says they are "
+        f"already registered, do NOT call register_customer again."
+        f"\n\nGROUNDING — this is critical:"
+        f"\n- You have ZERO knowledge of any kitchen, dish, price, or menu. Every fact you state MUST come from a "
+        f"tool result you received THIS turn. NEVER write a menu, dish name, or price from your own memory."
+        f"\n- NEVER invent or guess IDs, phone numbers, or item codes. The tools take plain NAMES — pass them."
+        f"\n\nFlow — browse & order (refer to kitchens and dishes by NAME):"
+        f"\n- To find kitchens: find_nearby_kitchens(latitude, longitude). For a registered customer, use the "
+        f"saved location from get_customer_profile — don't ask for a pin again."
+        f"\n- When the customer picks a kitchen, call view_chef_menu(kitchen=<the kitchen name they said>). "
+        f"If they say 'the 3rd one', map it to that kitchen's name from the list you just showed."
+        f"\n- To place an order: create_order(customer_phone, kitchen=<name>, items=[{{'dish_name': <name>, "
+        f"'quantity': N}}]). To change the cart: add_item_to_order(customer_phone, items=[{{'dish_name': <name>, "
+        f"'quantity': N}}]) — quantity is the FINAL desired count, not how many to add. Show the cart with "
+        f"view_cart(customer_phone)."
+        f"\n- If a tool says a name matches nothing or is ambiguous, re-show the menu/list and ask — do not guess."
+        f"\n- Payment (request_payment) is not built yet — after an order is created, tell the customer their "
+        f"cart is ready and that payment is coming soon. Stop there.")}]
+    messages = _window_messages(hist, n=4)   # last 4 user + last 4 agent turns
     tc = _toolconfig()
     for _ in range(6):
         r = await asyncio.to_thread(_br.converse, modelId=KIMI, system=system, messages=messages,
@@ -74,11 +123,14 @@ async def run_agent(phone: str, user_text: str) -> dict:
             for b in out["content"]:
                 if "toolUse" in b:
                     tu = b["toolUse"]
+                    print(f"[{phone}] TOOL {tu['name']}({tu['input']})", flush=True)
                     try:
                         res = await TOOLS[tu["name"]].ainvoke(tu["input"])
                     except Pause as p:
+                        print(f"[{phone}]   -> PAUSE: {p.message[:80]}", flush=True)
                         hist.append({"role": "assistant", "text": p.message})
                         return {"reply": p.message, "await_location": True}
+                    print(f"[{phone}]   -> {str(res)[:120]}", flush=True)
                     results.append({"toolResult": {"toolUseId": tu["toolUseId"], "content": [{"text": str(res)}]}})
             messages.append({"role": "user", "content": results})
             continue
