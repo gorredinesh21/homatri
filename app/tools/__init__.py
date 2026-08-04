@@ -6,6 +6,7 @@ from app.tools.customer_tools import (
     find_nearby_kitchens,
     get_customer_profile,
     register_customer,
+    request_payment,
     view_cart,
     view_chef_menu,
 )
@@ -18,4 +19,5 @@ __all__ = [
     "create_order",
     "add_item_to_order",
     "view_cart",
+    "request_payment",
 ]

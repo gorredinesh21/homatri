@@ -33,10 +33,11 @@ from app.tools.customer_tools import (
     find_nearby_kitchens,
     get_customer_profile,
     register_customer,
+    request_payment,
     view_cart,
     view_chef_menu,
 )
-from app.tools.pause import Pause, clear_pending, get_pending
+from app.tools.pause import RESUME_HANDLERS, Pause, clear_pending, get_pending
 
 KIMI = "moonshotai.kimi-k2.5"   # non-thinking Kimi — ~5x faster than kimi-k2-thinking, same tool support
 WEBHOOK_VERIFY_TOKEN = "homatri_verify"
@@ -44,7 +45,7 @@ _br = boto3.Session(profile_name="homatri-bedrock").client("bedrock-runtime", re
 
 TOOLS = {t.name: t for t in [
     get_customer_profile, register_customer, find_nearby_kitchens, view_chef_menu,
-    create_order, add_item_to_order, view_cart,
+    create_order, add_item_to_order, view_cart, request_payment,
 ]}
 CONVOS: dict[str, list] = {}  # phone -> [{role, text}]  (text-only history per phone)
 
@@ -110,8 +111,9 @@ async def run_agent(phone: str, user_text: str) -> dict:
         f"'quantity': N}}]) — quantity is the FINAL desired count, not how many to add. Show the cart with "
         f"view_cart(customer_phone)."
         f"\n- If a tool says a name matches nothing or is ambiguous, re-show the menu/list and ask — do not guess."
-        f"\n- Payment (request_payment) is not built yet — after an order is created, tell the customer their "
-        f"cart is ready and that payment is coming soon. Stop there.")}]
+        f"\n- To take payment, call request_payment(customer_phone). It sends a payment link and waits for the "
+        f"customer to pay. Do NOT confirm the payment yourself — the system confirms and resumes automatically "
+        f"once the payment completes. After calling it, just tell the customer to use the payment link.")}]
     messages = _window_messages(hist, n=4)   # last 4 user + last 4 agent turns
     tc = _toolconfig()
     for _ in range(6):
@@ -127,17 +129,23 @@ async def run_agent(phone: str, user_text: str) -> dict:
                     try:
                         res = await TOOLS[tu["name"]].ainvoke(tu["input"])
                     except Pause as p:
-                        print(f"[{phone}]   -> PAUSE: {p.message[:80]}", flush=True)
+                        print(f"[{phone}]   -> PAUSE({p.await_type}): {p.message[:80]}", flush=True)
                         hist.append({"role": "assistant", "text": p.message})
-                        return {"reply": p.message, "await_location": True}
+                        return {"reply": p.message,
+                                "await_location": p.await_type == "LOCATION_PIN",
+                                "await_payment": p.await_type == "PAYMENT_CONFIRM"}
                     print(f"[{phone}]   -> {str(res)[:120]}", flush=True)
                     results.append({"toolResult": {"toolUseId": tu["toolUseId"], "content": [{"text": str(res)}]}})
             messages.append({"role": "user", "content": results})
             continue
         final = _clean("".join(b.get("text", "") for b in out["content"] if "text" in b))
         hist.append({"role": "assistant", "text": final})
-        return {"reply": final, "await_location": get_pending(phone) is not None}
-    return {"reply": "(the agent stopped without a reply)", "await_location": False}
+        note = get_pending(phone)
+        at = note["await_type"] if note else None
+        return {"reply": final,
+                "await_location": at == "LOCATION_PIN",
+                "await_payment": at == "PAYMENT_CONFIRM"}
+    return {"reply": "(the agent stopped without a reply)", "await_location": False, "await_payment": False}
 
 
 app = FastAPI(title="Homaatri dev harness")
@@ -161,6 +169,22 @@ async def webhook(req: Request):
     if msg is None:
         return JSONResponse({"status": "ignored"})   # status callback etc.
     return JSONResponse(await route(msg, run_agent))
+
+
+@app.post("/pay")
+async def pay(req: Request):
+    """Mock gateway callback: the widget's '💳 Pay' button fires this (stands in for the
+    Razorpay webhook). Resumes the paused customer thread -> payment PAID -> order CONFIRMED."""
+    body = await req.json()
+    phone = normalize_phone(body.get("phone", ""))
+    note = get_pending(phone)
+    if not note or note["await_type"] != "PAYMENT_CONFIRM":
+        return JSONResponse({"reply": "No payment is pending.", "await_payment": False})
+    handler = RESUME_HANDLERS[note["resume"]]
+    reply = await handler(phone, {"transaction_id": f"txn_mock_{phone}"}, note["ctx"])
+    clear_pending(phone)
+    CONVOS.setdefault(phone, []).append({"role": "assistant", "text": reply})
+    return JSONResponse({"reply": reply, "await_payment": False})
 
 
 @app.post("/reset")
@@ -211,17 +235,25 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
        <button class="rst">reset</button><button class="cls">✕</button></div>
      <div class="log"><div class="msg sys">User ${phone}. Try "hi" (to register a new user) or "get me nearby kitchens".</div></div>
      <form class="f"><button type="button" class="loc" title="share location">📍</button>
+       <button type="button" class="pay" title="pay now" style="display:none">💳 Pay</button>
        <input class="m" autocomplete="off" placeholder="Message…"><button class="snd">Send</button></form>`;
    const log=w.querySelector('.log'),f=w.querySelector('.f'),m=w.querySelector('.m'),
-         snd=w.querySelector('.snd'),loc=w.querySelector('.loc');
+         snd=w.querySelector('.snd'),loc=w.querySelector('.loc'),pay=w.querySelector('.pay');
    const add=(cls,txt)=>{const d=document.createElement('div');d.className='msg '+cls;d.textContent=txt;log.appendChild(d);log.scrollTop=log.scrollHeight;return d;};
+   function applyAwait(j){loc.classList.toggle('hot',!!j.await_location);pay.style.display=j.await_payment?'':'none';}
    async function send(waMsg,label){add('me',label);snd.disabled=true;loc.disabled=true;
      const t=add('bot','…thinking (Kimi K2)…');
      const payload={entry:[{changes:[{value:{messages:[waMsg]}}]}]};
      try{const r=await fetch('/webhook',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-         const j=await r.json();t.textContent=j.reply||'(no reply)';loc.classList.toggle('hot',!!j.await_location);}
+         const j=await r.json();t.textContent=j.reply||'(no reply)';applyAwait(j);}
      catch(e){t.textContent='Error: '+e;}
      snd.disabled=false;loc.disabled=false;m.focus();}
+   pay.onclick=async()=>{add('me','💳 Paid (mock)');pay.disabled=true;snd.disabled=true;
+     const t=add('bot','…processing payment…');
+     try{const r=await fetch('/pay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone})});
+         const j=await r.json();t.textContent=j.reply||'(no reply)';pay.style.display=j.await_payment?'':'none';}
+     catch(e){t.textContent='Error: '+e;}
+     pay.disabled=false;snd.disabled=false;};
    f.onsubmit=(e)=>{e.preventDefault();const text=m.value.trim();if(!text)return;m.value='';
      send({from:phone,type:'text',text:{body:text}},text);};
    loc.onclick=()=>{const FIXED={from:phone,type:'location',location:{latitude:19.1235,longitude:73.0012}};
@@ -233,7 +265,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
        e=>{loc.disabled=false;send(FIXED,'📍 test coords (geolocation blocked: '+e.message+')');},
        {enableHighAccuracy:true,timeout:10000});};
    w.querySelector('.rst').onclick=async()=>{await fetch('/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone})});
-     log.innerHTML='';add('sys','reset');loc.classList.remove('hot');};
+     log.innerHTML='';add('sys','reset');loc.classList.remove('hot');pay.style.display='none';};
    w.querySelector('.cls').onclick=()=>w.remove();
    board.appendChild(w);
  }

@@ -6,16 +6,18 @@ from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chef import ChefMenuItem, ChefProfile
-from app.models.customer import CustomerOrder, CustomerProfile, CustomerReview
+from app.models.customer import CustomerOrder, CustomerPayment, CustomerProfile, CustomerReview
 from app.tools.common import resolve_time_pool
 from app.models.system import SystemSetting
 from app.tools.customer_tools import (
     _add_item_to_order,
+    _confirm_payment,
     _create_order,
     _find_nearby_kitchens,
     _finish_registration,
     _get_customer_profile,
     _register_customer,
+    _request_payment,
     _view_cart,
     _view_chef_menu,
 )
@@ -385,3 +387,55 @@ async def test_view_cart_shows_items_and_totals(db_session: AsyncSession):
     assert res["items"][0]["quantity"] == 2
     assert res["subtotal"] == 240.0
     assert res["total"] == 240.0 + res["delivery_fee"]
+
+
+# ---- request_payment + confirm_payment (Flow 4) ----
+
+async def _seed_order_pending_payment(session, cust, chef):
+    """Register customer + chef + one lunch dish, then create a PENDING_PAYMENT order."""
+    await _seed_customer_and_chef_with_dish(session, cust, chef)
+    res = await _create_order(session, customer_phone=cust, kitchen=chef,
+                              items=[{"dish_name": "Thali", "quantity": 2}], now=BEFORE_LUNCH)
+    return res["order_id"]
+
+
+@pytest.mark.asyncio
+async def test_request_payment_creates_pending_and_link(db_session: AsyncSession):
+    order_id = await _seed_order_pending_payment(db_session, "7000000050", "9876500050")
+    res = await _request_payment(db_session, customer_phone="7000000050")
+    assert res["status"] == "AWAITING_PAYMENT"
+    assert res["order_id"] == order_id
+    assert res["link"]                                   # a payment link was minted
+    pay = await db_session.get(CustomerPayment, res["payment_id"])
+    assert pay is not None and pay.status == "PENDING"
+    assert float(pay.amount_due) == res["amount"]
+
+
+@pytest.mark.asyncio
+async def test_request_payment_no_active_order(db_session: AsyncSession):
+    db_session.add(CustomerProfile(customer_phone="7000000051", name="C", delivery_address="X", is_registered=True))
+    await db_session.flush()
+    res = await _request_payment(db_session, customer_phone="7000000051")
+    assert res["status"] == "NO_ACTIVE_ORDER"
+
+
+@pytest.mark.asyncio
+async def test_confirm_payment_marks_paid_and_confirms_order(db_session: AsyncSession):
+    order_id = await _seed_order_pending_payment(db_session, "7000000052", "9876500052")
+    req = await _request_payment(db_session, customer_phone="7000000052")
+    res = await _confirm_payment(db_session, payment_id=req["payment_id"], transaction_id="txn_test_1")
+    assert res["status"] == "PAID"
+    pay = await db_session.get(CustomerPayment, req["payment_id"])
+    assert pay.status == "PAID"
+    order = await db_session.get(CustomerOrder, order_id)
+    assert order.status == "CONFIRMED"                   # DW2 -> DW1 cascade
+
+
+@pytest.mark.asyncio
+async def test_request_payment_not_payable_after_confirmed(db_session: AsyncSession):
+    await _seed_order_pending_payment(db_session, "7000000053", "9876500053")
+    req = await _request_payment(db_session, customer_phone="7000000053")
+    await _confirm_payment(db_session, payment_id=req["payment_id"])
+    # order is now CONFIRMED -> no active order to pay for
+    res = await _request_payment(db_session, customer_phone="7000000053")
+    assert res["status"] == "NO_ACTIVE_ORDER"
