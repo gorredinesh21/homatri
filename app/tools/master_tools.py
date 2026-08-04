@@ -12,6 +12,7 @@ Same pattern as the customer tools: inner `_fn(session, ...)` (unit-testable)
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 
 from langchain_core.tools import tool
@@ -19,12 +20,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.session import transaction
+from app.db.session import SessionFactory, transaction
 from app.executors.customer import (
     execute_payment_record_creation,
     execute_payment_status_update,
 )
 from app.models.customer import CustomerOrder, CustomerPayment
+from app.models.driver import DriverProfile, DriverTripStatus
 from app.services.maps_service import maps_service
 from app.services.payment_service import razorpay_service
 
@@ -44,6 +46,76 @@ async def _call_maps_route(
     `order` is the stops' original indices in optimized visit order.
     """
     return await maps_service.optimize_route(origin=origin, stops=stops)
+
+
+# =============================================================================
+# TOOL: allocate_driver  (Master · cross-domain · READ selection)
+#
+# Picks one available driver for a batch (1 chef -> 1 driver per window). Pure
+# selection — it does NOT write the trip (that needs a route_id + total_stops,
+# which only exist after the route is built). run_cutoff_batch creates the trip
+# via execute_driver_trip_initialization once the route exists.
+# =============================================================================
+class AllocateDriverInput(BaseModel):
+    window: str = Field(..., description="'LUNCH' or 'DINNER'.")
+    service_date: str = Field(..., description="ISO date of the batch, e.g. '2026-08-05'.")
+    chef_phone: str | None = Field(default=None, description="The batch's kitchen (for logging; not used for selection).")
+
+
+async def _allocate_driver(
+    session: AsyncSession, *, window: str, service_date: date, chef_phone: str | None = None
+) -> dict[str, Any]:
+    """Select one available driver for the window. {status: ASSIGNED|NO_DRIVER, ...}.
+
+    Available = active_status AND is_on_shift AND not already on a trip for this
+    (service_date, window). No location match — DriverProfile has no coordinates.
+    Guard: none available -> NO_DRIVER (caller escalates via escalate_to_admin).
+    """
+    taken = {
+        r for (r,) in (
+            await session.execute(
+                select(DriverTripStatus.driver_phone).where(
+                    DriverTripStatus.service_date == service_date,
+                    DriverTripStatus.meal_window == window,
+                )
+            )
+        ).all()
+    }
+    drivers = (
+        await session.execute(
+            select(DriverProfile)
+            .where(DriverProfile.active_status.is_(True), DriverProfile.is_on_shift.is_(True))
+            .order_by(DriverProfile.driver_phone)
+        )
+    ).scalars().all()
+    available = [d for d in drivers if d.driver_phone not in taken]
+    if not available:
+        return {
+            "status": "NO_DRIVER",
+            "message": (
+                f"No driver available for {window.lower()} on {service_date}. "
+                f"Escalate to admin (escalate_to_admin)."
+            ),
+        }
+
+    d = available[0]
+    return {
+        "status": "ASSIGNED",
+        "driver_phone": d.driver_phone,
+        "driver_name": d.driver_name,
+        "vehicle": f"{d.vehicle_type} {d.vehicle_number}",
+        "message": f"Driver {d.driver_name} ({d.driver_phone}) assigned for {window.lower()} on {service_date}.",
+    }
+
+
+@tool("allocate_driver", args_schema=AllocateDriverInput)
+async def allocate_driver(window: str, service_date: str, chef_phone: str | None = None) -> str:
+    """Master: pick an available driver for a batch window (1 chef -> 1 driver)."""
+    async with SessionFactory() as session:
+        res = await _allocate_driver(
+            session, window=window, service_date=date.fromisoformat(service_date), chef_phone=chef_phone,
+        )
+        return res["message"]
 
 
 # =============================================================================

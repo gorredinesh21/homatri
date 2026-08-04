@@ -14,6 +14,7 @@ import app.models  # noqa: F401  (register all models)
 from app.db.base import Base
 from app.db.session import SessionFactory, engine
 from app.models.chef import ChefMenuItem, ChefProfile
+from app.models.driver import DriverProfile
 from app.models.system import SystemSetting
 
 # 4 real Ghansoli chefs, each with LUNCH + DINNER dishes (same as dev_seed).
@@ -30,6 +31,12 @@ CHEFS = [
     dict(phone="9876543213", kitchen="Dakshin Annapoorna Tiffins", chef="Chef Meenakshi Iyer",
          addr="Sector 7, Ghansoli", lat="19.1260", lng="73.0030", diet="VEG",
          dishes=[("Special Chettinad Veg Meals", "190.00", "LUNCH"), ("Mysore Masala Dosa Pack", "140.00", "DINNER")]),
+]
+
+# 2 Ghansoli drivers, both on shift (from the old seed data).
+DRIVERS = [
+    dict(phone="9111222333", name="Vikram Solanki", vehicle_type="BIKE", vehicle_number="MH43 AB 1234", model="Honda Activa 6G"),
+    dict(phone="9111222334", name="Amit Kumar", vehicle_type="BIKE", vehicle_number="MH43 CD 5678", model="TVS Jupiter"),
 ]
 
 
@@ -51,9 +58,15 @@ async def main():
                     chef_phone=c["phone"], dish_name=dish_name, unit_price=Decimal(price),
                     meal_type=meal, dietary_tag=c["diet"], is_available=True,
                 ))
+        for d in DRIVERS:
+            s.add(DriverProfile(
+                driver_phone=d["phone"], driver_name=d["name"], vehicle_type=d["vehicle_type"],
+                vehicle_number=d["vehicle_number"], vehicle_model=d["model"],
+                is_on_shift=True, active_status=True,
+            ))
         await s.commit()
 
-    print("Reset poc.db: 4 Ghansoli chefs + delivery_fee=20. NO customer — register from scratch.")
+    print("Reset poc.db: 4 Ghansoli chefs + 2 drivers + delivery_fee=20. NO customer — register from scratch.")
 
 
 if __name__ == "__main__":

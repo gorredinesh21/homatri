@@ -1,16 +1,18 @@
 """Tests for Master-domain tools (Flow 4 gateway): mint_payment_link + process_payment_webhook."""
 
 import pytest
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chef import ChefMenuItem, ChefProfile
 from app.models.customer import CustomerOrder, CustomerPayment, CustomerProfile
+from app.models.driver import DriverProfile, DriverTripStatus
 from app.tools.customer_tools import _create_order
-from app.tools.master_tools import _mint_payment_link, _process_payment_webhook
+from app.tools.master_tools import _allocate_driver, _mint_payment_link, _process_payment_webhook
 
 BEFORE_LUNCH = datetime(2026, 8, 4, 9, 0)
+SERVICE_DATE = date(2026, 8, 4)
 
 
 async def _seed_pending_order(session, cust="7000000070", chef="9876500070"):
@@ -67,3 +69,50 @@ async def test_process_webhook_idempotent(db_session: AsyncSession):
     await _process_payment_webhook(db_session, payment_id=mint["payment_id"], transaction_id="txn_1")
     again = await _process_payment_webhook(db_session, payment_id=mint["payment_id"], transaction_id="txn_1")
     assert again["status"] == "ALREADY_PAID"     # repeat callback is a no-op
+
+
+# ---- allocate_driver ----
+
+async def _seed_driver(session, phone, name, on_shift=True, active=True):
+    session.add(DriverProfile(driver_phone=phone, driver_name=name, vehicle_type="BIKE",
+                              vehicle_number="MH43 XX 0000", vehicle_model="Activa",
+                              is_on_shift=on_shift, active_status=active))
+    await session.flush()
+
+
+@pytest.mark.asyncio
+async def test_allocate_driver_assigns_available(db_session: AsyncSession):
+    await _seed_driver(db_session, "9111000001", "Vikram")
+    res = await _allocate_driver(db_session, window="LUNCH", service_date=SERVICE_DATE)
+    assert res["status"] == "ASSIGNED"
+    assert res["driver_phone"] == "9111000001"
+
+
+@pytest.mark.asyncio
+async def test_allocate_driver_none_when_off_shift(db_session: AsyncSession):
+    await _seed_driver(db_session, "9111000002", "Resting", on_shift=False)
+    res = await _allocate_driver(db_session, window="LUNCH", service_date=SERVICE_DATE)
+    assert res["status"] == "NO_DRIVER"
+
+
+@pytest.mark.asyncio
+async def test_allocate_driver_skips_already_assigned(db_session: AsyncSession):
+    # Only one driver, already on a trip this window -> NO_DRIVER
+    await _seed_driver(db_session, "9111000003", "Busy")
+    db_session.add(DriverTripStatus(driver_phone="9111000003", route_id="rt_dummy",
+                                    service_date=SERVICE_DATE, meal_window="LUNCH", total_stops=3))
+    await db_session.flush()
+    res = await _allocate_driver(db_session, window="LUNCH", service_date=SERVICE_DATE)
+    assert res["status"] == "NO_DRIVER"
+
+
+@pytest.mark.asyncio
+async def test_allocate_driver_picks_the_free_one(db_session: AsyncSession):
+    await _seed_driver(db_session, "9111000004", "Taken")
+    await _seed_driver(db_session, "9111000005", "Free")
+    db_session.add(DriverTripStatus(driver_phone="9111000004", route_id="rt_dummy",
+                                    service_date=SERVICE_DATE, meal_window="LUNCH", total_stops=2))
+    await db_session.flush()
+    res = await _allocate_driver(db_session, window="LUNCH", service_date=SERVICE_DATE)
+    assert res["status"] == "ASSIGNED"
+    assert res["driver_phone"] == "9111000005"   # the un-assigned one
