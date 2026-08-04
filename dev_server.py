@@ -22,6 +22,7 @@ import re
 import boto3
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 
 import app.tools.customer_tools  # noqa: F401  (registers the finish_registration + confirm_payment resume handlers)
 from sqlalchemy import select
@@ -145,6 +146,7 @@ async def run_agent(phone: str, user_text: str) -> dict:
 
 
 app = FastAPI(title="Homaatri dev harness")
+app.mount("/static", StaticFiles(directory="app/static"), name="static")   # serves the mock payment page
 
 
 @app.get("/webhook")
@@ -255,6 +257,8 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
  <div id="board"></div>
 <script>
  const board=document.getElementById('board');
+ function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+ function linkify(s){return esc(s).replace(/(https?:\\/\\/[^\\s<]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>');}
  function createWidget(phone){
    const w=document.createElement('div'); w.className='widget';
    w.innerHTML=`<div class="wh"><span class="ph">📱 ${phone}</span>
@@ -271,13 +275,13 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
      const t=add('bot','…thinking (Kimi K2)…');
      const payload={entry:[{changes:[{value:{messages:[waMsg]}}]}]};
      try{const r=await fetch('/webhook',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-         const j=await r.json();t.textContent=j.reply||'(no reply)';applyAwait(j);}
+         const j=await r.json();t.innerHTML=linkify(j.reply||'(no reply)');applyAwait(j);}
      catch(e){t.textContent='Error: '+e;}
      snd.disabled=false;loc.disabled=false;m.focus();}
    pay.onclick=async()=>{add('me','💳 Paid (mock)');pay.disabled=true;snd.disabled=true;
      const t=add('bot','…processing payment…');
      try{const r=await fetch('/pay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone})});
-         const j=await r.json();t.textContent=j.reply||'(no reply)';pay.style.display=j.await_payment?'':'none';}
+         const j=await r.json();t.innerHTML=linkify(j.reply||'(no reply)');pay.style.display=j.await_payment?'':'none';}
      catch(e){t.textContent='Error: '+e;}
      pay.disabled=false;snd.disabled=false;};
    f.onsubmit=(e)=>{e.preventDefault();const text=m.value.trim();if(!text)return;m.value='';
@@ -302,7 +306,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
        <button class="rf">🔄</button><button class="cls">✕</button></div>
      <div class="log"><div class="msg sys">Dispatched messages to ${phone} appear here (chef checklist / driver route).</div></div>`;
    const log=w.querySelector('.log');
-   const add=(cls,txt)=>{const d=document.createElement('div');d.className='msg '+cls;d.textContent=txt;log.appendChild(d);log.scrollTop=log.scrollHeight;};
+   const add=(cls,txt)=>{const d=document.createElement('div');d.className='msg '+cls;d.innerHTML=linkify(txt);log.appendChild(d);log.scrollTop=log.scrollHeight;};
    let seen=0;
    async function poll(){
      try{const r=await fetch('/outbox?phone='+encodeURIComponent(phone));const j=await r.json();

@@ -305,46 +305,20 @@
             const btn = document.querySelector('.pay-btn');
             btn.innerText = 'Processing Payment...';
             btn.disabled = true;
-
-            const webhookUrl = `${window.location.origin}/api/v1/webhooks/razorpay`;
-            const mockTxnId = `pay_mock_${Math.random().toString(36).substr(2, 9)}`;
-
-            const payload = {
-                event: "payment_link.paid",
-                payload: {
-                    payment_link: {
-                        entity: {
-                            id: plinkId,
-                            order_id: orderId,
-                            amount: Math.round(parseFloat(amount) * 100),
-                            status: "paid"
-                        }
-                    },
-                    payment: {
-                        entity: {
-                            id: mockTxnId,
-                            amount: Math.round(parseFloat(amount) * 100),
-                            currency: "INR",
-                            status: "captured",
-                            method: "upi",
-                            bank: "HDFC"
-                        }
-                    }
-                }
-            };
-
             try {
-                const res = await fetch(webhookUrl, {
+                // Harness gateway callback -> confirms the payment + the order.
+                const res = await fetch('/pay', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify({ phone })
                 });
                 const data = await res.json();
-
+                document.getElementById('success-msg').innerText =
+                    data.reply || 'Razorpay transaction verified. Your meal order is now CONFIRMED!';
                 document.getElementById('payment-form').style.display = 'none';
                 document.getElementById('success-screen').style.display = 'block';
             } catch (err) {
-                alert('Payment Webhook Execution Failed: ' + err.message);
+                alert('Payment failed: ' + err.message);
                 btn.innerText = 'Retry Payment';
                 btn.disabled = false;
             }

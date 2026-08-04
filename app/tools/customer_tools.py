@@ -11,6 +11,7 @@ Pattern for every tool:
 
 from __future__ import annotations
 
+import difflib
 from datetime import datetime
 from decimal import Decimal
 from typing import Any
@@ -285,11 +286,38 @@ def _norm(s: str | None) -> str:
     return (s or "").strip().lower()
 
 
+def _fuzzy_match(ref: str, candidates: list, keys, threshold: float = 0.55):
+    """Typo-tolerant match of `ref` against `candidates`. Returns (best, error).
+
+    error is None | 'NOT_FOUND' | 'AMBIGUOUS'. Strategy:
+      1. case-insensitive SUBSTRING on any key -> exact-ish pick;
+      2. else best difflib similarity across keys, if it clears `threshold`.
+    `keys` is a list of callables mapping a candidate to a string (e.g. name).
+    """
+    nref = _norm(ref)
+    if not nref or not candidates:
+        return None, "NOT_FOUND"
+
+    subs = [c for c in candidates if any(nref in _norm(k(c)) for k in keys)]
+    if len(subs) == 1:
+        return subs[0], None
+    if len(subs) > 1:
+        exact = [c for c in subs if any(_norm(k(c)) == nref for k in keys)]
+        return (exact[0], None) if len(exact) == 1 else (None, "AMBIGUOUS")
+
+    def score(c: object) -> float:
+        return max(difflib.SequenceMatcher(None, nref, _norm(k(c))).ratio() for k in keys)
+
+    ranked = sorted(candidates, key=score, reverse=True)
+    if score(ranked[0]) < threshold:
+        return None, "NOT_FOUND"
+    return ranked[0], None
+
+
 async def _resolve_chef(session: AsyncSession, ref: str) -> tuple[ChefProfile | None, str | None]:
-    """Resolve a kitchen reference (a name, or a 10-digit phone) to one ChefProfile.
+    """Resolve a kitchen reference (a name — typo-tolerant — or a 10-digit phone) to one ChefProfile.
 
     Returns (chef, error) where error is None | 'NOT_FOUND' | 'AMBIGUOUS'.
-    Name match is case-insensitive substring on kitchen_name (then chef_name).
     """
     ref = (ref or "").strip()
     if not ref:
@@ -299,20 +327,13 @@ async def _resolve_chef(session: AsyncSession, ref: str) -> tuple[ChefProfile | 
         return (chef, None) if chef is not None else (None, "NOT_FOUND")
 
     chefs = (await session.execute(select(ChefProfile))).scalars().all()
-    matches = [c for c in chefs if _norm(ref) in _norm(c.kitchen_name)]
-    if not matches:
-        matches = [c for c in chefs if _norm(ref) in _norm(c.chef_name)]
-    if len(matches) == 1:
-        return matches[0], None
-    if len(matches) > 1:
-        return None, "AMBIGUOUS"
-    return None, "NOT_FOUND"
+    return _fuzzy_match(ref, list(chefs), [lambda c: c.kitchen_name, lambda c: c.chef_name])
 
 
 async def _resolve_dish(
     session: AsyncSession, *, chef_phone: str, ref: str, meal_type: str
 ) -> tuple[ChefMenuItem | None, str | None]:
-    """Resolve a dish reference (a name) to one available ChefMenuItem for chef+window.
+    """Resolve a dish reference (a name — typo-tolerant) to one available ChefMenuItem for chef+window.
 
     Returns (dish, error) where error is None | 'NOT_FOUND' | 'AMBIGUOUS'.
     """
@@ -328,12 +349,7 @@ async def _resolve_dish(
             )
         )
     ).scalars().all()
-    matches = [d for d in rows if _norm(ref) in _norm(d.dish_name)]
-    if len(matches) == 1:
-        return matches[0], None
-    if len(matches) > 1:
-        return None, "AMBIGUOUS"
-    return None, "NOT_FOUND"
+    return _fuzzy_match(ref, list(rows), [lambda d: d.dish_name])
 
 
 # =============================================================================

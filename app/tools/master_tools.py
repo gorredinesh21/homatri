@@ -369,8 +369,7 @@ async def _run_cutoff_batch(
             service_date=service_date, meal_window=window, total_stops=total_stops,
         )
 
-        # 6) dispatch — chef cook checklist + driver route
-        counts: dict[str, int] = defaultdict(int)
+        # 6) dispatch — chef cook checklist (order-wise + summary) + driver route
         items = (
             await session.execute(
                 select(CustomerOrderItem).where(
@@ -378,13 +377,24 @@ async def _run_cutoff_batch(
                 )
             )
         ).scalars().all()
+        by_order: dict[str, list] = defaultdict(list)
+        summary: dict[str, int] = defaultdict(int)
         for it in items:
-            counts[it.dish_name] += it.quantity
-        cook_list = "\n".join(f"  • {qty}× {name}" for name, qty in counts.items())
+            by_order[it.order_id].append(it)
+            summary[it.dish_name] += it.quantity
+        name_of = {d["order"].order_id: d["cust"].name for d in deliveries}
+
+        order_blocks = []
+        for n, o in enumerate(chef_orders, 1):
+            lines = "\n".join(f"      • {it.quantity}× {it.dish_name}" for it in by_order.get(o.order_id, []))
+            order_blocks.append(f"  {n}. {name_of.get(o.order_id, o.customer_phone)} · {o.order_id}\n{lines}")
+        summary_lines = "\n".join(f"  • {qty}× {name}" for name, qty in summary.items())
+        pickup_time = (cutoff_at + timedelta(minutes=COOK_MINUTES)).strftime("%I:%M %p")
         chef_msg = (
-            f"🍳 {window.title()} batch locked — {len(chef_orders)} orders. Please cook:\n{cook_list}\n"
-            f"Driver {alloc['driver_name']} will pick up around "
-            f"{(cutoff_at + timedelta(minutes=COOK_MINUTES)).strftime('%I:%M %p')}."
+            f"🍳 {window.title()} batch locked — {len(chef_orders)} order(s).\n\n"
+            f"ORDERS:\n" + "\n".join(order_blocks) + "\n\n"
+            f"COOK SUMMARY:\n{summary_lines}\n\n"
+            f"🛵 {alloc['driver_name']} picks up around {pickup_time}."
         )
         await execute_outbound_whatsapp_enqueue(
             session, recipient_phone=chef_phone, recipient_role="CHEF", message_text=chef_msg,

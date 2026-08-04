@@ -17,6 +17,7 @@ from app.tools.customer_tools import (
     _get_customer_profile,
     _register_customer,
     _request_payment,
+    _resolve_chef,
     _view_cart,
     _view_chef_menu,
 )
@@ -206,6 +207,19 @@ async def _seed_chef_with_dish(session, phone, dish, meal="LUNCH", available=Tru
 async def test_view_chef_menu_not_found(db_session: AsyncSession):
     res = await _view_chef_menu(db_session, kitchen="9999999999", now=BEFORE_LUNCH)
     assert res["status"] == "NOT_FOUND"
+
+
+@pytest.mark.asyncio
+async def test_resolve_chef_tolerates_typos(db_session: AsyncSession):
+    db_session.add(ChefProfile(chef_phone="9876500099", kitchen_name="Konkan Coastal Flavors",
+                               chef_name="Ananya", address="Ghansoli", latitude=Decimal("19.12"),
+                               longitude=Decimal("73.00"), dietary_type="NON_VEG"))
+    await db_session.flush()
+    chef, err = await _resolve_chef(db_session, "konkan coastal flavours")   # 'flavours' typo
+    assert err is None and chef.chef_phone == "9876500099"
+    # a totally unrelated string still misses
+    _, err2 = await _resolve_chef(db_session, "pizza hut")
+    assert err2 == "NOT_FOUND"
 
 
 @pytest.mark.asyncio
