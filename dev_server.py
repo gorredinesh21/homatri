@@ -23,30 +23,19 @@ import boto3
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
-import app.tools.customer_tools  # noqa: F401  (registers the finish_registration resume handler)
+import app.tools.customer_tools  # noqa: F401  (registers the finish_registration + confirm_payment resume handlers)
+from app.agents.agents import customer_agent
 from app.agents.prompts import CUSTOMER_PROMPT
 from app.api.whatsapp import normalize_phone, parse_webhook, verify_challenge
 from app.router import route
-from app.tools.customer_tools import (
-    add_item_to_order,
-    create_order,
-    find_nearby_kitchens,
-    get_customer_profile,
-    register_customer,
-    request_payment,
-    view_cart,
-    view_chef_menu,
-)
 from app.tools.pause import RESUME_HANDLERS, Pause, clear_pending, get_pending
 
 KIMI = "moonshotai.kimi-k2.5"   # non-thinking Kimi — ~5x faster than kimi-k2-thinking, same tool support
 WEBHOOK_VERIFY_TOKEN = "homatri_verify"
 _br = boto3.Session(profile_name="homatri-bedrock").client("bedrock-runtime", region_name="us-east-1")
 
-TOOLS = {t.name: t for t in [
-    get_customer_profile, register_customer, find_nearby_kitchens, view_chef_menu,
-    create_order, add_item_to_order, view_cart, request_payment,
-]}
+# The customer agent's bound tools ARE the harness toolset (single source of truth).
+TOOLS = customer_agent.tool_map
 CONVOS: dict[str, list] = {}  # phone -> [{role, text}]  (text-only history per phone)
 
 
