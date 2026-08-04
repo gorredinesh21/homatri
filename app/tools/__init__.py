@@ -10,8 +10,10 @@ from app.tools.customer_tools import (
     view_cart,
     view_chef_menu,
 )
+from app.tools.master_tools import mint_payment_link, process_payment_webhook
 
 __all__ = [
+    # Customer
     "get_customer_profile",
     "find_nearby_kitchens",
     "register_customer",
@@ -20,4 +22,7 @@ __all__ = [
     "add_item_to_order",
     "view_cart",
     "request_payment",
+    # Master
+    "mint_payment_link",
+    "process_payment_webhook",
 ]

@@ -11,7 +11,6 @@ from app.tools.common import resolve_time_pool
 from app.models.system import SystemSetting
 from app.tools.customer_tools import (
     _add_item_to_order,
-    _confirm_payment,
     _create_order,
     _find_nearby_kitchens,
     _finish_registration,
@@ -21,6 +20,7 @@ from app.tools.customer_tools import (
     _view_cart,
     _view_chef_menu,
 )
+from app.tools.master_tools import _process_payment_webhook
 from app.tools.pause import Pause, clear_pending, get_pending, send_and_await_reply
 
 BEFORE_LUNCH = datetime(2026, 8, 4, 9, 0)   # 9:00 AM -> LUNCH window
@@ -423,7 +423,7 @@ async def test_request_payment_no_active_order(db_session: AsyncSession):
 async def test_confirm_payment_marks_paid_and_confirms_order(db_session: AsyncSession):
     order_id = await _seed_order_pending_payment(db_session, "7000000052", "9876500052")
     req = await _request_payment(db_session, customer_phone="7000000052")
-    res = await _confirm_payment(db_session, payment_id=req["payment_id"], transaction_id="txn_test_1")
+    res = await _process_payment_webhook(db_session, payment_id=req["payment_id"], transaction_id="txn_test_1")
     assert res["status"] == "PAID"
     pay = await db_session.get(CustomerPayment, req["payment_id"])
     assert pay.status == "PAID"
@@ -435,7 +435,7 @@ async def test_confirm_payment_marks_paid_and_confirms_order(db_session: AsyncSe
 async def test_request_payment_not_payable_after_confirmed(db_session: AsyncSession):
     await _seed_order_pending_payment(db_session, "7000000053", "9876500053")
     req = await _request_payment(db_session, customer_phone="7000000053")
-    await _confirm_payment(db_session, payment_id=req["payment_id"])
+    await _process_payment_webhook(db_session, payment_id=req["payment_id"])
     # order is now CONFIRMED -> no active order to pay for
     res = await _request_payment(db_session, customer_phone="7000000053")
     assert res["status"] == "NO_ACTIVE_ORDER"

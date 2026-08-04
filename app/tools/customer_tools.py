@@ -26,20 +26,17 @@ from app.executors.customer import (
     execute_add_item_to_order,
     execute_customer_order_initialization,
     execute_customer_registration_and_location,
-    execute_payment_record_creation,
-    execute_payment_status_update,
 )
 from app.models.chef import ChefMenuItem, ChefProfile
 from app.models.customer import (
     CustomerOrder,
     CustomerOrderItem,
-    CustomerPayment,
     CustomerProfile,
     CustomerReview,
 )
 from app.models.system import SystemSetting
-from app.services.payment_service import razorpay_service
 from app.tools.common import haversine_km, resolve_time_pool
+from app.tools.master_tools import _mint_payment_link, _process_payment_webhook
 from app.tools.pause import resume_handler, send_and_await_reply
 
 
@@ -717,9 +714,9 @@ class RequestPaymentInput(BaseModel):
 
 
 async def _request_payment(session: AsyncSession, *, customer_phone: str) -> dict[str, Any]:
-    """Mint a payment link + a PENDING payment record for the active order. {status, ..., message, ctx?}.
+    """Ask Master to mint a payment link for the active order, then await confirmation. {status, ..., message, ctx?}.
 
-    Guards:
+    Guards (customer-facing):
       - no active order            -> NO_ACTIVE_ORDER (guide to create_order)
       - order not PENDING_PAYMENT  -> NOT_PAYABLE (already confirmed / cancelled)
       - total <= 0                 -> EMPTY_CART
@@ -739,43 +736,22 @@ async def _request_payment(session: AsyncSession, *, customer_phone: str) -> dic
     if order.total_amount is None or float(order.total_amount) <= 0:
         return {"status": "EMPTY_CART", "message": "Your cart is empty — add a dish before paying."}
 
-    # Mint the link (mock or real, per settings). Master owns this gateway seam.
-    link = await razorpay_service.create_payment_link(
-        order_id=order.order_id, amount_in_rupees=float(order.total_amount),
-        customer_phone=customer_phone,
-        description=f"Homaatri order {order.order_id} — {order.kitchen_name}",
-    )
-
-    # Reuse an existing PENDING payment (re-request) instead of stacking duplicates.
-    payment = (
-        await session.execute(
-            select(CustomerPayment).where(
-                CustomerPayment.order_id == order.order_id,
-                CustomerPayment.status == "PENDING",
-            )
-        )
-    ).scalars().first()
-    if payment is not None:
-        payment.payment_link_url = link["short_url"]
-        payment.gateway_order_id = link["payment_link_id"]
-        await session.flush()
-    else:
-        payment = await execute_payment_record_creation(
-            session, order_id=order.order_id, amount_due=order.total_amount,
-            gateway_order_id=link["payment_link_id"], payment_link_url=link["short_url"],
-        )
+    # Deterministic relay to Master — Master owns minting (and the webhook).
+    mint = await _mint_payment_link(session, order_id=order.order_id)
+    if mint["status"] != "MINTED":
+        return {"status": mint["status"], "message": mint.get("message", "Couldn't start payment right now.")}
 
     return {
         "status": "AWAITING_PAYMENT",
         "order_id": order.order_id,
-        "payment_id": payment.payment_id,
-        "amount": float(order.total_amount),
-        "link": link["short_url"],
+        "payment_id": mint["payment_id"],
+        "amount": mint["amount"],
+        "link": mint["link"],
         "message": (
-            f"💳 Please pay ₹{float(order.total_amount):.0f} to confirm order {order.order_id}:\n"
-            f"{link['short_url']}\n\nI'll confirm the moment your payment goes through."
+            f"💳 Please pay ₹{mint['amount']:.0f} to confirm order {order.order_id}:\n"
+            f"{mint['link']}\n\nI'll confirm the moment your payment goes through."
         ),
-        "ctx": {"order_id": order.order_id, "payment_id": payment.payment_id},
+        "ctx": {"order_id": order.order_id, "payment_id": mint["payment_id"]},
     }
 
 
@@ -793,27 +769,13 @@ async def request_payment(customer_phone: str) -> str:
     return res["message"]  # only reached on a guard (guard-then-guide)
 
 
-async def _confirm_payment(
-    session: AsyncSession, *, payment_id: str, transaction_id: str | None = None
-) -> dict[str, Any]:
-    """Mark a payment PAID -> cascades order to CONFIRMED (DW2 -> DW1). {status, order_id, message}."""
-    payment = await session.get(CustomerPayment, payment_id)
-    if payment is None:
-        return {"status": "NOT_FOUND", "message": "Payment record not found."}
-    if payment.status == "PAID":
-        return {"status": "ALREADY_PAID", "order_id": payment.order_id, "message": "Payment already confirmed."}
-    await execute_payment_status_update(
-        session, payment_id=payment_id, target_status="PAID", gateway_transaction_id=transaction_id,
-    )
-    return {"status": "PAID", "order_id": payment.order_id, "message": ""}
-
-
 @resume_handler("confirm_payment")
 async def confirm_payment(phone: str, reply: dict[str, Any], ctx: dict[str, Any]) -> str:
-    """Resume handler: runs when the payment callback arrives. Marks PAID -> order CONFIRMED."""
+    """Resume handler: runs when the payment callback arrives. Delegates to Master's
+    process_payment_webhook (marks PAID -> order CONFIRMED), then confirms to the customer."""
     txn = (reply or {}).get("transaction_id") or (reply or {}).get("txn_id")
     async with transaction() as session:
-        res = await _confirm_payment(session, payment_id=ctx["payment_id"], transaction_id=txn)
+        res = await _process_payment_webhook(session, payment_id=ctx["payment_id"], transaction_id=txn)
     if res["status"] in ("PAID", "ALREADY_PAID"):
         return (
             f"✅ Payment received! Your order {res['order_id']} is CONFIRMED. "

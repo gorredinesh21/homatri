@@ -112,8 +112,9 @@ async def run_agent(phone: str, user_text: str) -> dict:
         f"view_cart(customer_phone)."
         f"\n- If a tool says a name matches nothing or is ambiguous, re-show the menu/list and ask — do not guess."
         f"\n- To take payment, call request_payment(customer_phone). It sends a payment link and waits for the "
-        f"customer to pay. Do NOT confirm the payment yourself — the system confirms and resumes automatically "
-        f"once the payment completes. After calling it, just tell the customer to use the payment link.")}]
+        f"customer to pay. NEVER tell the customer their payment succeeded or their order is confirmed — you do "
+        f"NOT know that; the system sends the confirmation automatically once payment completes. If they ask "
+        f"'did it go through?', say you're still waiting for the payment and ask them to use the link.")}]
     messages = _window_messages(hist, n=4)   # last 4 user + last 4 agent turns
     tc = _toolconfig()
     for _ in range(6):
