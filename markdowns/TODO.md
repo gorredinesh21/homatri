@@ -1,30 +1,33 @@
-# Homaatri — TODO (next session)
+# Homaatri — TODO / status
 
-**Branch:** `homatri_1.0` · **Date written:** 2026-08-04
+**Branch:** `homatri_1.0` · **Updated:** 2026-08-04
 
-## Where we are
-Design phase is **complete**. `from-scratch` = full archive. `homatri_1.0` = clean slate (Foundation only: 25 tables + 21 executors + infra) + full design docs:
-- [user_flows.md](user_flows.md) — 7 flows, locked principles, save/resume mechanism.
-- [tool_specs.md](tool_specs.md) — **42 tools** fully specced (Customer 13, Chef 6, Driver 8, Master 13, Shared 2), domain → same/cross, with inputs/outputs/guards/reads/writes/executors.
-- [tools_inventory.md](tools_inventory.md) — flow-derivation history (superseded as spec).
-- [reconciliation_audit.md](reconciliation_audit.md) — why we rebuilt.
+## ✅ Done — Customer Flows 1–3 (built + tested, 27 tests green on SQLite)
+- **Flow 1 Onboarding:** `get_customer_profile`, `register_customer` (+ `send_and_await_reply` pause / `finish_registration` resume for the location pin).
+- **Flow 2 Discovery:** `find_nearby_kitchens` (window by the clock, Haversine sort, top 5).
+- **Flow 3 Browse & Order:** `view_chef_menu`, `create_order`, `add_item_to_order`, `view_cart`.
+- **Name-based resolution:** tools take kitchen/dish **names** (`_resolve_chef` / `_resolve_dish`), not IDs — the LLM no longer fabricates IDs. Guards: `NOT_FOUND`, `AMBIGUOUS`, `ORDER_EXISTS`, `NO_ACTIVE_ORDER`, `ALREADY_REGISTERED`.
+- **Dev harness** (`dev_server.py`): multi-widget WhatsApp tester on the real `/webhook` path; LLM = AWS Bedrock **`moonshotai.kimi-k2.5`** (~4s/turn); `dev_reset.py` seeds 4 chefs + `delivery_fee=20`, no customer.
 
-## Tomorrow — do in order
-1. **Review `tool_specs.md` end-to-end** — correct any input/output/guard wording before coding.
-2. **Resolve 2 parked decisions:**
-   - Chef self-onboarding: Admin/seed-only (no executor) **or** add one `chef_profiles` executor (controlled Foundation unfreeze)?
-   - `tools_inventory.md`: keep as history (current) or retire?
-3. **Setup checks on the build machine:** Postgres running · Vertex AI ADC creds · pin the exact `gemini-3.6-*` Vertex model id (don't guess).
-4. **START BUILD — Step 1: runtime skeleton** (discuss-then-build, one piece at a time):
-   - state schema → graph → **Postgres checkpointer** (`AsyncPostgresSaver`) → `interrupt()`/resume → `send_and_await_reply` primitive → `delegate_write` wrapper.
-5. **Then Customer spoke — same-domain tools first** (testable standalone, no cross-domain writes): `get_customer_profile`, `register_customer`, `resolve_time_pool`, `find_nearby_kitchens`, `view_chef_menu`, `create_order`, `add_item_to_order`, `view_cart` — each with a test.
+## ▶️ Next — Flow 4: Payment
+- `request_payment` (Customer agent → **Master** owns the gateway) → payment link → webhook → order `PENDING_PAYMENT` → `CONFIRMED`.
+- Executors already present: `execute_payment_record_creation` (DW: creates PENDING payment), `execute_payment_status_update` (DW2: PAID → cascades order to CONFIRMED via DW1).
+- Open design questions to settle first: real vs simulated gateway for dev; how the Customer agent hands off to Master; what the customer sees while awaiting payment.
 
-## Build order (from the SCC analysis)
-Foundation (frozen) → **runtime skeleton + Master core (hub)** → Customer spoke → Payment → Master cutoff engine (scheduled) → Chef spoke → Driver spoke.
+## ⚠️ REMINDER — seed `system_settings` in a real migration
+Currently read from `system_settings` (JSON `value`) with code fallbacks; cutoffs are still constants:
+- `delivery_fee` → `{"amount": 20}` (create_order reads this; falls back to config ₹30).
+- `cutoff_lunch` 11:30, `cutoff_dinner` 18:30 — hardcoded in `app/tools/common.py`; move here.
+- `timezone` → `Asia/Kolkata`.
+
+## Later / deferred runtime
+- DB-backed Context Assembler over `conversation_messages` (harness uses in-memory last-4 window).
+- LangGraph checkpointer + `interrupt()`/resume (harness uses the in-memory pause store).
+- Chef spoke, Driver spoke, Master cutoff/route engine.
 
 ## Standing rules (do not forget)
 - **Discuss-then-build**, one tool/piece at a time.
-- **No AI inside tools** — pure code; guard-then-guide with fixed `if/else` templates.
-- **Read any table; write only your own; cross-domain writes go Master→owner executor.**
-- **Vertex AI / Gemini 3.6 / GCP / no AWS Bedrock.**
-- Foundation (tables + 21 executors) is **frozen** — don't edit without an explicit decision.
+- Tools are **pure deterministic code — guard-then-guide** (if/else guards return fixed templates telling the agent the next tool). No LLM call inside a tool.
+- **Read any table; write only your own; cross-domain writes go Master → owner executor.**
+- Foundation (25 tables + 21 executors) is **frozen** — don't edit without an explicit decision.
+- Harness LLM is **AWS Bedrock / Kimi K2.5** (office laptop can't reach GCP). Design docs mention Vertex/Gemini — treat that as aspirational, not current.
