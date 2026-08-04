@@ -12,7 +12,9 @@ Same pattern as the customer tools: inner `_fn(session, ...)` (unit-testable)
 
 from __future__ import annotations
 
-from datetime import date
+from collections import defaultdict
+from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from typing import Any
 
 from langchain_core.tools import tool
@@ -25,10 +27,30 @@ from app.executors.customer import (
     execute_payment_record_creation,
     execute_payment_status_update,
 )
-from app.models.customer import CustomerOrder, CustomerPayment
+from app.executors.driver import execute_driver_trip_initialization
+from app.executors.master import (
+    execute_cutoff_batch_lock_and_routes_creation,
+    execute_meal_window_lock_and_creation,
+    execute_outbound_whatsapp_enqueue,
+    execute_system_audit_log,
+)
+from app.models.chef import ChefProfile
+from app.models.customer import (
+    CustomerOrder,
+    CustomerOrderItem,
+    CustomerPayment,
+    CustomerProfile,
+)
 from app.models.driver import DriverProfile, DriverTripStatus
+from app.models.system import SystemMealWindow
 from app.services.maps_service import maps_service
 from app.services.payment_service import razorpay_service
+
+# Meal cutoffs (duplicated from app.tools.common to avoid a tools-package import cycle).
+LUNCH_CUTOFF = time(11, 30)
+DINNER_CUTOFF = time(18, 30)
+COOK_MINUTES = 45   # kitchen prep before pickup
+LEG_MINUTES = 10    # rough travel between stops
 
 
 # =============================================================================
@@ -226,4 +248,178 @@ async def process_payment_webhook(payment_id: str, transaction_id: str | None = 
         res = await _process_payment_webhook(
             session, payment_id=payment_id, transaction_id=transaction_id, signature=signature,
         )
+        return res["message"]
+
+
+# =============================================================================
+# TOOL: run_cutoff_batch  (Master · scheduled engine — the Flow 5 orchestrator)
+#
+# At cutoff: for each kitchen with CONFIRMED orders in the window, allocate a
+# driver, optimize the route, create route+stops+stop-orders (flipping orders to
+# BATCHED), write the driver trip, and dispatch the chef checklist + driver route.
+# Pure orchestration — no LLM. Triggered by a scheduler (or the harness /cutoff).
+# =============================================================================
+class RunCutoffBatchInput(BaseModel):
+    window: str = Field(..., description="'LUNCH' or 'DINNER'.")
+    service_date: str = Field(..., description="ISO date of the batch, e.g. '2026-08-05'.")
+
+
+async def _run_cutoff_batch(
+    session: AsyncSession, *, window: str, service_date: date
+) -> dict[str, Any]:
+    """Lock the window and batch every kitchen's CONFIRMED orders. {status, batches, ...}.
+
+    Guards:
+      - no CONFIRMED orders      -> NO_ORDERS
+      - window already locked    -> ALREADY_BATCHED (idempotent)
+    """
+    cutoff_time = LUNCH_CUTOFF if window.upper() == "LUNCH" else DINNER_CUTOFF
+    cutoff_at = datetime.combine(service_date, cutoff_time)
+
+    # Idempotency: a window that's past OPEN has already been batched.
+    win = (
+        await session.execute(
+            select(SystemMealWindow).where(
+                SystemMealWindow.service_date == service_date,
+                SystemMealWindow.meal_type == window,
+            )
+        )
+    ).scalar_one_or_none()
+    if win is not None and win.status != "OPEN":
+        return {"status": "ALREADY_BATCHED", "batches": [],
+                "message": f"{window.lower()} on {service_date} is already {win.status.lower()}."}
+
+    # CONFIRMED orders for this window/date, grouped by kitchen.
+    orders = (
+        await session.execute(
+            select(CustomerOrder).where(
+                CustomerOrder.status == "CONFIRMED",
+                CustomerOrder.meal_window == window,
+                CustomerOrder.service_date == service_date,
+            )
+        )
+    ).scalars().all()
+    if not orders:
+        return {"status": "NO_ORDERS", "batches": [],
+                "message": f"No confirmed orders for {window.lower()} on {service_date}."}
+
+    by_chef: dict[str, list[CustomerOrder]] = defaultdict(list)
+    for o in orders:
+        by_chef[o.chef_phone].append(o)
+
+    # Ensure the meal window row exists (OPEN); the batch executor locks it.
+    if win is None:
+        win = await execute_meal_window_lock_and_creation(
+            session, service_date=service_date, meal_type=window, cutoff_at=cutoff_at, status="OPEN",
+        )
+
+    batches: list[dict[str, Any]] = []
+    for chef_phone, chef_orders in by_chef.items():
+        chef = await session.get(ChefProfile, chef_phone)
+
+        # 1) driver
+        alloc = await _allocate_driver(session, window=window, service_date=service_date, chef_phone=chef_phone)
+        if alloc["status"] == "NO_DRIVER":
+            await execute_system_audit_log(
+                session, event_type="NO_DRIVER", source_role="MASTER", severity="WARN",
+                payload={"chef_phone": chef_phone, "window": window, "service_date": str(service_date)},
+            )
+            batches.append({"chef_phone": chef_phone, "status": "NO_DRIVER"})
+            continue
+        driver_phone = alloc["driver_phone"]
+
+        # 2) deliveries (one dropoff per order/customer) + route optimization
+        deliveries = []
+        for o in chef_orders:
+            cust = await session.get(CustomerProfile, o.customer_phone)
+            deliveries.append({"lat": float(cust.latitude), "lng": float(cust.longitude), "order": o, "cust": cust})
+        origin = {"lat": float(chef.latitude), "lng": float(chef.longitude)}
+        route = await _call_maps_route(origin=origin, stops=deliveries)
+        ordered = [deliveries[i] for i in route["order"]]
+
+        # 3) stops_data: kitchen PICKUP first, then optimized DROPOFFs
+        stops_data: list[dict[str, Any]] = [{
+            "stop_type": "PICKUP", "target_ref_id": chef_phone, "location_name": chef.kitchen_name,
+            "address": chef.address, "latitude": origin["lat"], "longitude": origin["lng"],
+            "estimated_arrival": cutoff_at + timedelta(minutes=COOK_MINUTES),
+            "order_ids": [], "single_leg_maps_url": route["maps_url"],
+        }]
+        arrival = cutoff_at + timedelta(minutes=COOK_MINUTES)
+        for d in ordered:
+            arrival = arrival + timedelta(minutes=LEG_MINUTES)
+            stops_data.append({
+                "stop_type": "DROPOFF_GATE", "target_ref_id": d["order"].customer_phone,
+                "location_name": d["cust"].name, "address": d["cust"].delivery_address,
+                "latitude": d["lat"], "longitude": d["lng"], "estimated_arrival": arrival,
+                "order_ids": [d["order"].order_id],
+            })
+        total_stops = len(stops_data)
+
+        # 4) create route + stops + stop-orders (flips orders -> BATCHED)
+        route_row = await execute_cutoff_batch_lock_and_routes_creation(
+            session, window_id=win.window_id, driver_phone=driver_phone, service_date=service_date,
+            meal_window=window, total_stops=total_stops, total_orders=len(chef_orders),
+            total_distance_km=Decimal(str(route["total_distance_km"])),
+            estimated_duration_mins=route["estimated_duration_mins"], stops_data=stops_data,
+        )
+
+        # 5) driver trip (now that route_id + total_stops exist)
+        await execute_driver_trip_initialization(
+            session, driver_phone=driver_phone, route_id=route_row.route_id,
+            service_date=service_date, meal_window=window, total_stops=total_stops,
+        )
+
+        # 6) dispatch — chef cook checklist + driver route
+        counts: dict[str, int] = defaultdict(int)
+        items = (
+            await session.execute(
+                select(CustomerOrderItem).where(
+                    CustomerOrderItem.order_id.in_([o.order_id for o in chef_orders])
+                )
+            )
+        ).scalars().all()
+        for it in items:
+            counts[it.dish_name] += it.quantity
+        cook_list = "\n".join(f"  • {qty}× {name}" for name, qty in counts.items())
+        chef_msg = (
+            f"🍳 {window.title()} batch locked — {len(chef_orders)} orders. Please cook:\n{cook_list}\n"
+            f"Driver {alloc['driver_name']} will pick up around "
+            f"{(cutoff_at + timedelta(minutes=COOK_MINUTES)).strftime('%I:%M %p')}."
+        )
+        await execute_outbound_whatsapp_enqueue(
+            session, recipient_phone=chef_phone, recipient_role="CHEF", message_text=chef_msg,
+        )
+        driver_msg = (
+            f"🛵 New {window.lower()} route: {len(chef_orders)} orders, {total_stops} stops "
+            f"(~{route['total_distance_km']} km). Pick up at {chef.kitchen_name}.\nRoute: {route['maps_url']}"
+        )
+        await execute_outbound_whatsapp_enqueue(
+            session, recipient_phone=driver_phone, recipient_role="DRIVER", message_text=driver_msg,
+        )
+
+        await execute_system_audit_log(
+            session, event_type="BATCH_CREATED", source_role="MASTER",
+            payload={"route_id": route_row.route_id, "chef_phone": chef_phone,
+                     "driver_phone": driver_phone, "orders": len(chef_orders), "stops": total_stops},
+        )
+        batches.append({
+            "chef_phone": chef_phone, "kitchen_name": chef.kitchen_name, "route_id": route_row.route_id,
+            "driver_phone": driver_phone, "orders": len(chef_orders), "stops": total_stops, "status": "BATCHED",
+        })
+
+    n_batched = sum(1 for b in batches if b["status"] == "BATCHED")
+    total_orders = sum(b.get("orders", 0) for b in batches if b["status"] == "BATCHED")
+    return {
+        "status": "BATCHED" if n_batched else "NO_DRIVER",
+        "batches": batches,
+        "total_orders": total_orders,
+        "message": f"Cutoff for {window.lower()} {service_date}: {n_batched} kitchen(s) batched, {total_orders} order(s).",
+    }
+
+
+@tool("run_cutoff_batch", args_schema=RunCutoffBatchInput)
+async def run_cutoff_batch(window: str, service_date: str) -> str:
+    """Master engine: lock the window, batch every kitchen's confirmed orders, dispatch chef & driver."""
+    async with transaction() as session:
+        res = await _run_cutoff_batch(session, window=window, service_date=date.fromisoformat(service_date))
         return res["message"]

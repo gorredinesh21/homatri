@@ -3,13 +3,20 @@
 import pytest
 from datetime import date, datetime
 from decimal import Decimal
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.chef import ChefMenuItem, ChefProfile
 from app.models.customer import CustomerOrder, CustomerPayment, CustomerProfile
 from app.models.driver import DriverProfile, DriverTripStatus
+from app.models.system import SystemDeliveryRoute, SystemMealWindow, SystemOutboundQueue
 from app.tools.customer_tools import _create_order
-from app.tools.master_tools import _allocate_driver, _mint_payment_link, _process_payment_webhook
+from app.tools.master_tools import (
+    _allocate_driver,
+    _mint_payment_link,
+    _process_payment_webhook,
+    _run_cutoff_batch,
+)
 
 BEFORE_LUNCH = datetime(2026, 8, 4, 9, 0)
 SERVICE_DATE = date(2026, 8, 4)
@@ -116,3 +123,69 @@ async def test_allocate_driver_picks_the_free_one(db_session: AsyncSession):
     res = await _allocate_driver(db_session, window="LUNCH", service_date=SERVICE_DATE)
     assert res["status"] == "ASSIGNED"
     assert res["driver_phone"] == "9111000005"   # the un-assigned one
+
+
+# ---- run_cutoff_batch ----
+
+async def _seed_confirmed_order(session, cust, chef):
+    """Order -> pay -> CONFIRMED (the real path), so run_cutoff_batch can pick it up."""
+    order_id = await _seed_pending_order(session, cust, chef)
+    mint = await _mint_payment_link(session, order_id=order_id)
+    await _process_payment_webhook(session, payment_id=mint["payment_id"])
+    return order_id
+
+
+@pytest.mark.asyncio
+async def test_run_cutoff_batch_no_orders(db_session: AsyncSession):
+    res = await _run_cutoff_batch(db_session, window="LUNCH", service_date=SERVICE_DATE)
+    assert res["status"] == "NO_ORDERS"
+
+
+@pytest.mark.asyncio
+async def test_run_cutoff_batch_batches_and_dispatches(db_session: AsyncSession):
+    order_id = await _seed_confirmed_order(db_session, "7000000080", "9876500080")
+    await _seed_driver(db_session, "9111000080", "Vikram")
+
+    res = await _run_cutoff_batch(db_session, window="LUNCH", service_date=SERVICE_DATE)
+    assert res["status"] == "BATCHED"
+    assert res["total_orders"] == 1
+
+    # order flipped CONFIRMED -> BATCHED
+    order = await db_session.get(CustomerOrder, order_id)
+    assert order.status == "BATCHED"
+
+    # route + driver trip created
+    route = (await db_session.execute(select(SystemDeliveryRoute))).scalars().first()
+    assert route is not None and route.driver_phone == "9111000080"
+    trip = (await db_session.execute(select(DriverTripStatus))).scalars().first()
+    assert trip is not None and trip.route_id == route.route_id
+
+    # window locked
+    win = (await db_session.execute(
+        select(SystemMealWindow).where(SystemMealWindow.service_date == SERVICE_DATE))).scalars().first()
+    assert win.status == "LOCKED_PROCESSING"
+
+    # chef + driver both notified
+    outs = (await db_session.execute(select(SystemOutboundQueue))).scalars().all()
+    roles = {o.recipient_role for o in outs}
+    assert {"CHEF", "DRIVER"} <= roles
+
+
+@pytest.mark.asyncio
+async def test_run_cutoff_batch_idempotent(db_session: AsyncSession):
+    await _seed_confirmed_order(db_session, "7000000081", "9876500081")
+    await _seed_driver(db_session, "9111000081", "Vikram")
+    await _run_cutoff_batch(db_session, window="LUNCH", service_date=SERVICE_DATE)
+    again = await _run_cutoff_batch(db_session, window="LUNCH", service_date=SERVICE_DATE)
+    assert again["status"] == "ALREADY_BATCHED"
+
+
+@pytest.mark.asyncio
+async def test_run_cutoff_batch_no_driver(db_session: AsyncSession):
+    await _seed_confirmed_order(db_session, "7000000082", "9876500082")   # no driver seeded
+    res = await _run_cutoff_batch(db_session, window="LUNCH", service_date=SERVICE_DATE)
+    assert res["status"] == "NO_DRIVER"
+    # nothing batched -> order stays CONFIRMED, window not locked
+    win = (await db_session.execute(
+        select(SystemMealWindow).where(SystemMealWindow.service_date == SERVICE_DATE))).scalars().first()
+    assert win.status == "OPEN"

@@ -24,10 +24,16 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 
 import app.tools.customer_tools  # noqa: F401  (registers the finish_registration + confirm_payment resume handlers)
+from sqlalchemy import select
+
 from app.agents.agents import customer_agent
 from app.agents.prompts import CUSTOMER_PROMPT
 from app.api.whatsapp import normalize_phone, parse_webhook, verify_challenge
+from app.db.session import SessionFactory, transaction
+from app.models.system import SystemOutboundQueue
 from app.router import route
+from app.tools.common import resolve_time_pool
+from app.tools.master_tools import _run_cutoff_batch
 from app.tools.pause import RESUME_HANDLERS, Pause, clear_pending, get_pending
 
 KIMI = "moonshotai.kimi-k2.5"   # non-thinking Kimi — ~5x faster than kimi-k2-thinking, same tool support
@@ -177,6 +183,34 @@ async def pay(req: Request):
     return JSONResponse({"reply": reply, "await_payment": False})
 
 
+@app.post("/cutoff")
+async def cutoff(req: Request):
+    """Manual cutoff trigger (stands in for the scheduler): batch the CURRENT window."""
+    pool = resolve_time_pool()
+    async with transaction() as session:
+        res = await _run_cutoff_batch(session, window=pool["window"], service_date=pool["service_date"])
+    return JSONResponse({"window": pool["window"], "service_date": str(pool["service_date"]), **res})
+
+
+@app.get("/outbox")
+async def outbox(req: Request):
+    """The dispatched-message inbox for a phone (chef/driver) — reads system_outbound_queue."""
+    phone = normalize_phone(req.query_params.get("phone", ""))
+    async with SessionFactory() as session:
+        rows = (
+            await session.execute(
+                select(SystemOutboundQueue)
+                .where(SystemOutboundQueue.recipient_phone == phone)
+                .order_by(SystemOutboundQueue.created_at)
+            )
+        ).scalars().all()
+    return JSONResponse({"messages": [
+        {"role": r.recipient_role, "text": r.message_text,
+         "at": r.created_at.isoformat() if r.created_at else None}
+        for r in rows
+    ]})
+
+
 @app.post("/reset")
 async def reset(req: Request):
     body = await req.json()
@@ -214,8 +248,10 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
  .loc.hot{background:#e8a020;animation:pulse 1s infinite}
  @keyframes pulse{50%{opacity:.6}}
 </style></head><body>
- <div id="bar"><b>Homaatri</b><span>multi-user tester — each widget is an independent user</span>
-   <input id="newphone" placeholder="new phone…"><button id="add">+ Add user</button></div>
+ <div id="bar"><b>Homaatri</b><span>multi-user tester</span>
+   <button id="cutoff" title="run the meal-window cutoff now" style="background:#e8a020">⏰ Run cutoff</button>
+   <input id="newphone" placeholder="new phone…"><button id="add">+ Add user</button>
+   <input id="newinbox" placeholder="chef/driver phone…"><button id="addinbox">+ Add inbox</button></div>
  <div id="board"></div>
 <script>
  const board=document.getElementById('board');
@@ -259,6 +295,35 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
    w.querySelector('.cls').onclick=()=>w.remove();
    board.appendChild(w);
  }
- ['7416767453','7000000000','9111111111'].forEach(createWidget);
+ // Read-only inbox widget: shows messages dispatched to a chef/driver (system_outbound_queue).
+ function createInbox(phone){
+   const w=document.createElement('div'); w.className='widget';
+   w.innerHTML=`<div class="wh" style="background:#6a4e12"><span class="ph">🍳 ${phone} · inbox</span>
+       <button class="rf">🔄</button><button class="cls">✕</button></div>
+     <div class="log"><div class="msg sys">Dispatched messages to ${phone} appear here (chef checklist / driver route).</div></div>`;
+   const log=w.querySelector('.log');
+   const add=(cls,txt)=>{const d=document.createElement('div');d.className='msg '+cls;d.textContent=txt;log.appendChild(d);log.scrollTop=log.scrollHeight;};
+   let seen=0;
+   async function poll(){
+     try{const r=await fetch('/outbox?phone='+encodeURIComponent(phone));const j=await r.json();
+       const m=j.messages||[];
+       for(let i=seen;i<m.length;i++){add('bot','['+m[i].role+'] '+m[i].text);}
+       seen=m.length;}catch(e){}
+   }
+   const timer=setInterval(poll,4000); poll();
+   w.querySelector('.rf').onclick=poll;
+   w.querySelector('.cls').onclick=()=>{clearInterval(timer);w.remove();};
+   board.appendChild(w);
+ }
+ document.getElementById('cutoff').onclick=async()=>{
+   const b=document.getElementById('cutoff'); b.disabled=true; const old=b.textContent; b.textContent='⏰ running…';
+   try{const r=await fetch('/cutoff',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+     const j=await r.json(); alert('Cutoff ('+j.window+' '+j.service_date+'): '+(j.message||JSON.stringify(j)));}
+   catch(e){alert('Cutoff error: '+e);}
+   b.disabled=false; b.textContent=old;
+ };
+ ['7416767453','7000000000','9111111111'].forEach(p=>createWidget(p));
+ ['9876543210','9876543211','9876543212','9876543213'].forEach(p=>createInbox(p));  // the 4 seeded chefs
  document.getElementById('add').onclick=()=>{const el=document.getElementById('newphone');const v=el.value.trim();if(v){createWidget(v);el.value='';}};
+ document.getElementById('addinbox').onclick=()=>{const el=document.getElementById('newinbox');const v=el.value.trim();if(v){createInbox(v);el.value='';}};
 </script></body></html>"""
