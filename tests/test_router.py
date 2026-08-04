@@ -87,6 +87,19 @@ async def test_route_new_message_wins():
 
 
 @pytest.mark.asyncio
+async def test_route_payment_await_survives_off_topic_text():
+    # PAYMENT_CONFIRM is out-of-band (resumed by /pay), so a user text must NOT drop it.
+    _pending["9000000005"] = {"await_type": "PAYMENT_CONFIRM", "resume": "confirm_payment", "ctx": {},
+                              "prompt": "pay", "expires_at": datetime.now() + timedelta(minutes=5)}
+    async def fake_agent(phone, text):
+        return {"reply": "agent replied while payment pending", "await_location": False}
+    out = await route({"phone": "9000000005", "type": "text", "text": "did it go through?"}, fake_agent)
+    assert out["reply"] == "agent replied while payment pending"
+    assert "9000000005" in _pending           # payment await preserved
+    clear_pending("9000000005")
+
+
+@pytest.mark.asyncio
 async def test_route_timeout_rollback():
     _pending["9000000004"] = {"await_type": "LOCATION_PIN", "resume": "x", "ctx": {},
                               "prompt": "x", "expires_at": datetime.now() - timedelta(minutes=1)}  # expired
