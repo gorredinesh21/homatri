@@ -39,6 +39,7 @@ from app.tools.common import resolve_time_pool
 from app.tools.dietary import clear_negotiation
 from app.tools.master_tools import _run_cutoff_batch
 from app.tools.pause import RESUME_HANDLERS, Pause, clear_pending, get_pending
+from dev_batch import CHEFS as BATCH_CHEFS, DRIVERS as BATCH_DRIVERS, build_roster, seed_batch
 
 KIMI = "moonshotai.kimi-k2.5"   # non-thinking Kimi — ~5x faster than kimi-k2-thinking, same tool support
 WEBHOOK_VERIFY_TOKEN = "homatri_verify"
@@ -290,6 +291,32 @@ def index() -> HTMLResponse:
     return HTMLResponse(PAGE)
 
 
+# ---------------------------------------------------------------------------
+# Batch / load-test orchestrator
+# ---------------------------------------------------------------------------
+@app.get("/batch/roster")
+def batch_roster() -> JSONResponse:
+    """The pre-scripted roster the orchestrator drives (customers not seeded — they register via buttons)."""
+    return JSONResponse({
+        "customers": build_roster(),
+        "chefs": [{"phone": c["phone"], "name": c["kitchen"]} for c in BATCH_CHEFS],
+        "drivers": [{"phone": d["phone"], "name": d["name"]} for d in BATCH_DRIVERS],
+    })
+
+
+@app.post("/batch/reset")
+async def batch_reset() -> JSONResponse:
+    """Wipe + reseed 10 chefs + 10 drivers (no customers). Clears in-memory state too."""
+    await seed_batch()
+    CONVOS.clear()
+    return JSONResponse({"ok": True})
+
+
+@app.get("/batch")
+def batch_page() -> HTMLResponse:
+    return HTMLResponse(BATCH_PAGE)
+
+
 PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — multi-user tester</title>
 <style>
  *{box-sizing:border-box}
@@ -386,4 +413,114 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
  ['9876543210','9876543211','9876543212','9876543213'].forEach(p=>createWidget(p,'chef'));  // the 4 seeded chefs
  document.getElementById('add').onclick=()=>{const el=document.getElementById('newphone');const v=el.value.trim();if(v){createWidget(v,'customer');el.value='';}};
  document.getElementById('addinbox').onclick=()=>{const el=document.getElementById('newinbox');const v=el.value.trim();if(v){createWidget(v,'chef');el.value='';}};
+</script></body></html>"""
+
+
+BATCH_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — batch tester</title>
+<style>
+ *{box-sizing:border-box}
+ body{margin:0;font-family:'Segoe UI',sans-serif;background:#0b141a;color:#e9edef}
+ #bar{position:sticky;top:0;z-index:5;background:#075e54;padding:8px 12px;display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+ #bar b{font-size:15px} #status{font-size:12px;opacity:.9;margin-left:auto}
+ #steps{display:flex;flex-wrap:wrap;gap:6px;width:100%}
+ #steps button{padding:7px 10px;border:0;border-radius:6px;background:#0b7d6e;color:#fff;cursor:pointer;font-size:13px}
+ #steps button:disabled{opacity:.45;cursor:default}
+ #steps button.reset{background:#c0392b}
+ .section{padding:6px 10px}
+ .section h3{margin:8px 0 6px;font-size:13px;color:#8fb0a8;font-weight:600}
+ .grid{display:flex;flex-wrap:wrap;gap:6px}
+ .tile{width:220px;height:150px;background:#111b21;border:1px solid #223;border-radius:8px;display:flex;flex-direction:column;overflow:hidden}
+ .tile.chef{border-color:#3a5} .tile.driver{border-color:#a83}
+ .th{padding:4px 7px;font-size:11px;font-weight:600;background:#1f2c34;display:flex;justify-content:space-between;gap:4px}
+ .th .ph{opacity:.6;font-weight:400}
+ .lg{flex:1;overflow-y:auto;padding:5px 7px;font-size:11px;line-height:1.3;display:flex;flex-direction:column;gap:3px}
+ .m{padding:3px 6px;border-radius:6px;white-space:pre-wrap;word-break:break-word}
+ .me{align-self:flex-end;background:#005c4b} .bot{align-self:flex-start;background:#202c33}
+ .m a{color:#53bdeb}
+</style></head><body>
+ <div id="bar"><b>Homaatri — batch tester</b><span id="status">loading roster…</span>
+  <div id="steps">
+   <button class="reset" data-step="reset">🌱 Reset &amp; Seed</button>
+   <button data-step="greeting">👋 Greeting</button>
+   <button data-step="name">📝 Name+Addr</button>
+   <button data-step="location">📍 Location</button>
+   <button data-step="order">🍽️ Order</button>
+   <button data-step="pay">💳 Pay</button>
+   <button data-step="cutoff">⏰ Cutoff</button>
+  </div>
+ </div>
+ <div class="section"><h3 id="ch">Customers</h3><div id="customers" class="grid"></div></div>
+ <div class="section"><h3 id="hh">Chefs</h3><div id="chefs" class="grid"></div></div>
+ <div class="section"><h3 id="dh">Drivers</h3><div id="drivers" class="grid"></div></div>
+<script>
+ let roster=[]; const tiles={}; const pollers=[];
+ const $=id=>document.getElementById(id);
+ function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+ function linkify(s){return esc(s).replace(/(https?:\\/\\/[^\\s<]+)/g,'<a href="$1" target="_blank">$1</a>');}
+ function tile(container, phone, label, kind){
+   const w=document.createElement('div'); w.className='tile '+(kind||'');
+   w.innerHTML=`<div class="th"><span>${label}</span><span class="ph">${phone}</span></div><div class="lg"></div>`;
+   const lg=w.querySelector('.lg');
+   const add=(cls,txt)=>{const d=document.createElement('div');d.className='m '+cls;d.innerHTML=linkify(txt);lg.appendChild(d);lg.scrollTop=lg.scrollHeight;};
+   container.appendChild(w); tiles[phone]={add, clear:()=>lg.innerHTML=''};
+   return tiles[phone];
+ }
+ async function pool(items, worker, limit, onProgress){
+   let idx=0, done=0;
+   async function run(){ while(idx<items.length){ const i=idx++; await worker(items[i]); done++; onProgress&&onProgress(done, items.length); } }
+   await Promise.all(Array.from({length:Math.min(limit,items.length)}, run));
+ }
+ async function sendWebhook(phone, waMsg, label){
+   const t=tiles[phone]; if(t) t.add('me', label);
+   try{ const r=await fetch('/webhook',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({entry:[{changes:[{value:{messages:[waMsg]}}]}]})});
+     const j=await r.json(); if(t) t.add('bot', j.reply||'(no reply)'); }
+   catch(e){ if(t) t.add('bot','ERR: '+e); }
+ }
+ async function payOne(c){
+   const t=tiles[c.phone]; if(t) t.add('me','💳 pay');
+   try{ const r=await fetch('/pay',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:c.phone})});
+     const j=await r.json(); if(t) t.add('bot', j.reply||'(no reply)'); }
+   catch(e){ if(t) t.add('bot','ERR: '+e); }
+ }
+ const STEPS={
+   greeting: c=>sendWebhook(c.phone,{from:c.phone,type:'text',text:{body:'hi'}},'hi'),
+   name:     c=>sendWebhook(c.phone,{from:c.phone,type:'text',text:{body:c.name+', '+c.address}}, c.name),
+   location: c=>sendWebhook(c.phone,{from:c.phone,type:'location',location:{latitude:c.lat,longitude:c.lng}},'📍 '+c.lat+','+c.lng),
+   order:    c=>sendWebhook(c.phone,{from:c.phone,type:'text',text:{body:`order ${c.qty} ${c.dish} from ${c.kitchen}, and send me the payment link`}}, `order ${c.qty}× ${c.dish}`),
+   pay:      c=>payOne(c),
+ };
+ function setStatus(t){ $('status').textContent=t; }
+ function setBusy(b){ document.querySelectorAll('#steps button').forEach(x=>x.disabled=b); }
+ async function runStep(step){
+   setBusy(true);
+   if(step==='reset'){ setStatus('resetting + seeding…');
+     await fetch('/batch/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+     Object.values(tiles).forEach(t=>t.clear()); pollers.forEach(p=>p.seen=0);
+     setStatus('reset done — 10 chefs + 10 drivers seeded. Press Greeting.'); setBusy(false); return; }
+   if(step==='cutoff'){ setStatus('running cutoff…');
+     const r=await fetch('/cutoff',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+     const j=await r.json(); setStatus('cutoff: '+(j.message||'done').slice(0,120)); setBusy(false); return; }
+   const worker=STEPS[step];
+   await pool(roster, worker, 8, (d,n)=>setStatus(step+': '+d+'/'+n));
+   setStatus(step+': done ('+roster.length+')'); setBusy(false);
+ }
+ document.querySelectorAll('#steps button').forEach(b=>b.onclick=()=>runStep(b.dataset.step));
+ // chef/driver inbox polling
+ function startPoll(phone){
+   const p={phone, seen:0}; pollers.push(p);
+   setInterval(async()=>{ try{ const r=await fetch('/outbox?phone='+encodeURIComponent(phone)); const j=await r.json();
+     const m=j.messages||[]; for(let i=p.seen;i<m.length;i++){ tiles[phone] && tiles[phone].add('bot','📨 '+m[i].text); } p.seen=m.length; }catch(e){} }, 5000);
+ }
+ (async function(){
+   const j=await (await fetch('/batch/roster')).json();
+   roster=j.customers;
+   $('ch').textContent='Customers ('+roster.length+')';
+   $('hh').textContent='Chefs ('+j.chefs.length+')';
+   $('dh').textContent='Drivers ('+j.drivers.length+')';
+   roster.forEach(c=>tile($('customers'), c.phone, c.name, 'cust'));
+   j.chefs.forEach(c=>{ tile($('chefs'), c.phone, '🍳 '+c.name, 'chef'); startPoll(c.phone); });
+   j.drivers.forEach(d=>{ tile($('drivers'), d.phone, '🛵 '+d.name, 'driver'); startPoll(d.phone); });
+   setStatus('roster loaded ('+roster.length+' customers). Press 🌱 Reset & Seed first.');
+ })();
 </script></body></html>"""
