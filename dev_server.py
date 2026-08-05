@@ -485,7 +485,7 @@ BATCH_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri
  }
  const STEPS={
    greeting: c=>sendWebhook(c.phone,{from:c.phone,type:'text',text:{body:'hi'}},'hi'),
-   name:     c=>sendWebhook(c.phone,{from:c.phone,type:'text',text:{body:c.name+', '+c.address}}, c.name),
+   name:     c=>sendWebhook(c.phone,{from:c.phone,type:'text',text:{body:c.name+', '+c.address}}, c.name+', '+c.address),
    location: c=>sendWebhook(c.phone,{from:c.phone,type:'location',location:{latitude:c.lat,longitude:c.lng}},'📍 '+c.lat+','+c.lng),
    order:    c=>sendWebhook(c.phone,{from:c.phone,type:'text',text:{body:`order ${c.qty} ${c.dish} from ${c.kitchen}, and send me the payment link`}}, `order ${c.qty}× ${c.dish}`),
    pay:      c=>payOne(c),
