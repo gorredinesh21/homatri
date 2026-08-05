@@ -202,7 +202,14 @@ async def webhook(req: Request):
     msg = parse_webhook(await req.json())
     if msg is None:
         return JSONResponse({"status": "ignored"})   # status callback etc.
-    return JSONResponse(await route(msg, run_agent))
+    result = await route(msg, run_agent)
+    # A resume (e.g. location pin -> finish_registration -> kitchen list) bypasses
+    # run_agent, so log the exchange here or the next LLM turn won't see it.
+    if result.get("resumed"):
+        hist = CONVOS.setdefault(msg["phone"], [])
+        hist.append({"role": "user", "text": msg.get("text") or "(shared their location pin)"})
+        hist.append({"role": "assistant", "text": result.get("reply", "")})
+    return JSONResponse(result)
 
 
 @app.post("/pay")

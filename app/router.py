@@ -39,7 +39,10 @@ async def route(msg: dict[str, Any], run_agent: RunAgent) -> dict[str, Any]:
         if msg["type"] == "location" and note["await_type"] == "LOCATION_PIN":
             reply = await RESUME_HANDLERS[note["resume"]](phone, msg["location"], note["ctx"])
             clear_pending(phone)
-            return {"reply": reply, "await_location": False}
+            # `resumed` tells the harness to record this exchange in history — a resume
+            # bypasses run_agent, so its reply (e.g. the kitchen list) must still be
+            # logged, or the next LLM turn won't see it.
+            return {"reply": reply, "await_location": False, "resumed": True}
 
         # 3) something else arrived. For user-resumable awaits, "new message wins":
         #    drop the pending op and treat as fresh. For out-of-band awaits (payment),
