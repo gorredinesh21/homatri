@@ -444,6 +444,7 @@ BATCH_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri
    <button data-step="greeting">👋 Greeting</button>
    <button data-step="name">📝 Name+Addr</button>
    <button data-step="location">📍 Location</button>
+   <button data-step="menu">🍔 View menu</button>
    <button data-step="order">🍽️ Order</button>
    <button data-step="pay">💳 Pay</button>
    <button data-step="cutoff">⏰ Cutoff</button>
@@ -487,6 +488,7 @@ BATCH_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri
    greeting: c=>sendWebhook(c.phone,{from:c.phone,type:'text',text:{body:'hi'}},'hi'),
    name:     c=>sendWebhook(c.phone,{from:c.phone,type:'text',text:{body:c.name+', '+c.address}}, c.name+', '+c.address),
    location: c=>sendWebhook(c.phone,{from:c.phone,type:'location',location:{latitude:c.lat,longitude:c.lng}},'📍 '+c.lat+','+c.lng),
+   menu:     c=>sendWebhook(c.phone,{from:c.phone,type:'text',text:{body:`show me the menu for ${c.kitchen}`}}, `menu: ${c.kitchen}`),
    order:    c=>sendWebhook(c.phone,{from:c.phone,type:'text',text:{body:`order ${c.qty} ${c.dish} from ${c.kitchen}, and send me the payment link`}}, `order ${c.qty}× ${c.dish}`),
    pay:      c=>payOne(c),
  };
