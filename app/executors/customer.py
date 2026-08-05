@@ -194,6 +194,23 @@ async def execute_add_item_to_order(
 
 
 # =============================================================================
+# EXECUTOR 3b: Update Order Special Instructions (dietary note)
+# =============================================================================
+async def execute_order_special_instructions_update(
+    session: AsyncSession,
+    *,
+    order_id: str,
+    special_instructions: str,
+) -> CustomerOrder:
+    """Executor #3b — Set an order's special_instructions (e.g. an accepted dietary note)."""
+    order = await session.get(CustomerOrder, order_id)
+    assert order is not None, f"Order not found: {order_id}"
+    order.special_instructions = special_instructions
+    await session.flush()
+    return order
+
+
+# =============================================================================
 # EXECUTOR 4: Create Payment Record
 # =============================================================================
 async def execute_payment_record_creation(

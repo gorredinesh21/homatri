@@ -16,7 +16,10 @@ from typing import Any, Awaitable, Callable, NamedTuple
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.executors.customer import execute_order_status_transition
+from app.executors.customer import (
+    execute_order_special_instructions_update,
+    execute_order_status_transition,
+)
 from app.executors.driver import (
     execute_driver_trip_initialization,
     execute_driver_trip_phase_update,
@@ -34,6 +37,8 @@ CROSS_DOMAIN_WRITES: dict[str, _Cap] = {
     # customer_orders is owned by the Customer domain (DW1). Chef/Driver/Master
     # move an order through the pipeline (COOKING/PACKED/PICKED_UP/DELIVERED/...).
     "ORDER_STATUS": _Cap(execute_order_status_transition, frozenset({"MASTER", "CHEF", "DRIVER"})),
+    # an accepted dietary note is written to the (customer-owned) order.
+    "ORDER_NOTE": _Cap(execute_order_special_instructions_update, frozenset({"MASTER", "CHEF"})),
     # system_delivery_stops is system-owned; the Driver marks arrival/completion.
     "STOP_STATUS": _Cap(execute_stop_status_update, frozenset({"DRIVER", "MASTER"})),
     # driver_trip_status is Driver-owned; Master seeds the trip at cutoff, the Driver

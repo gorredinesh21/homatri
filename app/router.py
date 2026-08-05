@@ -23,6 +23,10 @@ RunAgent = Callable[[str, str], Awaitable[dict[str, Any]]]
 # customer asking "did it go through?" must NOT cancel a pending payment.
 OUT_OF_BAND_AWAITS = {"PAYMENT_CONFIRM"}
 
+# Awaits resumed by the user's next TEXT reply (not a location pin). e.g. the
+# customer answering yes/no to a chef's dietary counter-offer.
+TEXT_RESUMABLE_AWAITS = {"CUSTOMER_DIETARY_DECISION"}
+
 
 async def route(msg: dict[str, Any], run_agent: RunAgent) -> dict[str, Any]:
     """Route one normalized message. Returns {reply, await_location}."""
@@ -42,6 +46,12 @@ async def route(msg: dict[str, Any], run_agent: RunAgent) -> dict[str, Any]:
             # `resumed` tells the harness to record this exchange in history — a resume
             # bypasses run_agent, so its reply (e.g. the kitchen list) must still be
             # logged, or the next LLM turn won't see it.
+            return {"reply": reply, "await_location": False, "resumed": True}
+
+        # 2b) a TEXT reply resolves a text-resumable await (e.g. yes/no to a counter-offer)
+        if msg["type"] == "text" and note["await_type"] in TEXT_RESUMABLE_AWAITS:
+            reply = await RESUME_HANDLERS[note["resume"]](phone, {"text": msg.get("text", "")}, note["ctx"])
+            clear_pending(phone)
             return {"reply": reply, "await_location": False, "resumed": True}
 
         # 3) something else arrived. For user-resumable awaits, "new message wins":

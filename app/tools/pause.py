@@ -70,6 +70,29 @@ def send_and_await_reply(
     raise Pause(recipient, message, await_type)
 
 
+def arm_await(
+    recipient: str,
+    *,
+    await_type: str,
+    resume: str,
+    ctx: dict[str, Any] | None = None,
+    ttl_mins: int = DEFAULT_TTL_MINS,
+) -> None:
+    """Record a pending-await note WITHOUT raising Pause.
+
+    Unlike send_and_await_reply (which pauses the CURRENT turn), this arms a pause on
+    ANOTHER party's thread — e.g. the Chef's turn arming the Customer to reply to a
+    counter-offer. The next inbound message of `await_type` runs RESUME_HANDLERS[resume].
+    """
+    _pending[recipient] = {
+        "await_type": await_type,
+        "resume": resume,
+        "ctx": ctx or {},
+        "prompt": "",
+        "expires_at": datetime.now() + timedelta(minutes=ttl_mins),
+    }
+
+
 def get_pending(phone: str) -> dict[str, Any] | None:
     return _pending.get(phone)
 

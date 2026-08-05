@@ -42,6 +42,11 @@ from app.tools.customer_tools import (
     view_cart,
     view_chef_menu,
 )
+from app.tools.dietary import (
+    relay_dietary_request,
+    request_dietary_change,
+    respond_to_dietary_request,
+)
 from app.tools.master_tools import mint_payment_link, process_payment_webhook
 
 # Per-agent tool subsets (each agent owns only its own tools).
@@ -55,6 +60,7 @@ CUSTOMER_TOOLS: tuple[BaseTool, ...] = (
     view_cart,
     request_payment,
     get_order_status,
+    request_dietary_change,
 )
 CHEF_TOOLS: tuple[BaseTool, ...] = (
     get_chef_profile,
@@ -62,10 +68,12 @@ CHEF_TOOLS: tuple[BaseTool, ...] = (
     toggle_dish_stock,
     set_daily_capacity,
     mark_order_ready,
+    respond_to_dietary_request,
 )
 MASTER_TOOLS: tuple[BaseTool, ...] = (
     mint_payment_link,
     process_payment_webhook,
+    relay_dietary_request,
 )
 
 

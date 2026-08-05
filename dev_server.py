@@ -36,6 +36,7 @@ from app.models.customer import CustomerOrder
 from app.models.system import SystemOutboundQueue
 from app.router import route
 from app.tools.common import resolve_time_pool
+from app.tools.dietary import clear_negotiation
 from app.tools.master_tools import _run_cutoff_batch
 from app.tools.pause import RESUME_HANDLERS, Pause, clear_pending, get_pending
 
@@ -76,6 +77,8 @@ def _chef_extra(phone: str) -> str:
         f"summary. To mark a dish out of/back in stock: toggle_dish_stock(chef_phone, dish, is_available). "
         f"To set how many portions you can make: set_daily_capacity(...). When an order is packed, call "
         f"mark_order_ready(chef_phone, order_id) — it moves the order to PACKED and notifies the driver. "
+        f"If a customer DIETARY REQUEST arrives (e.g. 'no garlic'), decide with "
+        f"respond_to_dietary_request(chef_phone, decision='accept'|'reject'|'counter', counter_note=<if counter>). "
         f"Refer to dishes by name and orders by their ord_ id from get_chef_batch. Keep replies short."
     )
 
@@ -107,6 +110,10 @@ def _customer_extra(phone: str) -> str:
         f"'did it go through?', say you're still waiting for the payment and ask them to use the link."
         f"\n- To check an EXISTING (placed) order — 'where's my order?', 'order status', 'my current orders' — "
         f"call get_order_status(customer_phone). That's different from view_cart (the pre-payment cart)."
+        f"\n- If the customer asks for ANY custom/dietary change to a placed order ('no garlic', 'less spicy', "
+        f"'no onion', 'extra spicy'), you MUST call request_dietary_change(customer_phone, note) — that tool is "
+        f"the ONLY way to reach the kitchen. NEVER say you've sent or asked the kitchen unless you ACTUALLY "
+        f"called this tool this turn. After it returns, relay its message. Do not promise the change is done."
     )
 
 
@@ -274,7 +281,7 @@ async def outbox(req: Request):
 async def reset(req: Request):
     body = await req.json()
     phone = normalize_phone(body.get("phone", ""))
-    clear_pending(phone); CONVOS.pop(phone, None)
+    clear_pending(phone); clear_negotiation(phone); CONVOS.pop(phone, None)
     return JSONResponse({"ok": True})
 
 
@@ -360,8 +367,9 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
    w.querySelector('.rst').onclick=async()=>{await fetch('/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone})});
      log.innerHTML='';add('sys','reset');loc.classList.remove('hot');pay.style.display='none';};
    w.querySelector('.cls').onclick=()=>{if(timer)clearInterval(timer);w.remove();};
-   // Chef widgets also surface messages dispatched to them (the cutoff cook checklist).
-   if(chef){let seen=0;
+   // All widgets surface pushed messages: chefs get cook checklists / dietary requests;
+   // customers get async dietary answers (chef's accept/reject/counter).
+   {let seen=0;
      async function pollOutbox(){try{const r=await fetch('/outbox?phone='+encodeURIComponent(phone));const j=await r.json();
        const msgs=j.messages||[];for(let i=seen;i<msgs.length;i++){add('bot','📨 '+msgs[i].text);}seen=msgs.length;}catch(e){}}
      timer=setInterval(pollOutbox,4000); pollOutbox();}
