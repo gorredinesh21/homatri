@@ -22,6 +22,11 @@ def test_master_agent_bindings():
     assert names == {"mint_payment_link", "process_payment_webhook"}
 
 
-def test_chef_and_driver_have_no_tools_yet():
-    assert chef_agent.tool_map == {}
+def test_chef_agent_bindings():
+    names = set(chef_agent.tool_map)
+    assert names == {"get_chef_profile", "get_chef_batch", "toggle_dish_stock",
+                     "set_daily_capacity", "mark_order_ready"}
+
+
+def test_driver_has_no_tools_yet():
     assert driver_agent.tool_map == {}
