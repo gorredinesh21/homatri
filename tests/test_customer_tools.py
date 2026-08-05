@@ -15,6 +15,7 @@ from app.tools.customer_tools import (
     _find_nearby_kitchens,
     _finish_registration,
     _get_customer_profile,
+    _get_order_status,
     _register_customer,
     _request_payment,
     _resolve_chef,
@@ -401,6 +402,27 @@ async def test_view_cart_shows_items_and_totals(db_session: AsyncSession):
     assert res["items"][0]["quantity"] == 2
     assert res["subtotal"] == 240.0
     assert res["total"] == 240.0 + res["delivery_fee"]
+
+
+# ---- get_order_status ----
+
+@pytest.mark.asyncio
+async def test_get_order_status_none(db_session: AsyncSession):
+    db_session.add(CustomerProfile(customer_phone="7000000045", name="C", delivery_address="X", is_registered=True))
+    await db_session.flush()
+    res = await _get_order_status(db_session, customer_phone="7000000045")
+    assert res["status"] == "NO_ORDERS"
+
+
+@pytest.mark.asyncio
+async def test_get_order_status_shows_active_order(db_session: AsyncSession):
+    await _seed_customer_and_chef_with_dish(db_session, "7000000046", "9876500046")
+    await _create_order(db_session, customer_phone="7000000046", kitchen="9876500046",
+                        items=[{"dish_name": "Thali", "quantity": 1}], now=BEFORE_LUNCH)
+    res = await _get_order_status(db_session, customer_phone="7000000046")
+    assert res["status"] == "OK"
+    assert res["orders"][0]["status"] == "PENDING_PAYMENT"
+    assert "awaiting payment" in res["message"]
 
 
 # ---- request_payment + confirm_payment (Flow 4) ----

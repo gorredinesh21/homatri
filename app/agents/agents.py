@@ -36,6 +36,7 @@ from app.tools.customer_tools import (
     create_order,
     find_nearby_kitchens,
     get_customer_profile,
+    get_order_status,
     register_customer,
     request_payment,
     view_cart,
@@ -53,6 +54,7 @@ CUSTOMER_TOOLS: tuple[BaseTool, ...] = (
     add_item_to_order,
     view_cart,
     request_payment,
+    get_order_status,
 )
 CHEF_TOOLS: tuple[BaseTool, ...] = (
     get_chef_profile,

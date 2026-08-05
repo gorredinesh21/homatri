@@ -32,6 +32,7 @@ from app.agents.prompts import CHEF_PROMPT, CUSTOMER_PROMPT
 from app.api.whatsapp import normalize_phone, parse_webhook, verify_challenge
 from app.db.session import SessionFactory, transaction
 from app.models.chef import ChefProfile
+from app.models.customer import CustomerOrder
 from app.models.system import SystemOutboundQueue
 from app.router import route
 from app.tools.common import resolve_time_pool
@@ -104,6 +105,8 @@ def _customer_extra(phone: str) -> str:
         f"customer to pay. NEVER tell the customer their payment succeeded or their order is confirmed — you do "
         f"NOT know that; the system sends the confirmation automatically once payment completes. If they ask "
         f"'did it go through?', say you're still waiting for the payment and ask them to use the link."
+        f"\n- To check an EXISTING (placed) order — 'where's my order?', 'order status', 'my current orders' — "
+        f"call get_order_status(customer_phone). That's different from view_cart (the pre-payment cart)."
     )
 
 
@@ -220,11 +223,25 @@ async def pay(req: Request):
 
 @app.post("/cutoff")
 async def cutoff(req: Request):
-    """Manual cutoff trigger (stands in for the scheduler): batch the CURRENT window."""
-    pool = resolve_time_pool()
-    async with transaction() as session:
-        res = await _run_cutoff_batch(session, window=pool["window"], service_date=pool["service_date"])
-    return JSONResponse({"window": pool["window"], "service_date": str(pool["service_date"]), **res})
+    """Manual cutoff trigger (stands in for the scheduler). Batches EVERY (window, date)
+    that has CONFIRMED orders — so it works whatever window you tested in (lunch/dinner)."""
+    async with SessionFactory() as session:
+        pending = (
+            await session.execute(
+                select(CustomerOrder.meal_window, CustomerOrder.service_date)
+                .where(CustomerOrder.status == "CONFIRMED").distinct()
+            )
+        ).all()
+    if not pending:
+        return JSONResponse({"status": "NO_ORDERS", "runs": [],
+                             "message": "No confirmed orders waiting to be batched."})
+    runs = []
+    for window, service_date in pending:
+        async with transaction() as session:
+            res = await _run_cutoff_batch(session, window=window, service_date=service_date)
+        runs.append({"window": window, "service_date": str(service_date), **res})
+    msg = " | ".join(f"{r['window'].lower()} {r['service_date']}: {r['message']}" for r in runs)
+    return JSONResponse({"status": "BATCHED", "runs": runs, "message": msg})
 
 
 @app.get("/outbox")

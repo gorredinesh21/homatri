@@ -12,6 +12,7 @@ def test_customer_agent_bindings():
     names = set(customer_agent.tool_map)
     assert "request_payment" in names
     assert "create_order" in names
+    assert "get_order_status" in names
     # customer must NOT own the gateway tools
     assert "mint_payment_link" not in names
     assert "process_payment_webhook" not in names

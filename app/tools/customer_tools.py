@@ -718,6 +718,64 @@ async def view_cart(customer_phone: str) -> str:
 
 
 # =============================================================================
+# TOOL: get_order_status  (same-domain · READ)
+# =============================================================================
+ORDER_STATUS_FRIENDLY = {
+    "PENDING_PAYMENT": "awaiting payment 💳",
+    "CONFIRMED": "confirmed — waiting for the kitchen cutoff",
+    "BATCHED": "batched — the kitchen will start cooking soon",
+    "COOKING": "being cooked 👨‍🍳",
+    "PACKED": "packed — waiting for the driver 📦",
+    "PICKED_UP": "on the way 🛵",
+    "DELIVERED": "delivered ✅",
+    "CANCELLED": "cancelled ❌",
+}
+TERMINAL_ORDER_STATUSES = ("DELIVERED", "CANCELLED")
+
+
+class GetOrderStatusInput(BaseModel):
+    customer_phone: str = Field(..., description="Normalized 10-digit customer phone.")
+
+
+async def _get_order_status(
+    session: AsyncSession, *, customer_phone: str, include_terminal: bool = False
+) -> dict[str, Any]:
+    """The customer's active order(s) + where each is in the pipeline. {status, orders, message}.
+
+    Guard: no active orders -> NO_ORDERS.
+    """
+    q = select(CustomerOrder).where(CustomerOrder.customer_phone == customer_phone)
+    if not include_terminal:
+        q = q.where(CustomerOrder.status.not_in(TERMINAL_ORDER_STATUSES))
+    orders = (await session.execute(q.order_by(CustomerOrder.created_at.desc()))).scalars().all()
+    if not orders:
+        return {"status": "NO_ORDERS",
+                "message": "You don't have any active orders right now. Order something tasty!"}
+
+    lines, out = [], []
+    for o in orders:
+        items = (
+            await session.execute(
+                select(CustomerOrderItem).where(CustomerOrderItem.order_id == o.order_id)
+            )
+        ).scalars().all()
+        item_str = ", ".join(f"{it.quantity}× {it.dish_name}" for it in items) or "(cart empty)"
+        friendly = ORDER_STATUS_FRIENDLY.get(o.status, o.status.lower())
+        lines.append(f"• {o.kitchen_name} — {item_str} (₹{float(o.total_amount):.0f}) → {friendly}")
+        out.append({"order_id": o.order_id, "kitchen_name": o.kitchen_name,
+                    "status": o.status, "total": float(o.total_amount)})
+    return {"status": "OK", "orders": out, "message": "Your order(s):\n" + "\n".join(lines)}
+
+
+@tool("get_order_status", args_schema=GetOrderStatusInput)
+async def get_order_status(customer_phone: str) -> str:
+    """Show the customer's active order(s) and where each is in the pipeline (confirmed/cooking/on the way…)."""
+    async with SessionFactory() as session:
+        res = await _get_order_status(session, customer_phone=customer_phone)
+        return res["message"]
+
+
+# =============================================================================
 # TOOL: request_payment  (same-domain · WRITE + PAUSE)  [Flow 4]
 #
 # The customer never touches the gateway: minting the link + receiving the

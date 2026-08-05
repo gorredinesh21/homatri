@@ -1,10 +1,18 @@
 """Homaatri agent tools (rebuilt flow-by-flow). See markdowns/tool_specs.md."""
 
+from app.tools.chef_tools import (
+    get_chef_batch,
+    get_chef_profile,
+    mark_order_ready,
+    set_daily_capacity,
+    toggle_dish_stock,
+)
 from app.tools.customer_tools import (
     add_item_to_order,
     create_order,
     find_nearby_kitchens,
     get_customer_profile,
+    get_order_status,
     register_customer,
     request_payment,
     view_cart,
@@ -22,6 +30,13 @@ __all__ = [
     "add_item_to_order",
     "view_cart",
     "request_payment",
+    "get_order_status",
+    # Chef
+    "get_chef_profile",
+    "get_chef_batch",
+    "toggle_dish_stock",
+    "set_daily_capacity",
+    "mark_order_ready",
     # Master
     "mint_payment_link",
     "process_payment_webhook",
