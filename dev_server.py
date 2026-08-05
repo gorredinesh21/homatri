@@ -27,10 +27,11 @@ from fastapi.staticfiles import StaticFiles
 import app.tools.customer_tools  # noqa: F401  (registers the finish_registration + confirm_payment resume handlers)
 from sqlalchemy import select
 
-from app.agents.agents import customer_agent
-from app.agents.prompts import CUSTOMER_PROMPT
+from app.agents.agents import chef_agent, customer_agent
+from app.agents.prompts import CHEF_PROMPT, CUSTOMER_PROMPT
 from app.api.whatsapp import normalize_phone, parse_webhook, verify_challenge
 from app.db.session import SessionFactory, transaction
+from app.models.chef import ChefProfile
 from app.models.system import SystemOutboundQueue
 from app.router import route
 from app.tools.common import resolve_time_pool
@@ -41,20 +42,69 @@ KIMI = "moonshotai.kimi-k2.5"   # non-thinking Kimi — ~5x faster than kimi-k2-
 WEBHOOK_VERIFY_TOKEN = "homatri_verify"
 _br = boto3.Session(profile_name="homatri-bedrock").client("bedrock-runtime", region_name="us-east-1")
 
-# The customer agent's bound tools ARE the harness toolset (single source of truth).
-TOOLS = customer_agent.tool_map
+# Each agent's bound tools ARE its harness toolset (single source of truth).
+CUSTOMER_TOOLS = customer_agent.tool_map
+CHEF_TOOLS = chef_agent.tool_map
 CONVOS: dict[str, list] = {}  # phone -> [{role, text}]  (text-only history per phone)
 
 
-def _toolconfig() -> dict:
+def _toolconfig(tools: dict) -> dict:
     """Full JSON schema per tool (from the Pydantic args_schema) so nested/list
-    args like create_order.items=[{item_id, quantity}] reach Kimi intact."""
+    args like create_order.items=[{dish_name, quantity}] reach Kimi intact."""
     specs = []
-    for name, t in TOOLS.items():
+    for name, t in tools.items():
         schema = t.args_schema.model_json_schema()
         specs.append({"toolSpec": {"name": name, "description": t.description,
             "inputSchema": {"json": schema}}})
     return {"tools": specs}
+
+
+async def _role_for(phone: str) -> str:
+    """A seeded chef phone -> CHEF; everyone else -> CUSTOMER (drivers: later)."""
+    async with SessionFactory() as session:
+        if await session.get(ChefProfile, phone) is not None:
+            return "CHEF"
+    return "CUSTOMER"
+
+
+def _chef_extra(phone: str) -> str:
+    return (
+        f"\n\nThe current chef's phone number is {phone}. Always pass this exact phone to any tool "
+        f"needing chef_phone. On an inbound message call get_chef_profile to identify the kitchen. "
+        f"To show what to cook, call get_chef_batch(chef_phone) — it lists each order + items and a cook "
+        f"summary. To mark a dish out of/back in stock: toggle_dish_stock(chef_phone, dish, is_available). "
+        f"To set how many portions you can make: set_daily_capacity(...). When an order is packed, call "
+        f"mark_order_ready(chef_phone, order_id) — it moves the order to PACKED and notifies the driver. "
+        f"Refer to dishes by name and orders by their ord_ id from get_chef_batch. Keep replies short."
+    )
+
+
+def _customer_extra(phone: str) -> str:
+    return (
+        f"\n\nThe current customer's phone number is {phone}. Always pass this exact phone to any tool "
+        f"needing customer_phone. At the start of a conversation call get_customer_profile to check if they "
+        f"are registered. If NOT_FOUND or INCOMPLETE, ask for their name and full delivery address, then call "
+        f"register_customer(customer_phone, name, delivery_address). If get_customer_profile says they are "
+        f"already registered, do NOT call register_customer again."
+        f"\n\nGROUNDING — this is critical:"
+        f"\n- You have ZERO knowledge of any kitchen, dish, price, or menu. Every fact you state MUST come from a "
+        f"tool result you received THIS turn. NEVER write a menu, dish name, or price from your own memory."
+        f"\n- NEVER invent or guess IDs, phone numbers, or item codes. The tools take plain NAMES — pass them."
+        f"\n\nFlow — browse & order (refer to kitchens and dishes by NAME):"
+        f"\n- To find kitchens: find_nearby_kitchens(latitude, longitude). For a registered customer, use the "
+        f"saved location from get_customer_profile — don't ask for a pin again."
+        f"\n- When the customer picks a kitchen, call view_chef_menu(kitchen=<the kitchen name they said>). "
+        f"If they say 'the 3rd one', map it to that kitchen's name from the list you just showed."
+        f"\n- To place an order: create_order(customer_phone, kitchen=<name>, items=[{{'dish_name': <name>, "
+        f"'quantity': N}}]). To change the cart: add_item_to_order(customer_phone, items=[{{'dish_name': <name>, "
+        f"'quantity': N}}]) — quantity is the FINAL desired count, not how many to add. Show the cart with "
+        f"view_cart(customer_phone)."
+        f"\n- If a tool says a name matches nothing or is ambiguous, re-show the menu/list and ask — do not guess."
+        f"\n- To take payment, call request_payment(customer_phone). It sends a payment link and waits for the "
+        f"customer to pay. NEVER tell the customer their payment succeeded or their order is confirmed — you do "
+        f"NOT know that; the system sends the confirmation automatically once payment completes. If they ask "
+        f"'did it go through?', say you're still waiting for the payment and ask them to use the link."
+    )
 
 
 def _clean(t: str) -> str:
@@ -84,35 +134,18 @@ def _window_messages(hist: list, n: int = 4) -> list:
 
 
 async def run_agent(phone: str, user_text: str) -> dict:
-    """The (harness) agent runtime: Kimi K2 + the bound tools + text-only history."""
+    """The (harness) agent runtime: Kimi K2 + the sender's role-appropriate tools + text-only history."""
     hist = CONVOS.setdefault(phone, [])
     hist.append({"role": "user", "text": user_text})
-    system = [{"text": CUSTOMER_PROMPT + (
-        f"\n\nThe current customer's phone number is {phone}. Always pass this exact phone to any tool "
-        f"needing customer_phone. At the start of a conversation call get_customer_profile to check if they "
-        f"are registered. If NOT_FOUND or INCOMPLETE, ask for their name and full delivery address, then call "
-        f"register_customer(customer_phone, name, delivery_address). If get_customer_profile says they are "
-        f"already registered, do NOT call register_customer again."
-        f"\n\nGROUNDING — this is critical:"
-        f"\n- You have ZERO knowledge of any kitchen, dish, price, or menu. Every fact you state MUST come from a "
-        f"tool result you received THIS turn. NEVER write a menu, dish name, or price from your own memory."
-        f"\n- NEVER invent or guess IDs, phone numbers, or item codes. The tools take plain NAMES — pass them."
-        f"\n\nFlow — browse & order (refer to kitchens and dishes by NAME):"
-        f"\n- To find kitchens: find_nearby_kitchens(latitude, longitude). For a registered customer, use the "
-        f"saved location from get_customer_profile — don't ask for a pin again."
-        f"\n- When the customer picks a kitchen, call view_chef_menu(kitchen=<the kitchen name they said>). "
-        f"If they say 'the 3rd one', map it to that kitchen's name from the list you just showed."
-        f"\n- To place an order: create_order(customer_phone, kitchen=<name>, items=[{{'dish_name': <name>, "
-        f"'quantity': N}}]). To change the cart: add_item_to_order(customer_phone, items=[{{'dish_name': <name>, "
-        f"'quantity': N}}]) — quantity is the FINAL desired count, not how many to add. Show the cart with "
-        f"view_cart(customer_phone)."
-        f"\n- If a tool says a name matches nothing or is ambiguous, re-show the menu/list and ask — do not guess."
-        f"\n- To take payment, call request_payment(customer_phone). It sends a payment link and waits for the "
-        f"customer to pay. NEVER tell the customer their payment succeeded or their order is confirmed — you do "
-        f"NOT know that; the system sends the confirmation automatically once payment completes. If they ask "
-        f"'did it go through?', say you're still waiting for the payment and ask them to use the link.")}]
+
+    role = await _role_for(phone)
+    if role == "CHEF":
+        tools, system = CHEF_TOOLS, [{"text": CHEF_PROMPT + _chef_extra(phone)}]
+    else:
+        tools, system = CUSTOMER_TOOLS, [{"text": CUSTOMER_PROMPT + _customer_extra(phone)}]
+
     messages = _window_messages(hist, n=4)   # last 4 user + last 4 agent turns
-    tc = _toolconfig()
+    tc = _toolconfig(tools)
     for _ in range(6):
         r = await asyncio.to_thread(_br.converse, modelId=KIMI, system=system, messages=messages,
                                     toolConfig=tc, inferenceConfig={"maxTokens": 1500, "temperature": 0.3})
@@ -122,9 +155,9 @@ async def run_agent(phone: str, user_text: str) -> dict:
             for b in out["content"]:
                 if "toolUse" in b:
                     tu = b["toolUse"]
-                    print(f"[{phone}] TOOL {tu['name']}({tu['input']})", flush=True)
+                    print(f"[{phone}:{role}] TOOL {tu['name']}({tu['input']})", flush=True)
                     try:
-                        res = await TOOLS[tu["name"]].ainvoke(tu["input"])
+                        res = await tools[tu["name"]].ainvoke(tu["input"])
                     except Pause as p:
                         print(f"[{phone}]   -> PAUSE({p.await_type}): {p.message[:80]}", flush=True)
                         hist.append({"role": "assistant", "text": p.message})
@@ -252,24 +285,29 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
 </style></head><body>
  <div id="bar"><b>Homaatri</b><span>multi-user tester</span>
    <button id="cutoff" title="run the meal-window cutoff now" style="background:#e8a020">⏰ Run cutoff</button>
-   <input id="newphone" placeholder="new phone…"><button id="add">+ Add user</button>
-   <input id="newinbox" placeholder="chef/driver phone…"><button id="addinbox">+ Add inbox</button></div>
+   <input id="newphone" placeholder="new customer phone…"><button id="add">+ Add customer</button>
+   <input id="newinbox" placeholder="chef phone…"><button id="addinbox">+ Add chef</button></div>
  <div id="board"></div>
 <script>
  const board=document.getElementById('board');
  function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
  function linkify(s){return esc(s).replace(/(https?:\\/\\/[^\\s<]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>');}
- function createWidget(phone){
+ function createWidget(phone, role){
+   role = role || 'customer';
+   const chef = role === 'chef';
    const w=document.createElement('div'); w.className='widget';
-   w.innerHTML=`<div class="wh"><span class="ph">📱 ${phone}</span>
+   const hint = chef ? 'Chef '+phone+'. Try "show my batch", "mark order ord_… ready", "paneer is out of stock".'
+                     : 'User '+phone+'. Try "hi" (to register) or "get me nearby kitchens".';
+   const hide = chef ? ' style="display:none"' : '';
+   w.innerHTML=`<div class="wh"><span class="ph">${chef?'🍳':'📱'} ${phone}${chef?' · chef':''}</span>
        <button class="rst">reset</button><button class="cls">✕</button></div>
-     <div class="log"><div class="msg sys">User ${phone}. Try "hi" (to register a new user) or "get me nearby kitchens".</div></div>
-     <form class="f"><button type="button" class="loc" title="share location">📍</button>
+     <div class="log"><div class="msg sys">${hint}</div></div>
+     <form class="f"><button type="button" class="loc" title="share location"${hide}>📍</button>
        <button type="button" class="pay" title="pay now" style="display:none">💳 Pay</button>
        <input class="m" autocomplete="off" placeholder="Message…"><button class="snd">Send</button></form>`;
    const log=w.querySelector('.log'),f=w.querySelector('.f'),m=w.querySelector('.m'),
          snd=w.querySelector('.snd'),loc=w.querySelector('.loc'),pay=w.querySelector('.pay');
-   const add=(cls,txt)=>{const d=document.createElement('div');d.className='msg '+cls;d.textContent=txt;log.appendChild(d);log.scrollTop=log.scrollHeight;return d;};
+   const add=(cls,txt)=>{const d=document.createElement('div');d.className='msg '+cls;d.innerHTML=linkify(txt);log.appendChild(d);log.scrollTop=log.scrollHeight;return d;};
    function applyAwait(j){loc.classList.toggle('hot',!!j.await_location);pay.style.display=j.await_payment?'':'none';}
    async function send(waMsg,label){add('me',label);snd.disabled=true;loc.disabled=true;
      const t=add('bot','…thinking (Kimi K2)…');
@@ -294,29 +332,15 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
          send({from:phone,type:'location',location:{latitude:la,longitude:lo}},`📍 my real location (${la.toFixed(5)}, ${lo.toFixed(5)})`);},
        e=>{loc.disabled=false;send(FIXED,'📍 test coords (geolocation blocked: '+e.message+')');},
        {enableHighAccuracy:true,timeout:10000});};
+   let timer=null;
    w.querySelector('.rst').onclick=async()=>{await fetch('/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone})});
      log.innerHTML='';add('sys','reset');loc.classList.remove('hot');pay.style.display='none';};
-   w.querySelector('.cls').onclick=()=>w.remove();
-   board.appendChild(w);
- }
- // Read-only inbox widget: shows messages dispatched to a chef/driver (system_outbound_queue).
- function createInbox(phone){
-   const w=document.createElement('div'); w.className='widget';
-   w.innerHTML=`<div class="wh" style="background:#6a4e12"><span class="ph">🍳 ${phone} · inbox</span>
-       <button class="rf">🔄</button><button class="cls">✕</button></div>
-     <div class="log"><div class="msg sys">Dispatched messages to ${phone} appear here (chef checklist / driver route).</div></div>`;
-   const log=w.querySelector('.log');
-   const add=(cls,txt)=>{const d=document.createElement('div');d.className='msg '+cls;d.innerHTML=linkify(txt);log.appendChild(d);log.scrollTop=log.scrollHeight;};
-   let seen=0;
-   async function poll(){
-     try{const r=await fetch('/outbox?phone='+encodeURIComponent(phone));const j=await r.json();
-       const m=j.messages||[];
-       for(let i=seen;i<m.length;i++){add('bot','['+m[i].role+'] '+m[i].text);}
-       seen=m.length;}catch(e){}
-   }
-   const timer=setInterval(poll,4000); poll();
-   w.querySelector('.rf').onclick=poll;
-   w.querySelector('.cls').onclick=()=>{clearInterval(timer);w.remove();};
+   w.querySelector('.cls').onclick=()=>{if(timer)clearInterval(timer);w.remove();};
+   // Chef widgets also surface messages dispatched to them (the cutoff cook checklist).
+   if(chef){let seen=0;
+     async function pollOutbox(){try{const r=await fetch('/outbox?phone='+encodeURIComponent(phone));const j=await r.json();
+       const msgs=j.messages||[];for(let i=seen;i<msgs.length;i++){add('bot','📨 '+msgs[i].text);}seen=msgs.length;}catch(e){}}
+     timer=setInterval(pollOutbox,4000); pollOutbox();}
    board.appendChild(w);
  }
  document.getElementById('cutoff').onclick=async()=>{
@@ -326,8 +350,8 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
    catch(e){alert('Cutoff error: '+e);}
    b.disabled=false; b.textContent=old;
  };
- ['7416767453','7000000000','9111111111'].forEach(p=>createWidget(p));
- ['9876543210','9876543211','9876543212','9876543213'].forEach(p=>createInbox(p));  // the 4 seeded chefs
- document.getElementById('add').onclick=()=>{const el=document.getElementById('newphone');const v=el.value.trim();if(v){createWidget(v);el.value='';}};
- document.getElementById('addinbox').onclick=()=>{const el=document.getElementById('newinbox');const v=el.value.trim();if(v){createInbox(v);el.value='';}};
+ ['7416767453','7000000000','9111111111'].forEach(p=>createWidget(p,'customer'));
+ ['9876543210','9876543211','9876543212','9876543213'].forEach(p=>createWidget(p,'chef'));  // the 4 seeded chefs
+ document.getElementById('add').onclick=()=>{const el=document.getElementById('newphone');const v=el.value.trim();if(v){createWidget(v,'customer');el.value='';}};
+ document.getElementById('addinbox').onclick=()=>{const el=document.getElementById('newinbox');const v=el.value.trim();if(v){createWidget(v,'chef');el.value='';}};
 </script></body></html>"""
