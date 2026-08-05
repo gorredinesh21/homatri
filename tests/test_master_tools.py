@@ -160,10 +160,10 @@ async def test_run_cutoff_batch_batches_and_dispatches(db_session: AsyncSession)
     trip = (await db_session.execute(select(DriverTripStatus))).scalars().first()
     assert trip is not None and trip.route_id == route.route_id
 
-    # window locked
+    # window kept OPEN (we don't lock for now, so cutoff stays re-runnable)
     win = (await db_session.execute(
         select(SystemMealWindow).where(SystemMealWindow.service_date == SERVICE_DATE))).scalars().first()
-    assert win.status == "LOCKED_PROCESSING"
+    assert win.status == "OPEN"
 
     # chef + driver both notified
     outs = (await db_session.execute(select(SystemOutboundQueue))).scalars().all()
@@ -172,12 +172,13 @@ async def test_run_cutoff_batch_batches_and_dispatches(db_session: AsyncSession)
 
 
 @pytest.mark.asyncio
-async def test_run_cutoff_batch_idempotent(db_session: AsyncSession):
+async def test_run_cutoff_batch_rerun_has_nothing_left(db_session: AsyncSession):
+    # order-level idempotency: a re-run finds no CONFIRMED orders (all now BATCHED)
     await _seed_confirmed_order(db_session, "7000000081", "9876500081")
     await _seed_driver(db_session, "9111000081", "Vikram")
     await _run_cutoff_batch(db_session, window="LUNCH", service_date=SERVICE_DATE)
     again = await _run_cutoff_batch(db_session, window="LUNCH", service_date=SERVICE_DATE)
-    assert again["status"] == "ALREADY_BATCHED"
+    assert again["status"] == "NO_ORDERS"
 
 
 @pytest.mark.asyncio

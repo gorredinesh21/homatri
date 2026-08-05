@@ -363,7 +363,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
  document.getElementById('cutoff').onclick=async()=>{
    const b=document.getElementById('cutoff'); b.disabled=true; const old=b.textContent; b.textContent='⏰ running…';
    try{const r=await fetch('/cutoff',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-     const j=await r.json(); alert('Cutoff ('+j.window+' '+j.service_date+'): '+(j.message||JSON.stringify(j)));}
+     const j=await r.json(); alert('Cutoff — '+(j.message||JSON.stringify(j)));}
    catch(e){alert('Cutoff error: '+e);}
    b.disabled=false; b.textContent=old;
  };

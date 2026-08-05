@@ -276,7 +276,10 @@ async def _run_cutoff_batch(
     cutoff_time = LUNCH_CUTOFF if window.upper() == "LUNCH" else DINNER_CUTOFF
     cutoff_at = datetime.combine(service_date, cutoff_time)
 
-    # Idempotency: a window that's past OPEN has already been batched.
+    # NOTE: we do NOT lock the window for now (dev request) — the window stays OPEN
+    # so cutoff is re-runnable and orders confirmed after a run still get batched.
+    # Idempotency is at the ORDER level (only CONFIRMED orders are batched; a re-run
+    # with nothing confirmed returns NO_ORDERS). Proper locking wires in later.
     win = (
         await session.execute(
             select(SystemMealWindow).where(
@@ -285,9 +288,6 @@ async def _run_cutoff_batch(
             )
         )
     ).scalar_one_or_none()
-    if win is not None and win.status != "OPEN":
-        return {"status": "ALREADY_BATCHED", "batches": [],
-                "message": f"{window.lower()} on {service_date} is already {win.status.lower()}."}
 
     # CONFIRMED orders for this window/date, grouped by kitchen.
     orders = (
@@ -416,6 +416,13 @@ async def _run_cutoff_batch(
             "chef_phone": chef_phone, "kitchen_name": chef.kitchen_name, "route_id": route_row.route_id,
             "driver_phone": driver_phone, "orders": len(chef_orders), "stops": total_stops, "status": "BATCHED",
         })
+
+    # Keep the window OPEN (the batch executor flips it to LOCKED_PROCESSING; undo
+    # that for now so cutoff stays re-runnable). Locking is a later feature.
+    if win is not None:
+        win.status = "OPEN"
+        win.locked_at = None
+        await session.flush()
 
     n_batched = sum(1 for b in batches if b["status"] == "BATCHED")
     total_orders = sum(b.get("orders", 0) for b in batches if b["status"] == "BATCHED")
