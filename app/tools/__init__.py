@@ -18,6 +18,8 @@ from app.tools.customer_tools import (
     view_cart,
     view_chef_menu,
 )
+from app.tools.cancellation import cancel_order, respond_to_cancellation
+from app.tools.customer_tools import submit_order_review
 from app.tools.dietary import (
     relay_dietary_request,
     request_dietary_change,
@@ -36,12 +38,15 @@ __all__ = [
     "view_cart",
     "request_payment",
     "get_order_status",
+    "cancel_order",
+    "submit_order_review",
     # Chef
     "get_chef_profile",
     "get_chef_batch",
     "toggle_dish_stock",
     "set_daily_capacity",
     "mark_order_ready",
+    "respond_to_cancellation",
     # Dietary negotiation (Flow 6B)
     "request_dietary_change",
     "relay_dietary_request",

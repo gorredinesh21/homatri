@@ -35,6 +35,7 @@ from app.models.chef import ChefProfile
 from app.models.customer import CustomerOrder
 from app.models.system import SystemOutboundQueue
 from app.router import route
+from app.tools.cancellation import clear_cancellation
 from app.tools.common import resolve_time_pool
 from app.tools.dietary import clear_negotiation
 from app.tools.master_tools import _run_cutoff_batch
@@ -80,6 +81,8 @@ def _chef_extra(phone: str) -> str:
         f"mark_order_ready(chef_phone, order_id) — it moves the order to PACKED and notifies the driver. "
         f"If a customer DIETARY REQUEST arrives (e.g. 'no garlic'), decide with "
         f"respond_to_dietary_request(chef_phone, decision='accept'|'reject'|'counter', counter_note=<if counter>). "
+        f"If a CANCELLATION request arrives for an order you're cooking, decide with "
+        f"respond_to_cancellation(chef_phone, decision='approve'|'deny'). "
         f"Refer to dishes by name and orders by their ord_ id from get_chef_batch. Keep replies short."
     )
 
@@ -119,6 +122,10 @@ def _customer_extra(phone: str) -> str:
         f"'no onion', 'extra spicy'), you MUST call request_dietary_change(customer_phone, note) — that tool is "
         f"the ONLY way to reach the kitchen. NEVER say you've sent or asked the kitchen unless you ACTUALLY "
         f"called this tool this turn. After it returns, relay its message. Do not promise the change is done."
+        f"\n- To CANCEL an order, call cancel_order(customer_phone, reason). If it's already cooking, the kitchen "
+        f"is asked to approve — tell the customer you're checking. Relay the tool's message; don't decide yourself."
+        f"\n- To leave FEEDBACK on a delivered order (ratings/comment), call "
+        f"submit_order_review(customer_phone, chef_rating, driver_rating, comment)."
     )
 
 
@@ -286,7 +293,7 @@ async def outbox(req: Request):
 async def reset(req: Request):
     body = await req.json()
     phone = normalize_phone(body.get("phone", ""))
-    clear_pending(phone); clear_negotiation(phone); CONVOS.pop(phone, None)
+    clear_pending(phone); clear_negotiation(phone); clear_cancellation(phone); CONVOS.pop(phone, None)
     return JSONResponse({"ok": True})
 
 

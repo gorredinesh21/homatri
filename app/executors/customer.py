@@ -291,7 +291,7 @@ VALID_TRANSITIONS: dict[str, set[str]] = {
     "PENDING_PAYMENT": {"CONFIRMED", "CANCELLED"},
     "CONFIRMED": {"BATCHED", "CANCELLED"},
     "BATCHED": {"COOKING", "CANCELLED"},
-    "COOKING": {"PACKED"},
+    "COOKING": {"PACKED", "CANCELLED"},   # CANCELLED only via chef-approved cancel_order
     "PACKED": {"PICKED_UP"},
     "PICKED_UP": {"DELIVERED"},
     "DELIVERED": set(),  # Terminal state

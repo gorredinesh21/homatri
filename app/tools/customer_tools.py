@@ -27,6 +27,7 @@ from app.executors.customer import (
     execute_add_item_to_order,
     execute_customer_order_initialization,
     execute_customer_registration_and_location,
+    execute_submit_order_review,
 )
 from app.models.chef import ChefMenuItem, ChefProfile
 from app.models.customer import (
@@ -35,7 +36,12 @@ from app.models.customer import (
     CustomerProfile,
     CustomerReview,
 )
-from app.models.system import SystemSetting
+from app.models.system import (
+    SystemDeliveryRoute,
+    SystemDeliveryStop,
+    SystemDeliveryStopOrder,
+    SystemSetting,
+)
 from app.tools.common import haversine_km, resolve_time_pool
 from app.tools.master_tools import _mint_payment_link, _process_payment_webhook
 from app.tools.pause import resume_handler, send_and_await_reply
@@ -856,3 +862,76 @@ async def confirm_payment(phone: str, reply: dict[str, Any], ctx: dict[str, Any]
             f"The kitchen is notified at cutoff — you'll get updates here. 🍽️"
         )
     return res["message"]
+
+
+# =============================================================================
+# TOOL: submit_order_review  (same-domain · WRITE)  [customer feedback]
+# =============================================================================
+class SubmitOrderReviewInput(BaseModel):
+    customer_phone: str = Field(..., description="Normalized 10-digit customer phone.")
+    chef_rating: int = Field(..., description="Rating for the kitchen, 1-5.")
+    driver_rating: int | None = Field(default=None, description="Rating for the driver, 1-5 (optional).")
+    comment: str | None = Field(default=None, description="Optional written comment.")
+
+
+async def _driver_phone_for_order(session: AsyncSession, order_id: str) -> str | None:
+    """The driver assigned to an order (via its delivery stop -> route)."""
+    so = (
+        await session.execute(
+            select(SystemDeliveryStopOrder).where(SystemDeliveryStopOrder.order_id == order_id)
+        )
+    ).scalars().first()
+    if so is None:
+        return None
+    stop = await session.get(SystemDeliveryStop, so.stop_id)
+    if stop is None:
+        return None
+    route = await session.get(SystemDeliveryRoute, stop.route_id)
+    return route.driver_phone if route is not None else None
+
+
+async def _submit_order_review(
+    session: AsyncSession, *, customer_phone: str, chef_rating: int,
+    driver_rating: int | None = None, comment: str | None = None,
+) -> dict[str, Any]:
+    """Save a review for the customer's most recent DELIVERED order.
+
+    Guards: rating ∉ 1..5 -> BAD_RATING; no delivered order -> NOT_DELIVERED;
+    already reviewed -> ALREADY_REVIEWED. Low ratings are simply stored — the admin
+    reviews them end-of-day (no live escalation yet).
+    """
+    if not (1 <= chef_rating <= 5) or (driver_rating is not None and not (1 <= driver_rating <= 5)):
+        return {"status": "BAD_RATING", "message": "Ratings must be between 1 and 5."}
+    order = (
+        await session.execute(
+            select(CustomerOrder).where(
+                CustomerOrder.customer_phone == customer_phone,
+                CustomerOrder.status == "DELIVERED",
+            ).order_by(CustomerOrder.created_at.desc())
+        )
+    ).scalars().first()
+    if order is None:
+        return {"status": "NOT_DELIVERED", "message": "You can leave a review once your order is delivered."}
+    existing = (
+        await session.execute(select(CustomerReview).where(CustomerReview.order_id == order.order_id))
+    ).scalars().first()
+    if existing is not None:
+        return {"status": "ALREADY_REVIEWED", "message": "You've already reviewed this order — thanks!"}
+
+    driver_phone = await _driver_phone_for_order(session, order.order_id)
+    await execute_submit_order_review(
+        session, order_id=order.order_id, customer_phone=customer_phone, chef_phone=order.chef_phone,
+        chef_rating=chef_rating, driver_phone=driver_phone, driver_rating=driver_rating, review_text=comment,
+    )
+    return {"status": "SAVED", "message": f"Thanks for reviewing your order from {order.kitchen_name}! ⭐"}
+
+
+@tool("submit_order_review", args_schema=SubmitOrderReviewInput)
+async def submit_order_review(customer_phone: str, chef_rating: int,
+                              driver_rating: int | None = None, comment: str | None = None) -> str:
+    """Save the customer's rating (chef + optional driver, 1-5) and comment for their delivered order."""
+    async with transaction() as session:
+        res = await _submit_order_review(
+            session, customer_phone=customer_phone, chef_rating=chef_rating,
+            driver_rating=driver_rating, comment=comment)
+        return res["message"]

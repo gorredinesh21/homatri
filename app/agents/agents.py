@@ -24,6 +24,7 @@ from app.agents.prompts import (
     DRIVER_PROMPT,
     MASTER_PROMPT,
 )
+from app.tools.cancellation import cancel_order, respond_to_cancellation
 from app.tools.chef_tools import (
     get_chef_batch,
     get_chef_profile,
@@ -39,6 +40,7 @@ from app.tools.customer_tools import (
     get_order_status,
     register_customer,
     request_payment,
+    submit_order_review,
     view_cart,
     view_chef_menu,
 )
@@ -61,6 +63,8 @@ CUSTOMER_TOOLS: tuple[BaseTool, ...] = (
     request_payment,
     get_order_status,
     request_dietary_change,
+    cancel_order,
+    submit_order_review,
 )
 CHEF_TOOLS: tuple[BaseTool, ...] = (
     get_chef_profile,
@@ -69,6 +73,7 @@ CHEF_TOOLS: tuple[BaseTool, ...] = (
     set_daily_capacity,
     mark_order_ready,
     respond_to_dietary_request,
+    respond_to_cancellation,
 )
 MASTER_TOOLS: tuple[BaseTool, ...] = (
     mint_payment_link,

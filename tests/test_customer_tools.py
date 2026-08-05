@@ -19,6 +19,7 @@ from app.tools.customer_tools import (
     _register_customer,
     _request_payment,
     _resolve_chef,
+    _submit_order_review,
     _view_cart,
     _view_chef_menu,
 )
@@ -423,6 +424,50 @@ async def test_get_order_status_shows_active_order(db_session: AsyncSession):
     assert res["status"] == "OK"
     assert res["orders"][0]["status"] == "PENDING_PAYMENT"
     assert "awaiting payment" in res["message"]
+
+
+# ---- submit_order_review ----
+
+async def _seed_delivered_order(session, cust, chef, order_id):
+    session.add(CustomerProfile(customer_phone=cust, name="C", delivery_address="X",
+                                latitude=Decimal("19.12"), longitude=Decimal("73.00"), is_registered=True))
+    session.add(ChefProfile(chef_phone=chef, kitchen_name="K", chef_name="Chef", address="G",
+                            latitude=Decimal("19.12"), longitude=Decimal("73.00"), dietary_type="VEG"))
+    session.add(CustomerOrder(order_id=order_id, customer_phone=cust, chef_phone=chef, kitchen_name="K",
+                              service_date=date(2026, 8, 4), meal_window="LUNCH", status="DELIVERED",
+                              cart_subtotal=Decimal("100"), delivery_fee=Decimal("20"), total_amount=Decimal("120")))
+    await session.flush()
+
+
+@pytest.mark.asyncio
+async def test_submit_review_saved(db_session: AsyncSession):
+    await _seed_delivered_order(db_session, "7000000050", "9876500050", "ord_rev_a")
+    res = await _submit_order_review(db_session, customer_phone="7000000050", chef_rating=5, driver_rating=4, comment="great")
+    assert res["status"] == "SAVED"
+
+
+@pytest.mark.asyncio
+async def test_submit_review_not_delivered(db_session: AsyncSession):
+    await _seed_customer_and_chef_with_dish(db_session, "7000000051", "9876500051")
+    await _create_order(db_session, customer_phone="7000000051", kitchen="9876500051",
+                        items=[{"dish_name": "Thali", "quantity": 1}], now=BEFORE_LUNCH)   # PENDING_PAYMENT
+    res = await _submit_order_review(db_session, customer_phone="7000000051", chef_rating=5)
+    assert res["status"] == "NOT_DELIVERED"
+
+
+@pytest.mark.asyncio
+async def test_submit_review_bad_rating(db_session: AsyncSession):
+    await _seed_delivered_order(db_session, "7000000052", "9876500052", "ord_rev_b")
+    res = await _submit_order_review(db_session, customer_phone="7000000052", chef_rating=7)
+    assert res["status"] == "BAD_RATING"
+
+
+@pytest.mark.asyncio
+async def test_submit_review_idempotent(db_session: AsyncSession):
+    await _seed_delivered_order(db_session, "7000000053", "9876500053", "ord_rev_c")
+    await _submit_order_review(db_session, customer_phone="7000000053", chef_rating=5)
+    again = await _submit_order_review(db_session, customer_phone="7000000053", chef_rating=4)
+    assert again["status"] == "ALREADY_REVIEWED"
 
 
 # ---- request_payment + confirm_payment (Flow 4) ----
