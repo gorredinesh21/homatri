@@ -21,9 +21,11 @@ from app.tools.driver_tools import (
     _confirm_pickup,
     _driver_queries,
     _get_driver_route,
+    _report_address_issue,
     _respond_to_driver_query,
     _update_duty_status,
 )
+from app.tools.pause import clear_pending, get_pending
 
 SD = date(2026, 8, 4)
 DRV = "9500000001"
@@ -155,4 +157,25 @@ async def test_ask_chef_status_asks_and_chef_replies(db_session: AsyncSession):
     drv_msgs = (await db_session.execute(select(SystemOutboundQueue).where(
         SystemOutboundQueue.recipient_role == "DRIVER"))).scalars().all()
     assert any("5 more minutes" in o.message_text for o in drv_msgs)
-    clear = _driver_queries.clear()
+    _driver_queries.clear()
+
+
+@pytest.mark.asyncio
+async def test_report_address_issue_asks_customer(db_session: AsyncSession):
+    clear_pending("7000000900")
+    await _seed_route(db_session, n_drops=1, order_status="PACKED")
+    await _confirm_pickup(db_session, driver_phone=DRV)
+    res = await _report_address_issue(db_session, driver_phone=DRV)   # current stop's order = ord_d1 / cust 7000000900
+    assert res["status"] == "PIN_REQUESTED"
+    note = get_pending("7000000900")                                  # customer armed for a pin
+    assert note is not None and note["await_type"] == "LOCATION_PIN"
+    assert note["resume"] == "resolve_address_issue"
+    assert any("location pin" in o.message_text for o in (await db_session.execute(
+        select(SystemOutboundQueue).where(SystemOutboundQueue.recipient_role == "CUSTOMER"))).scalars().all())
+    clear_pending("7000000900")
+
+
+@pytest.mark.asyncio
+async def test_report_address_issue_no_route(db_session: AsyncSession):
+    res = await _report_address_issue(db_session, driver_phone="9500000099")
+    assert res["status"] == "NO_ROUTE"

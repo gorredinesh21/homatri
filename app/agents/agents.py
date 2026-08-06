@@ -55,6 +55,7 @@ from app.tools.driver_tools import (
     confirm_pickup,
     get_driver_profile,
     get_driver_route,
+    report_address_issue,
     respond_to_driver_query,
     update_duty_status,
 )
@@ -92,6 +93,7 @@ DRIVER_TOOLS: tuple[BaseTool, ...] = (
     confirm_pickup,
     confirm_delivery,
     ask_chef_status,
+    report_address_issue,
 )
 MASTER_TOOLS: tuple[BaseTool, ...] = (
     mint_payment_link,

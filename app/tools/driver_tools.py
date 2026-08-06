@@ -16,6 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import SessionFactory, transaction
+from app.executors.customer import execute_customer_registration_and_location
 from app.executors.driver import execute_driver_profile_upsert, execute_driver_trip_phase_update
 from app.executors.master import execute_outbound_whatsapp_enqueue
 from app.models.customer import CustomerOrder, CustomerOrderItem, CustomerProfile
@@ -23,6 +24,7 @@ from app.models.driver import DriverProfile, DriverTripStatus
 from app.models.system import SystemDeliveryStop, SystemDeliveryStopOrder
 from app.tools.customer_tools import _fuzzy_match
 from app.tools.delegate import delegate_write
+from app.tools.pause import arm_await, resume_handler
 
 
 # ---- shared helpers --------------------------------------------------------
@@ -389,3 +391,78 @@ async def respond_to_driver_query(chef_phone: str, reply: str) -> str:
     async with transaction() as session:
         res = await _respond_to_driver_query(session, chef_phone=chef_phone, reply=reply)
         return res["message"]
+
+
+# =============================================================================
+# TOOL: report_address_issue  (cross-domain · HITL — driver <-> customer pin)
+#
+# Driver can't find the address -> ask the customer for a fresh pin (arm a
+# LOCATION_PIN await) -> on the pin, update the customer's location and push it to
+# the driver. The resume handler owns the cross-agent hand-off (the Master role);
+# messaging is inline.
+# =============================================================================
+class ReportAddressIssueInput(BaseModel):
+    driver_phone: str = Field(..., description="Normalized 10-digit driver phone.")
+    order_id: str | None = Field(default=None, description="The order in question; omit to use the current stop's order.")
+
+
+async def _report_address_issue(
+    session: AsyncSession, *, driver_phone: str, order_id: str | None = None
+) -> dict[str, Any]:
+    """Ask the customer for a fresh location pin. {status: PIN_REQUESTED|NO_ROUTE|..., message}."""
+    trip = await _active_trip(session, driver_phone)
+    if trip is None:
+        return {"status": "NO_ROUTE", "message": "You don't have a route assigned yet."}
+    stops = await _route_stops(session, trip.route_id)
+
+    target = None
+    if order_id:
+        for s in stops:
+            if order_id in await _stop_order_ids(session, s.stop_id):
+                target = await session.get(CustomerOrder, order_id)
+                break
+        if target is None:
+            return {"status": "NOT_ON_ROUTE", "message": f"Order {order_id} isn't on your route."}
+    else:
+        drop = next((s for s in stops if s.status != "COMPLETED" and s.stop_type != "PICKUP"), None)
+        ids = await _stop_order_ids(session, drop.stop_id) if drop else []
+        if not ids:
+            return {"status": "NO_STOP", "message": "You have no pending delivery stop to report."}
+        target = await session.get(CustomerOrder, ids[0])
+
+    cust = await session.get(CustomerProfile, target.customer_phone)
+    # arm the customer for a fresh pin -> resolve_address_issue on their location reply
+    arm_await(target.customer_phone, await_type="LOCATION_PIN", resume="resolve_address_issue",
+              ctx={"order_id": target.order_id, "driver_phone": driver_phone})
+    await execute_outbound_whatsapp_enqueue(
+        session, recipient_phone=target.customer_phone, recipient_role="CUSTOMER", related_order_id=target.order_id,
+        message_text=(f"📍 Your delivery driver can't find your address for order {target.order_id}. "
+                      f"Please share your current location pin so they can reach you."))
+    who = cust.name if cust else target.customer_phone
+    return {"status": "PIN_REQUESTED",
+            "message": f"I've asked {who} to share a fresh location pin — I'll send it here the moment they do."}
+
+
+@tool("report_address_issue", args_schema=ReportAddressIssueInput)
+async def report_address_issue(driver_phone: str, order_id: str | None = None) -> str:
+    """Driver can't find the address — asks the customer for a fresh location pin."""
+    async with transaction() as session:
+        res = await _report_address_issue(session, driver_phone=driver_phone, order_id=order_id)
+        return res["message"]
+
+
+@resume_handler("resolve_address_issue")
+async def resolve_address_issue(phone: str, reply: dict[str, Any], ctx: dict[str, Any]) -> str:
+    """Runs when the customer shares the fresh pin: update their location + push it to the driver."""
+    lat, lng = float(reply["latitude"]), float(reply["longitude"])
+    async with transaction() as session:
+        prof = await session.get(CustomerProfile, phone)
+        await execute_customer_registration_and_location(
+            session, customer_phone=phone, name=prof.name if prof else "Customer",
+            delivery_address=prof.delivery_address if prof else "", latitude=lat, longitude=lng, is_registered=True)
+        maps = f"https://www.google.com/maps/dir/?api=1&destination={lat},{lng}&travelmode=driving"
+        await execute_outbound_whatsapp_enqueue(
+            session, recipient_phone=ctx.get("driver_phone"), recipient_role="DRIVER",
+            related_order_id=ctx.get("order_id"),
+            message_text=f"📍 Updated location for order {ctx.get('order_id')}: {lat}, {lng}\n   🗺️ {maps}")
+    return "Thanks! I've shared your live location with the driver. 👍"

@@ -85,6 +85,8 @@ def _driver_extra(phone: str) -> str:
         f"they've delivered, call confirm_delivery(driver_phone) — if they name a specific apartment/area "
         f"(out of order) pass it as `location`, and pass any undelivered order ids as `undelivered_ids`. "
         f"If they ask whether the food is ready, call ask_chef_status(driver_phone). "
+        f"If they CAN'T FIND an address, call report_address_issue(driver_phone) — it asks the customer for a "
+        f"fresh location pin and sends it to the driver when they share. "
         f"These tools RETURN the next stop's details — just relay that to the driver. Keep replies short."
     )
 
