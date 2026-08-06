@@ -50,10 +50,12 @@ from app.tools.dietary import (
     respond_to_dietary_request,
 )
 from app.tools.driver_tools import (
+    ask_chef_status,
     confirm_delivery,
     confirm_pickup,
     get_driver_profile,
     get_driver_route,
+    respond_to_driver_query,
     update_duty_status,
 )
 from app.tools.master_tools import mint_payment_link, process_payment_webhook
@@ -81,6 +83,7 @@ CHEF_TOOLS: tuple[BaseTool, ...] = (
     mark_order_ready,
     respond_to_dietary_request,
     respond_to_cancellation,
+    respond_to_driver_query,
 )
 DRIVER_TOOLS: tuple[BaseTool, ...] = (
     get_driver_profile,
@@ -88,6 +91,7 @@ DRIVER_TOOLS: tuple[BaseTool, ...] = (
     get_driver_route,
     confirm_pickup,
     confirm_delivery,
+    ask_chef_status,
 )
 MASTER_TOOLS: tuple[BaseTool, ...] = (
     mint_payment_link,

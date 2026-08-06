@@ -39,6 +39,7 @@ from app.router import route
 from app.tools.cancellation import clear_cancellation
 from app.tools.common import resolve_time_pool
 from app.tools.dietary import clear_negotiation
+from app.tools.driver_tools import clear_driver_query
 from app.tools.master_tools import _run_cutoff_batch
 from app.tools.pause import RESUME_HANDLERS, Pause, clear_pending, get_pending
 from dev_batch import CHEFS as BATCH_CHEFS, DRIVERS as BATCH_DRIVERS, build_roster, seed_batch
@@ -83,6 +84,7 @@ def _driver_extra(phone: str) -> str:
         f"When the driver says they've picked up at the kitchen, call confirm_pickup(driver_phone). When "
         f"they've delivered, call confirm_delivery(driver_phone) — if they name a specific apartment/area "
         f"(out of order) pass it as `location`, and pass any undelivered order ids as `undelivered_ids`. "
+        f"If they ask whether the food is ready, call ask_chef_status(driver_phone). "
         f"These tools RETURN the next stop's details — just relay that to the driver. Keep replies short."
     )
 
@@ -99,6 +101,8 @@ def _chef_extra(phone: str) -> str:
         f"respond_to_dietary_request(chef_phone, decision='accept'|'reject'|'counter', counter_note=<if counter>). "
         f"If a CANCELLATION request arrives for an order you're cooking, decide with "
         f"respond_to_cancellation(chef_phone, decision='approve'|'deny'). "
+        f"If a DRIVER is waiting and asks how long, reply with respond_to_driver_query(chef_phone, reply) "
+        f"(e.g. reply='5 more minutes' or 'ready now'). "
         f"Refer to dishes by name and orders by their ord_ id from get_chef_batch. Keep replies short."
     )
 
@@ -311,7 +315,8 @@ async def outbox(req: Request):
 async def reset(req: Request):
     body = await req.json()
     phone = normalize_phone(body.get("phone", ""))
-    clear_pending(phone); clear_negotiation(phone); clear_cancellation(phone); CONVOS.pop(phone, None)
+    clear_pending(phone); clear_negotiation(phone); clear_cancellation(phone)
+    clear_driver_query(phone); CONVOS.pop(phone, None)
     return JSONResponse({"ok": True})
 
 

@@ -16,9 +16,12 @@ from app.models.system import (
     SystemOutboundQueue,
 )
 from app.tools.driver_tools import (
+    _ask_chef_status,
     _confirm_delivery,
     _confirm_pickup,
+    _driver_queries,
     _get_driver_route,
+    _respond_to_driver_query,
     _update_duty_status,
 )
 
@@ -127,3 +130,29 @@ async def test_deliver_partial_with_exception(db_session: AsyncSession):
     res = await _confirm_delivery(db_session, driver_phone=DRV, undelivered_ids=["ord_d1"])
     assert res["status"] == "PARTIAL"
     assert (await db_session.get(CustomerOrder, "ord_d1")).status == "PICKED_UP"   # not delivered
+
+
+@pytest.mark.asyncio
+async def test_ask_chef_status_ready(db_session: AsyncSession):
+    _driver_queries.clear()
+    await _seed_route(db_session, order_status="PACKED")
+    res = await _ask_chef_status(db_session, driver_phone=DRV)
+    assert res["status"] == "READY"                       # instant, no chef needed
+
+
+@pytest.mark.asyncio
+async def test_ask_chef_status_asks_and_chef_replies(db_session: AsyncSession):
+    _driver_queries.clear()
+    await _seed_route(db_session, order_status="BATCHED")   # not packed
+    res = await _ask_chef_status(db_session, driver_phone=DRV)
+    assert res["status"] == "ASKED"
+    assert _driver_queries[DRV]["status"] == "WAITING"
+    assert any("waiting" in o.message_text for o in (await db_session.execute(
+        select(SystemOutboundQueue).where(SystemOutboundQueue.recipient_role == "CHEF"))).scalars().all())
+    # chef replies -> pushed to the driver
+    r = await _respond_to_driver_query(db_session, chef_phone="9900000001", reply="5 more minutes")
+    assert r["status"] == "SENT"
+    drv_msgs = (await db_session.execute(select(SystemOutboundQueue).where(
+        SystemOutboundQueue.recipient_role == "DRIVER"))).scalars().all()
+    assert any("5 more minutes" in o.message_text for o in drv_msgs)
+    clear = _driver_queries.clear()

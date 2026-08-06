@@ -297,3 +297,95 @@ async def confirm_delivery(driver_phone: str, location: str | None = None, undel
     async with transaction() as session:
         res = await _confirm_delivery(session, driver_phone=driver_phone, location=location, undelivered_ids=ids)
         return res["message"]
+
+
+# =============================================================================
+# ask_chef_status (Driver) + respond_to_driver_query (Chef) — a 2-turn HITL:
+# "is it ready?" -> if already PACKED, answer instantly; else ask the kitchen and
+# relay the chef's free-text reply back to the driver.
+# =============================================================================
+READY_STATUSES = ("PACKED", "PICKED_UP", "DELIVERED")
+
+# In-memory driver-query store, keyed by driver_phone.
+_driver_queries: dict[str, dict[str, Any]] = {}
+
+
+def _open_query_for_chef(chef_phone: str) -> dict | None:
+    for q in _driver_queries.values():
+        if q["chef_phone"] == chef_phone and q["status"] == "WAITING":
+            return q
+    return None
+
+
+def clear_driver_query(phone: str) -> None:
+    _driver_queries.pop(phone, None)
+
+
+class AskChefStatusInput(BaseModel):
+    driver_phone: str = Field(..., description="Normalized 10-digit driver phone.")
+
+
+async def _ask_chef_status(session: AsyncSession, *, driver_phone: str) -> dict[str, Any]:
+    """Is the batch packed? Instant READY from status; else ask the chef (await their reply).
+
+    Guard: no active route -> NO_ROUTE.
+    """
+    trip = await _active_trip(session, driver_phone)
+    if trip is None:
+        return {"status": "NO_ROUTE", "message": "You don't have a route assigned yet."}
+    stops = await _route_stops(session, trip.route_id)
+    orders = []
+    for s in stops:
+        for oid in await _stop_order_ids(session, s.stop_id):
+            o = await session.get(CustomerOrder, oid)
+            if o:
+                orders.append(o)
+    if not orders:
+        return {"status": "NO_ROUTE", "message": "There are no orders on your route."}
+
+    if all(o.status in READY_STATUSES for o in orders):
+        return {"status": "READY", "message": "✅ Your order is packed and ready — head in and pick it up!"}
+
+    pending = [o.order_id for o in orders if o.status not in READY_STATUSES]
+    chef_phone = orders[0].chef_phone
+    _driver_queries[driver_phone] = {"driver_phone": driver_phone, "chef_phone": chef_phone,
+                                     "orders": pending, "status": "WAITING"}
+    await execute_outbound_whatsapp_enqueue(
+        session, recipient_phone=chef_phone, recipient_role="CHEF",
+        message_text=(f"🛵 Driver {driver_phone} is waiting at pickup for: {', '.join(pending)}. "
+                      f"How long? Reply and I'll pass it on."))
+    return {"status": "ASKED",
+            "message": "⏳ Not packed yet — I've asked the kitchen how long. Their reply will show up here."}
+
+
+@tool("ask_chef_status", args_schema=AskChefStatusInput)
+async def ask_chef_status(driver_phone: str) -> str:
+    """Ask the kitchen if the driver's order is ready; relays their reply back to the driver."""
+    async with transaction() as session:
+        res = await _ask_chef_status(session, driver_phone=driver_phone)
+        return res["message"]
+
+
+class RespondToDriverQueryInput(BaseModel):
+    chef_phone: str = Field(..., description="Normalized 10-digit chef phone.")
+    reply: str = Field(..., description="Free-text reply to the driver, e.g. '5 more minutes'.")
+
+
+async def _respond_to_driver_query(session: AsyncSession, *, chef_phone: str, reply: str) -> dict[str, Any]:
+    """Chef's free-text reply to a waiting driver; pushes it to the driver. Guard: no open query."""
+    q = _open_query_for_chef(chef_phone)
+    if q is None:
+        return {"status": "NO_QUERY", "message": "No driver is waiting on a reply from you."}
+    q["status"] = "RESOLVED"
+    await execute_outbound_whatsapp_enqueue(
+        session, recipient_phone=q["driver_phone"], recipient_role="DRIVER",
+        message_text=f"🍴 Kitchen says: {reply}")
+    return {"status": "SENT", "message": "Reply sent to the driver 👍"}
+
+
+@tool("respond_to_driver_query", args_schema=RespondToDriverQueryInput)
+async def respond_to_driver_query(chef_phone: str, reply: str) -> str:
+    """Chef: reply to a driver waiting on 'is it ready?' — the reply is relayed to them."""
+    async with transaction() as session:
+        res = await _respond_to_driver_query(session, chef_phone=chef_phone, reply=reply)
+        return res["message"]

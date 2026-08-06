@@ -28,11 +28,11 @@ def test_chef_agent_bindings():
     names = set(chef_agent.tool_map)
     assert names == {"get_chef_profile", "get_chef_batch", "toggle_dish_stock",
                      "set_daily_capacity", "mark_order_ready", "respond_to_dietary_request",
-                     "respond_to_cancellation"}
+                     "respond_to_cancellation", "respond_to_driver_query"}
 
 
 def test_driver_agent_bindings():
     names = set(driver_agent.tool_map)
-    assert names == {"get_driver_profile", "update_duty_status",
-                     "get_driver_route", "confirm_pickup", "confirm_delivery"}
+    assert names == {"get_driver_profile", "update_duty_status", "get_driver_route",
+                     "confirm_pickup", "confirm_delivery", "ask_chef_status"}
     assert "register_driver" not in names   # drivers are admin/seed-onboarded
