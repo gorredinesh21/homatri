@@ -15,6 +15,7 @@ from app.db.base import Base
 from app.db.session import SessionFactory, engine
 from app.models.chef import ChefMenuItem, ChefProfile
 from app.models.customer import CustomerProfile
+from app.models.driver import DriverProfile
 
 # Customer at Ghansoli Sector 6 centre.
 DINESH = dict(
@@ -50,6 +51,10 @@ async def main():
 
     async with SessionFactory() as s:
         s.add(CustomerProfile(**DINESH))
+        # One on-shift driver so the harness detects the DRIVER role and cutoff has someone to assign.
+        s.add(DriverProfile(driver_phone="9500000001", driver_name="Ravi Kumar", vehicle_type="BIKE",
+                            vehicle_number="MH43 AB 1234", vehicle_model="Honda Activa",
+                            is_on_shift=True, active_status=True))
         for c in CHEFS:
             s.add(ChefProfile(
                 chef_phone=c["phone"], kitchen_name=c["kitchen"], chef_name=c["chef"],

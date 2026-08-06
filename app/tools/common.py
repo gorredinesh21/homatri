@@ -11,7 +11,7 @@ from app.core.geo import haversine_km  # re-exported for existing tool imports
 LUNCH_CUTOFF = time(11, 30)
 DINNER_CUTOFF = time(18, 30)
 
-__all__ = ["haversine_km", "resolve_time_pool", "LUNCH_CUTOFF", "DINNER_CUTOFF"]
+__all__ = ["haversine_km", "resolve_time_pool", "describe_meal_window", "LUNCH_CUTOFF", "DINNER_CUTOFF"]
 
 
 def resolve_time_pool(now: datetime | None = None) -> dict[str, Any]:
@@ -41,3 +41,20 @@ def resolve_time_pool(now: datetime | None = None) -> dict[str, Any]:
         "service_date": now.date() + timedelta(days=1),
         "message": "Today's orders are closed — ordering for tomorrow's lunch.",
     }
+
+
+def describe_meal_window(now: datetime | None = None) -> str:
+    """Human phrase for the current orderable window, WITH day context.
+
+    e.g. "today's lunch", "tonight's dinner", or
+    "tomorrow's lunch (today's dinner ordering has closed)". Used so customer-facing
+    messages don't just say a bare "lunch" at 7 PM.
+    """
+    now = now or datetime.now()
+    pool = resolve_time_pool(now)
+    win = pool["window"].lower()
+    if pool["service_date"] > now.date():
+        return f"tomorrow's {win} (today's dinner ordering has closed)"
+    if pool["window"] == "DINNER":
+        return "tonight's dinner"
+    return f"today's {win}"

@@ -43,7 +43,7 @@ from app.models.system import (
     SystemDeliveryStopOrder,
     SystemSetting,
 )
-from app.tools.common import haversine_km, resolve_time_pool
+from app.tools.common import describe_meal_window, haversine_km, resolve_time_pool
 from app.tools.master_tools import LEG_MINUTES, _mint_payment_link, _process_payment_webhook
 from app.tools.pause import resume_handler, send_and_await_reply
 
@@ -135,6 +135,7 @@ async def _find_nearby_kitchens(
     single end guard NONE_OPEN. Returns {status, window, kitchens, message}.
     """
     window = resolve_time_pool(now)["window"]  # LUNCH or DINNER
+    window_phrase = describe_meal_window(now)   # e.g. "tomorrow's lunch (today's dinner ordering has closed)"
 
     # active chefs with at least one available dish for this meal window
     serving = select(ChefMenuItem.chef_phone).where(
@@ -154,7 +155,7 @@ async def _find_nearby_kitchens(
             "status": "NONE_OPEN",
             "window": window,
             "kitchens": [],
-            "message": f"No kitchens are serving {window.lower()} right now.",
+            "message": f"No kitchens are serving {window_phrase} right now.",
         }
 
     # average chef rating (missing for new chefs)
@@ -186,7 +187,7 @@ async def _find_nearby_kitchens(
         rating = f"⭐{k['rating']}" if k["rating"] is not None else "new"
         diet = f" [{k['dietary_type']}]" if k["dietary_type"] else ""
         lines.append(f"{i}. {k['kitchen_name']} ({k['chef_name']}) — {k['distance_km']} km, {rating}{diet}")
-    msg = f"Nearest kitchens serving {window.lower()}:\n" + "\n".join(lines)
+    msg = f"Nearest kitchens serving {window_phrase}:\n" + "\n".join(lines)
     return {"status": "OK", "window": window, "kitchens": kitchens, "message": msg}
 
 
@@ -395,6 +396,8 @@ async def _view_chef_menu(
 
     raw = window or resolve_time_pool(now)["window"]
     meal_type = "DINNER" if "DINNER" in raw.upper() else "LUNCH"
+    # Day-context phrase only when the window came from the clock (not an explicit override).
+    window_phrase = meal_type.lower() if window else describe_meal_window(now)
 
     rows = (
         await session.execute(
@@ -410,7 +413,7 @@ async def _view_chef_menu(
         return {
             "status": "NOT_SERVING",
             "window": meal_type,
-            "message": f"{chef.kitchen_name} has nothing available for {meal_type.lower()} right now.",
+            "message": f"{chef.kitchen_name} has nothing available for {window_phrase} right now.",
         }
 
     dishes = [
@@ -422,7 +425,7 @@ async def _view_chef_menu(
         f"{i}. {d['name']} — ₹{d['price']:.0f} ({d['dietary']}, {d['spice']} spice)"
         for i, d in enumerate(dishes, 1)
     ]
-    msg = f"Menu at {chef.kitchen_name} ({chef.chef_name}) — {meal_type.lower()}:\n" + "\n".join(lines)
+    msg = f"Menu at {chef.kitchen_name} ({chef.chef_name}) — {window_phrase}:\n" + "\n".join(lines)
     return {"status": "OK", "kitchen_name": chef.kitchen_name, "window": meal_type, "dishes": dishes, "message": msg}
 
 

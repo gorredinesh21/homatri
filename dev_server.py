@@ -16,6 +16,15 @@ Run:  python dev_seed.py
 import os
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./poc.db")
 
+import sys
+# Windows consoles default to cp1252, which can't encode ₹/emoji in our debug prints —
+# force UTF-8 so a logging print never crashes a request (errors='replace' as a backstop).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 import asyncio
 import re
 
@@ -26,15 +35,17 @@ from fastapi.staticfiles import StaticFiles
 
 import app.tools.customer_tools  # noqa: F401  (registers the finish_registration + confirm_payment resume handlers)
 import app.tools.topup  # noqa: F401  (registers the resolve_topup_counter + confirm_topup_payment resume handlers)
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from app.agents.agents import chef_agent, customer_agent, driver_agent
 from app.agents.prompts import CHEF_PROMPT, CUSTOMER_PROMPT, DRIVER_PROMPT
 from app.api.whatsapp import normalize_phone, parse_webhook, verify_challenge
 from app.db.session import SessionFactory, transaction
+from app.executors.master import execute_conversation_message_insert
 from app.models.chef import ChefProfile
 from app.models.customer import CustomerOrder
 from app.models.driver import DriverProfile
+from app.models.shared import ConversationMessage
 from app.models.system import SystemHitlSession, SystemOutboundQueue
 from app.router import route
 from app.tools.cancellation import clear_cancellation
@@ -171,41 +182,135 @@ def _clean(t: str) -> str:
     return t.replace("<think>", "").replace("</think>", "").strip()
 
 
-def _window_messages(hist: list, n: int = 4) -> list:
-    """Context window: last `n` USER + last `n` ASSISTANT turns (chronological).
+def _window_messages(hist: list, n: int = 6) -> list:
+    """Context window from the FULL chat log: last `n` human-side + last `n` assistant turns.
 
-    Returned as valid alternating Bedrock messages — starts with a user turn,
-    consecutive same-role turns merged. (In-memory stand-in for the real
-    DB-backed Context Assembler over conversation_messages.)
+    A hist entry's role is one of: 'user' (what the person typed), 'assistant' (the agent's
+    own reply), or 'received' (a message PUSHED to this person — a cross-domain notification
+    from the outbound queue, folded in by `_fold_received`). 'user' and 'received' are both the
+    human/incoming side, so a bare "yes/accept" sits right under the request it answers.
+
+    Returned as valid alternating Bedrock messages — first turn is 'user', consecutive
+    same-role turns merged. (In-memory stand-in for the real DB-backed Context Assembler.)
     """
-    user_idx = [i for i, h in enumerate(hist) if h["role"] == "user"][-n:]
-    bot_idx = [i for i, h in enumerate(hist) if h["role"] == "assistant"][-n:]
-    windowed = [hist[i] for i in sorted(set(user_idx) | set(bot_idx))]
-    while windowed and windowed[0]["role"] != "user":
-        windowed.pop(0)
+    assistant_idx = [i for i, h in enumerate(hist) if h["role"] == "assistant"][-n:]
+    human_idx = [i for i, h in enumerate(hist) if h["role"] in ("user", "received")][-n:]
+    windowed = [hist[i] for i in sorted(set(assistant_idx) | set(human_idx))]
     msgs: list = []
     for h in windowed:
-        if msgs and msgs[-1]["role"] == h["role"]:
-            msgs[-1]["content"][0]["text"] += "\n" + h["text"]
+        role = "assistant" if h["role"] == "assistant" else "user"
+        text = h["text"] if h["role"] != "received" else f"📨 (message you received): {h['text']}"
+        if msgs and msgs[-1]["role"] == role:
+            msgs[-1]["content"][0]["text"] += "\n" + text
         else:
-            msgs.append({"role": h["role"], "content": [{"text": h["text"]}]})
+            msgs.append({"role": role, "content": [{"text": text}]})
+    if msgs and msgs[0]["role"] != "user":       # Bedrock requires the first turn to be 'user'
+        msgs.insert(0, {"role": "user", "content": [{"text": "(continuing our chat)"}]})
+    return msgs
+
+
+# Shared rule so every agent treats pushed notifications as answerable context.
+CONTEXT_RULE = (
+    "\n\nCONTEXT: The messages you receive are the recent chat — prior turns plus the current one. "
+    "A line starting with '📨 (message you received)' is an incoming notification or request that was "
+    "PUSHED to this user (e.g. a dietary / cancellation / add-on request, or a driver's question). When "
+    "the user then replies with a short answer like 'yes', 'accept', 'reject', 'approve', 'deny', 'no', or "
+    "'ok', they are answering that most recent 📨 request — call the matching responder tool (it locates the "
+    "pending request by phone). Do NOT ask them to clarify what they're responding to when a recent 📨 "
+    "request already makes it clear."
+)
+
+# Which outbound-queue messages have already been folded into a phone's in-memory log
+# (by message_id, so it survives a DB reseed that mints fresh ids).
+_folded_ids: dict[str, set] = {}
+
+
+async def _fold_received(phone: str, hist: list) -> None:
+    """Append any not-yet-seen pushed messages (system_outbound_queue) to this phone's log as
+    'received' turns, in creation order — so the recipient's context includes what was pushed to
+    them. Called right BEFORE the new inbound message so a reply lands under the request it answers.
+    """
+    async with SessionFactory() as session:
+        rows = (
+            await session.execute(
+                select(SystemOutboundQueue).where(SystemOutboundQueue.recipient_phone == phone)
+                .order_by(SystemOutboundQueue.created_at, SystemOutboundQueue.message_id)
+            )
+        ).scalars().all()
+    seen = _folded_ids.setdefault(phone, set())
+    for r in rows:
+        if r.message_id not in seen:
+            hist.append({"role": "received", "text": r.message_text})
+            seen.add(r.message_id)
+
+
+async def _forget_received(phone: str) -> None:
+    """Clean slate for a phone: mark every current pushed message as already-seen so a /reset
+    doesn't resurrect old notifications into the fresh conversation."""
+    async with SessionFactory() as session:
+        ids = (
+            await session.execute(
+                select(SystemOutboundQueue.message_id).where(SystemOutboundQueue.recipient_phone == phone)
+            )
+        ).scalars().all()
+    _folded_ids[phone] = set(ids)
+
+
+async def _log_message(phone: str, *, actor_role: str, direction: str, source: str, text: str,
+                       message_type: str = "TEXT", related_order_id: str | None = None) -> None:
+    """Append one row to the unified chat log (conversation_messages)."""
+    async with transaction() as session:
+        await execute_conversation_message_insert(
+            session, phone=phone, actor_role=actor_role, direction=direction, source=source,
+            message_text=text, message_type=message_type, related_order_id=related_order_id)
+
+
+async def _assemble_context(phone: str, n: int = 6) -> list:
+    """Build the LLM context from conversation_messages: the last `n` INBOUND (what the user
+    sent) + last `n` OUTBOUND (what the user received — agent replies AND pushes), in order.
+
+    Mapped to Bedrock turns: INBOUND -> user; OUTBOUND+AGENT -> assistant; OUTBOUND+SYSTEM
+    (a push) -> user, marked '📨 (message you received)' so a bare 'yes/accept' has its referent.
+    """
+    async with SessionFactory() as session:
+        rows = (
+            await session.execute(
+                select(ConversationMessage).where(ConversationMessage.phone == phone)
+                .order_by(ConversationMessage.created_at, ConversationMessage.message_id)
+            )
+        ).scalars().all()
+    idx_in = [i for i, r in enumerate(rows) if r.direction == "INBOUND"][-n:]
+    idx_out = [i for i, r in enumerate(rows) if r.direction == "OUTBOUND"][-n:]
+    keep = sorted(set(idx_in) | set(idx_out))
+    msgs: list = []
+    for i in keep:
+        r = rows[i]
+        if r.direction == "INBOUND":
+            role, text = "user", (r.message_text or "")
+        elif r.source == "SYSTEM":
+            role, text = "user", f"📨 (message you received): {r.message_text or ''}"
+        else:                                   # OUTBOUND agent reply
+            role, text = "assistant", (r.message_text or "")
+        if msgs and msgs[-1]["role"] == role:
+            msgs[-1]["content"][0]["text"] += "\n" + text
+        else:
+            msgs.append({"role": role, "content": [{"text": text}]})
+    if msgs and msgs[0]["role"] != "user":      # Bedrock requires the first turn to be 'user'
+        msgs.insert(0, {"role": "user", "content": [{"text": "(continuing our chat)"}]})
     return msgs
 
 
 async def run_agent(phone: str, user_text: str) -> dict:
-    """The (harness) agent runtime: Kimi K2 + the sender's role-appropriate tools + text-only history."""
-    hist = CONVOS.setdefault(phone, [])
-    hist.append({"role": "user", "text": user_text})
-
+    """The (harness) agent runtime: Kimi K2 + the sender's role-appropriate tools + DB-backed history."""
     role = await _role_for(phone)
     if role == "CHEF":
-        tools, system = CHEF_TOOLS, [{"text": CHEF_PROMPT + _chef_extra(phone)}]
+        tools, system = CHEF_TOOLS, [{"text": CHEF_PROMPT + _chef_extra(phone) + CONTEXT_RULE}]
     elif role == "DRIVER":
-        tools, system = DRIVER_TOOLS, [{"text": DRIVER_PROMPT + _driver_extra(phone)}]
+        tools, system = DRIVER_TOOLS, [{"text": DRIVER_PROMPT + _driver_extra(phone) + CONTEXT_RULE}]
     else:
-        tools, system = CUSTOMER_TOOLS, [{"text": CUSTOMER_PROMPT + _customer_extra(phone)}]
+        tools, system = CUSTOMER_TOOLS, [{"text": CUSTOMER_PROMPT + _customer_extra(phone) + CONTEXT_RULE}]
 
-    messages = _window_messages(hist, n=4)   # last 4 user + last 4 agent turns
+    messages = await _assemble_context(phone)   # last n sent + last n received, from conversation_messages
     tc = _toolconfig(tools)
     for _ in range(6):
         r = await asyncio.to_thread(_br.converse, modelId=KIMI, system=system, messages=messages,
@@ -221,7 +326,6 @@ async def run_agent(phone: str, user_text: str) -> dict:
                         res = await tools[tu["name"]].ainvoke(tu["input"])
                     except Pause as p:
                         print(f"[{phone}]   -> PAUSE({p.await_type}): {p.message[:80]}", flush=True)
-                        hist.append({"role": "assistant", "text": p.message})
                         return {"reply": p.message,
                                 "await_location": p.await_type == "LOCATION_PIN",
                                 "await_payment": p.await_type == "PAYMENT_CONFIRM"}
@@ -230,7 +334,6 @@ async def run_agent(phone: str, user_text: str) -> dict:
             messages.append({"role": "user", "content": results})
             continue
         final = _clean("".join(b.get("text", "") for b in out["content"] if "text" in b))
-        hist.append({"role": "assistant", "text": final})
         note = get_pending(phone)
         at = note["await_type"] if note else None
         return {"reply": final,
@@ -260,13 +363,17 @@ async def webhook(req: Request):
     msg = parse_webhook(await req.json())
     if msg is None:
         return JSONResponse({"status": "ignored"})   # status callback etc.
+    phone = msg["phone"]
+    role = await _role_for(phone)
+    # BOUNDARY 1 — inbound: log what the user sent.
+    intext = msg.get("text") or f"(shared their location: {msg.get('location')})"
+    await _log_message(phone, actor_role=role, direction="INBOUND", source="WHATSAPP", text=intext,
+                       message_type="LOCATION" if msg.get("type") == "location" else "TEXT")
     result = await route(msg, run_agent)
-    # A resume (e.g. location pin -> finish_registration -> kitchen list) bypasses
-    # run_agent, so log the exchange here or the next LLM turn won't see it.
-    if result.get("resumed"):
-        hist = CONVOS.setdefault(msg["phone"], [])
-        hist.append({"role": "user", "text": msg.get("text") or "(shared their location pin)"})
-        hist.append({"role": "assistant", "text": result.get("reply", "")})
+    # BOUNDARY 2 — outbound: log the agent's reply (covers normal, paused, and resumed replies).
+    reply = result.get("reply")
+    if reply:
+        await _log_message(phone, actor_role=role, direction="OUTBOUND", source="AGENT", text=reply)
     return JSONResponse(result)
 
 
@@ -282,7 +389,8 @@ async def pay(req: Request):
     handler = RESUME_HANDLERS[note["resume"]]
     reply = await handler(phone, {"transaction_id": f"txn_mock_{phone}"}, note["ctx"])
     clear_pending(phone)
-    CONVOS.setdefault(phone, []).append({"role": "assistant", "text": reply})
+    # Outbound: the payment-confirmation message the customer receives.
+    await _log_message(phone, actor_role=await _role_for(phone), direction="OUTBOUND", source="AGENT", text=reply)
     return JSONResponse({"reply": reply, "await_payment": False})
 
 
@@ -365,6 +473,9 @@ async def reset(req: Request):
     phone = normalize_phone(body.get("phone", ""))
     clear_pending(phone); clear_negotiation(phone); clear_cancellation(phone)
     clear_driver_query(phone); clear_topup(phone); CONVOS.pop(phone, None)
+    await _forget_received(phone)   # don't resurrect old pushes into the fresh chat
+    async with transaction() as session:   # clear this phone's chat log so the widget starts fresh
+        await session.execute(delete(ConversationMessage).where(ConversationMessage.phone == phone))
     return JSONResponse({"ok": True})
 
 
@@ -391,6 +502,7 @@ async def batch_reset() -> JSONResponse:
     """Wipe + reseed 10 chefs + 10 drivers (no customers). Clears in-memory state too."""
     await seed_batch()
     CONVOS.clear()
+    _folded_ids.clear()   # DB was wiped — drop all fold high-water marks
     return JSONResponse({"ok": True})
 
 
@@ -497,6 +609,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
  };
  ['7416767453','7000000000','9111111111'].forEach(p=>createWidget(p,'customer'));
  ['9876543210','9876543211','9876543212','9876543213'].forEach(p=>createWidget(p,'chef'));  // the 4 seeded chefs
+ ['9500000001'].forEach(p=>createWidget(p,'driver'));  // the seeded driver (Ravi Kumar)
  document.getElementById('add').onclick=()=>{const el=document.getElementById('newphone');const v=el.value.trim();if(v){createWidget(v,'customer');el.value='';}};
  document.getElementById('addinbox').onclick=()=>{const el=document.getElementById('newinbox');const v=el.value.trim();if(v){createWidget(v,'chef');el.value='';}};
  document.getElementById('adddriver').onclick=()=>{const el=document.getElementById('newdriver');const v=el.value.trim();if(v){createWidget(v,'driver');el.value='';}};

@@ -303,6 +303,12 @@ async def execute_outbound_whatsapp_enqueue(
     )
     session.add(outbound)
     await session.flush()
+    # Mirror into the unified chat log so the recipient's context includes what was pushed to them.
+    await execute_conversation_message_insert(
+        session, phone=recipient_phone, actor_role=recipient_role,
+        direction="OUTBOUND", source="SYSTEM", message_text=message_text,
+        message_type=message_type, related_order_id=related_order_id,
+    )
     return outbound
 
 
