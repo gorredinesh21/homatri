@@ -27,12 +27,13 @@ from fastapi.staticfiles import StaticFiles
 import app.tools.customer_tools  # noqa: F401  (registers the finish_registration + confirm_payment resume handlers)
 from sqlalchemy import select
 
-from app.agents.agents import chef_agent, customer_agent
-from app.agents.prompts import CHEF_PROMPT, CUSTOMER_PROMPT
+from app.agents.agents import chef_agent, customer_agent, driver_agent
+from app.agents.prompts import CHEF_PROMPT, CUSTOMER_PROMPT, DRIVER_PROMPT
 from app.api.whatsapp import normalize_phone, parse_webhook, verify_challenge
 from app.db.session import SessionFactory, transaction
 from app.models.chef import ChefProfile
 from app.models.customer import CustomerOrder
+from app.models.driver import DriverProfile
 from app.models.system import SystemOutboundQueue
 from app.router import route
 from app.tools.cancellation import clear_cancellation
@@ -49,6 +50,7 @@ _br = boto3.Session(profile_name="homatri-bedrock").client("bedrock-runtime", re
 # Each agent's bound tools ARE its harness toolset (single source of truth).
 CUSTOMER_TOOLS = customer_agent.tool_map
 CHEF_TOOLS = chef_agent.tool_map
+DRIVER_TOOLS = driver_agent.tool_map
 CONVOS: dict[str, list] = {}  # phone -> [{role, text}]  (text-only history per phone)
 
 
@@ -64,11 +66,25 @@ def _toolconfig(tools: dict) -> dict:
 
 
 async def _role_for(phone: str) -> str:
-    """A seeded chef phone -> CHEF; everyone else -> CUSTOMER (drivers: later)."""
+    """Seeded chef phone -> CHEF, seeded driver phone -> DRIVER, else CUSTOMER."""
     async with SessionFactory() as session:
         if await session.get(ChefProfile, phone) is not None:
             return "CHEF"
+        if await session.get(DriverProfile, phone) is not None:
+            return "DRIVER"
     return "CUSTOMER"
+
+
+def _driver_extra(phone: str) -> str:
+    return (
+        f"\n\nThe current driver's phone number is {phone}. Always pass this exact phone to any tool "
+        f"needing driver_phone. On an inbound message call get_driver_profile. To go on/off shift use "
+        f"update_duty_status. To see the route call get_driver_route — it shows ONLY the next stop. "
+        f"When the driver says they've picked up at the kitchen, call confirm_pickup(driver_phone). When "
+        f"they've delivered, call confirm_delivery(driver_phone) — if they name a specific apartment/area "
+        f"(out of order) pass it as `location`, and pass any undelivered order ids as `undelivered_ids`. "
+        f"These tools RETURN the next stop's details — just relay that to the driver. Keep replies short."
+    )
 
 
 def _chef_extra(phone: str) -> str:
@@ -163,6 +179,8 @@ async def run_agent(phone: str, user_text: str) -> dict:
     role = await _role_for(phone)
     if role == "CHEF":
         tools, system = CHEF_TOOLS, [{"text": CHEF_PROMPT + _chef_extra(phone)}]
+    elif role == "DRIVER":
+        tools, system = DRIVER_TOOLS, [{"text": DRIVER_PROMPT + _driver_extra(phone)}]
     else:
         tools, system = CUSTOMER_TOOLS, [{"text": CUSTOMER_PROMPT + _customer_extra(phone)}]
 
@@ -355,7 +373,8 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
  <div id="bar"><b>Homaatri</b><span>multi-user tester</span>
    <button id="cutoff" title="run the meal-window cutoff now" style="background:#e8a020">⏰ Run cutoff</button>
    <input id="newphone" placeholder="new customer phone…"><button id="add">+ Add customer</button>
-   <input id="newinbox" placeholder="chef phone…"><button id="addinbox">+ Add chef</button></div>
+   <input id="newinbox" placeholder="chef phone…"><button id="addinbox">+ Add chef</button>
+   <input id="newdriver" placeholder="driver phone…"><button id="adddriver">+ Add driver</button></div>
  <div id="board"></div>
 <script>
  const board=document.getElementById('board');
@@ -363,12 +382,15 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
  function linkify(s){return esc(s).replace(/(https?:\\/\\/[^\\s<]+)/g,'<a href="$1" target="_blank" rel="noopener">$1</a>');}
  function createWidget(phone, role){
    role = role || 'customer';
-   const chef = role === 'chef';
+   const staff = (role === 'chef' || role === 'driver');
+   const icon = role==='chef'?'🍳':(role==='driver'?'🛵':'📱');
+   const tag = role==='chef'?' · chef':(role==='driver'?' · driver':'');
    const w=document.createElement('div'); w.className='widget';
-   const hint = chef ? 'Chef '+phone+'. Try "show my batch", "mark order ord_… ready", "paneer is out of stock".'
-                     : 'User '+phone+'. Try "hi" (to register) or "get me nearby kitchens".';
-   const hide = chef ? ' style="display:none"' : '';
-   w.innerHTML=`<div class="wh"><span class="ph">${chef?'🍳':'📱'} ${phone}${chef?' · chef':''}</span>
+   const hint = role==='chef' ? 'Chef '+phone+'. Try "show my batch", "mark order ord_… ready", "paneer is out of stock".'
+              : role==='driver' ? 'Driver '+phone+'. Try "show my route", "picked up", "delivered".'
+              : 'User '+phone+'. Try "hi" (to register) or "get me nearby kitchens".';
+   const hide = staff ? ' style="display:none"' : '';
+   w.innerHTML=`<div class="wh"><span class="ph">${icon} ${phone}${tag}</span>
        <button class="rst">reset</button><button class="cls">✕</button></div>
      <div class="log"><div class="msg sys">${hint}</div></div>
      <form class="f"><button type="button" class="loc" title="share location"${hide}>📍</button>
@@ -406,7 +428,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
      log.innerHTML='';add('sys','reset');loc.classList.remove('hot');pay.style.display='none';};
    w.querySelector('.cls').onclick=()=>{if(timer)clearInterval(timer);w.remove();};
    // All widgets surface pushed messages: chefs get cook checklists / dietary requests;
-   // customers get async dietary answers (chef's accept/reject/counter).
+   // customers get async dietary answers; drivers get route dispatches / ready pings.
    {let seen=0;
      async function pollOutbox(){try{const r=await fetch('/outbox?phone='+encodeURIComponent(phone));const j=await r.json();
        const msgs=j.messages||[];for(let i=seen;i<msgs.length;i++){add('bot','📨 '+msgs[i].text);}seen=msgs.length;}catch(e){}}
@@ -424,6 +446,7 @@ PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri — m
  ['9876543210','9876543211','9876543212','9876543213'].forEach(p=>createWidget(p,'chef'));  // the 4 seeded chefs
  document.getElementById('add').onclick=()=>{const el=document.getElementById('newphone');const v=el.value.trim();if(v){createWidget(v,'customer');el.value='';}};
  document.getElementById('addinbox').onclick=()=>{const el=document.getElementById('newinbox');const v=el.value.trim();if(v){createWidget(v,'chef');el.value='';}};
+ document.getElementById('adddriver').onclick=()=>{const el=document.getElementById('newdriver');const v=el.value.trim();if(v){createWidget(v,'driver');el.value='';}};
 </script></body></html>"""
 
 

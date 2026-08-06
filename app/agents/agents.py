@@ -49,6 +49,14 @@ from app.tools.dietary import (
     request_dietary_change,
     respond_to_dietary_request,
 )
+from app.tools.driver_tools import (
+    confirm_delivery,
+    confirm_pickup,
+    get_driver_profile,
+    get_driver_route,
+    register_driver,
+    update_duty_status,
+)
 from app.tools.master_tools import mint_payment_link, process_payment_webhook
 
 # Per-agent tool subsets (each agent owns only its own tools).
@@ -74,6 +82,14 @@ CHEF_TOOLS: tuple[BaseTool, ...] = (
     mark_order_ready,
     respond_to_dietary_request,
     respond_to_cancellation,
+)
+DRIVER_TOOLS: tuple[BaseTool, ...] = (
+    get_driver_profile,
+    register_driver,
+    update_duty_status,
+    get_driver_route,
+    confirm_pickup,
+    confirm_delivery,
 )
 MASTER_TOOLS: tuple[BaseTool, ...] = (
     mint_payment_link,
@@ -106,7 +122,7 @@ class Agent:
 # The four agents, with their tools bound.
 customer_agent = Agent("CUSTOMER", CUSTOMER_PROMPT, CUSTOMER_TOOLS)
 chef_agent = Agent("CHEF", CHEF_PROMPT, CHEF_TOOLS)
-driver_agent = Agent("DRIVER", DRIVER_PROMPT)
+driver_agent = Agent("DRIVER", DRIVER_PROMPT, DRIVER_TOOLS)
 master_agent = Agent("MASTER", MASTER_PROMPT, MASTER_TOOLS)
 
 # Lookup by role (used by the router).

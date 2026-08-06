@@ -31,5 +31,7 @@ def test_chef_agent_bindings():
                      "respond_to_cancellation"}
 
 
-def test_driver_has_no_tools_yet():
-    assert driver_agent.tool_map == {}
+def test_driver_agent_bindings():
+    names = set(driver_agent.tool_map)
+    assert names == {"get_driver_profile", "register_driver", "update_duty_status",
+                     "get_driver_route", "confirm_pickup", "confirm_delivery"}
