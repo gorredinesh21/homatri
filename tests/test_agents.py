@@ -11,7 +11,7 @@ from app.agents.agents import (
 def test_customer_agent_bindings():
     names = set(customer_agent.tool_map)
     for t in ("request_payment", "create_order", "get_order_status", "request_dietary_change",
-              "cancel_order", "submit_order_review"):
+              "request_order_topup", "cancel_order", "submit_order_review"):
         assert t in names
     # customer must NOT own the gateway tools or the chef-side responders
     assert "mint_payment_link" not in names
@@ -21,8 +21,9 @@ def test_customer_agent_bindings():
 
 def test_master_agent_bindings():
     names = set(master_agent.tool_map)
-    assert names == {"mint_payment_link", "process_payment_webhook", "relay_dietary_request",
-                     "escalate_to_admin", "get_kitchen_availability_summary", "get_order_pipeline_summary"}
+    assert names == {"mint_payment_link", "mint_topup_payment_link", "process_payment_webhook",
+                     "relay_dietary_request", "relay_topup_request", "escalate_to_admin",
+                     "get_kitchen_availability_summary", "get_order_pipeline_summary"}
 
 
 def test_escalate_bound_to_every_agent():
@@ -34,7 +35,8 @@ def test_chef_agent_bindings():
     names = set(chef_agent.tool_map)
     assert names == {"get_chef_profile", "get_chef_batch", "toggle_dish_stock",
                      "set_daily_capacity", "mark_order_ready", "respond_to_dietary_request",
-                     "respond_to_cancellation", "respond_to_driver_query", "escalate_to_admin"}
+                     "respond_to_cancellation", "respond_to_driver_query", "respond_to_topup_request",
+                     "escalate_to_admin"}
 
 
 def test_driver_agent_bindings():

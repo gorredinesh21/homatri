@@ -25,6 +25,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 
 import app.tools.customer_tools  # noqa: F401  (registers the finish_registration + confirm_payment resume handlers)
+import app.tools.topup  # noqa: F401  (registers the resolve_topup_counter + confirm_topup_payment resume handlers)
 from sqlalchemy import select
 
 from app.agents.agents import chef_agent, customer_agent, driver_agent
@@ -40,6 +41,7 @@ from app.tools.cancellation import clear_cancellation
 from app.tools.common import resolve_time_pool
 from app.tools.dietary import clear_negotiation
 from app.tools.driver_tools import clear_driver_query
+from app.tools.topup import clear_topup
 from app.tools.master_tools import _run_cutoff_batch
 from app.tools.pause import RESUME_HANDLERS, Pause, clear_pending, get_pending
 from dev_batch import CHEFS as BATCH_CHEFS, DRIVERS as BATCH_DRIVERS, build_roster, seed_batch
@@ -104,6 +106,10 @@ def _chef_extra(phone: str) -> str:
         f"respond_to_dietary_request(chef_phone, decision='accept'|'reject'|'counter', counter_note=<if counter>). "
         f"If a CANCELLATION request arrives for an order you're cooking, decide with "
         f"respond_to_cancellation(chef_phone, decision='approve'|'deny'). "
+        f"If an ADD-ON request arrives (customer wants to ADD extra dishes to a paid order), decide with "
+        f"respond_to_topup_request(chef_phone, decision='accept'|'reject'|'counter'). If you can't do the full "
+        f"quantity, use decision='counter' with counter_note=<your message to the customer, e.g. 'only 1 paneer "
+        f"left'> AND counter_items=[{{'dish_name': <name>, 'quantity': N}}] (the amount you CAN add). "
         f"If a DRIVER is waiting and asks how long, reply with respond_to_driver_query(chef_phone, reply) "
         f"(e.g. reply='5 more minutes' or 'ready now'). "
         f"LAST RESORT if stuck: escalate_to_admin(source_role='CHEF', escalation_type='STUCK', summary=..., order_id=...). "
@@ -146,6 +152,11 @@ def _customer_extra(phone: str) -> str:
         f"'no onion', 'extra spicy'), you MUST call request_dietary_change(customer_phone, note) — that tool is "
         f"the ONLY way to reach the kitchen. NEVER say you've sent or asked the kitchen unless you ACTUALLY "
         f"called this tool this turn. After it returns, relay its message. Do not promise the change is done."
+        f"\n- If the customer wants to ADD EXTRA DISHES to an order they ALREADY PLACED and PAID for ('add 2 more "
+        f"paneer', 'can I also get a lassi'), call request_order_topup(customer_phone, items=[{{'dish_name': "
+        f"<name>, 'quantity': N}}]). The kitchen must approve and the customer pays the extra amount before the "
+        f"items are added — relay the tool's message; NEVER say the items were added yourself. (This is only for a "
+        f"PAID order; for a cart that hasn't been paid yet, use add_item_to_order instead.)"
         f"\n- To CANCEL an order, call cancel_order(customer_phone, reason). If it's already cooking, the kitchen "
         f"is asked to approve — tell the customer you're checking. Relay the tool's message; don't decide yourself."
         f"\n- To leave FEEDBACK on a delivered order (ratings/comment), call "
@@ -353,7 +364,7 @@ async def reset(req: Request):
     body = await req.json()
     phone = normalize_phone(body.get("phone", ""))
     clear_pending(phone); clear_negotiation(phone); clear_cancellation(phone)
-    clear_driver_query(phone); CONVOS.pop(phone, None)
+    clear_driver_query(phone); clear_topup(phone); CONVOS.pop(phone, None)
     return JSONResponse({"ok": True})
 
 

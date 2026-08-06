@@ -209,6 +209,59 @@ async def mint_payment_link(order_id: str) -> str:
 
 
 # =============================================================================
+# TOOL: mint_topup_payment_link  (Master · post-payment add-on delta)
+#
+# Mints a link + a PENDING **TOPUP** payment for a fixed delta amount (extra items
+# on an already-paid order). Unlike mint_payment_link it does NOT require the order
+# to be PENDING_PAYMENT and does NOT touch the order's status — the order stays
+# CONFIRMED/BATCHED/COOKING; only after this delta clears do the items get appended.
+# =============================================================================
+class MintTopupPaymentLinkInput(BaseModel):
+    order_id: str = Field(..., description="The already-paid order to add items to, e.g. 'ord_...'.")
+    amount: float = Field(..., description="The delta to charge for the extra items (rupees).")
+
+
+async def _mint_topup_payment_link(
+    session: AsyncSession, *, order_id: str, amount: Decimal, description: str | None = None
+) -> dict[str, Any]:
+    """Mint a gateway link + a PENDING TOPUP payment for a delta amount. {status, payment_id?, link?, ...}.
+
+    Guards: order not found -> NOT_FOUND; amount <= 0 -> EMPTY.
+    """
+    order = await session.get(CustomerOrder, order_id)
+    if order is None:
+        return {"status": "NOT_FOUND", "message": f"Order {order_id} not found."}
+    if amount is None or float(amount) <= 0:
+        return {"status": "EMPTY", "message": "Nothing to charge for the add-on."}
+
+    link = await razorpay_service.create_payment_link(
+        order_id=order.order_id, amount_in_rupees=float(amount),
+        customer_phone=order.customer_phone,
+        description=description or f"Homaatri order {order.order_id} — extra items",
+    )
+    payment = await execute_payment_record_creation(
+        session, order_id=order.order_id, amount_due=Decimal(str(amount)), payment_type="TOPUP",
+        gateway_order_id=link["payment_link_id"], payment_link_url=link["short_url"],
+    )
+    return {
+        "status": "MINTED",
+        "order_id": order.order_id,
+        "payment_id": payment.payment_id,
+        "amount": float(amount),
+        "link": link["short_url"],
+        "message": f"Top-up link minted for order {order.order_id} (₹{float(amount):.0f}).",
+    }
+
+
+@tool("mint_topup_payment_link", args_schema=MintTopupPaymentLinkInput)
+async def mint_topup_payment_link(order_id: str, amount: float) -> str:
+    """Master: create a payment link for a post-payment add-on (extra items) — a TOPUP delta charge."""
+    async with transaction() as session:
+        res = await _mint_topup_payment_link(session, order_id=order_id, amount=Decimal(str(amount)))
+        return res["message"]
+
+
+# =============================================================================
 # TOOL: process_payment_webhook  (Master · cross-domain · WRITE via delegate)
 # =============================================================================
 class ProcessPaymentWebhookInput(BaseModel):

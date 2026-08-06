@@ -194,6 +194,70 @@ async def execute_add_item_to_order(
 
 
 # =============================================================================
+# EXECUTOR 3a: Append Extra Items to a Post-Payment Order (top-up)
+# =============================================================================
+async def execute_append_items_to_order(
+    session: AsyncSession,
+    *,
+    order_id: str,
+    items: list[dict],
+) -> CustomerOrder:
+    """Executor #3a — Append extra items to an already-paid order and recompute totals.
+
+    `items` = [{menu_item_id, dish_name, quantity, unit_price}]. Quantity is ADDED to
+    any existing line for the same dish (a top-up adds more of it). Unlike Executor #3,
+    this permits CONFIRMED/BATCHED/COOKING orders — the post-payment top-up flow appends
+    here only after the delta payment has cleared.
+    """
+    order = await session.get(CustomerOrder, order_id)
+    assert order is not None, f"Order not found: {order_id}"
+    assert order.status in {"CONFIRMED", "BATCHED", "COOKING"}, (
+        f"Cannot top-up items in order with status: {order.status}"
+    )
+
+    for it in items:
+        menu_item_id = it["menu_item_id"]
+        qty = int(it["quantity"])
+        unit_price = it["unit_price"]
+        existing = (
+            await session.execute(
+                select(CustomerOrderItem).where(
+                    CustomerOrderItem.order_id == order_id,
+                    CustomerOrderItem.menu_item_id == menu_item_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            session.add(CustomerOrderItem(
+                item_id=generate_id("ori"),
+                order_id=order_id,
+                menu_item_id=menu_item_id,
+                chef_phone=order.chef_phone,
+                dish_name=it["dish_name"],
+                quantity=qty,
+                unit_price=unit_price,
+                item_subtotal=unit_price * qty,
+                service_date=order.service_date,
+            ))
+        else:
+            existing.quantity += qty
+            existing.item_subtotal = existing.unit_price * existing.quantity
+    await session.flush()
+
+    subtotal = (
+        await session.execute(
+            select(func.sum(CustomerOrderItem.item_subtotal)).where(
+                CustomerOrderItem.order_id == order_id
+            )
+        )
+    ).scalar_one_or_none() or Decimal("0.00")
+    order.cart_subtotal = subtotal
+    order.total_amount = subtotal + order.delivery_fee
+    await session.flush()
+    return order
+
+
+# =============================================================================
 # EXECUTOR 3b: Update Order Special Instructions (dietary note)
 # =============================================================================
 async def execute_order_special_instructions_update(
@@ -219,10 +283,15 @@ async def execute_payment_record_creation(
     order_id: str,
     amount_due: Decimal,
     payment_method: str = "UPI",
+    payment_type: str = "INITIAL",
     gateway_order_id: str | None = None,
     payment_link_url: str | None = None,
 ) -> CustomerPayment:
-    """Executor #4 — Create a payment record in PENDING status for an order."""
+    """Executor #4 — Create a payment record in PENDING status for an order.
+
+    `payment_type` is 'INITIAL' for the order's first payment or 'TOPUP' for a
+    post-payment add-on (extra items on an already-paid order).
+    """
     order = await session.get(CustomerOrder, order_id)
     assert order is not None, f"Order not found: {order_id}"
 
@@ -231,7 +300,7 @@ async def execute_payment_record_creation(
         payment_id=payment_id,
         order_id=order_id,
         customer_phone=order.customer_phone,
-        payment_type="INITIAL",
+        payment_type=payment_type,
         amount_due=amount_due,
         amount_paid=Decimal("0.00"),
         gateway="RAZORPAY",
@@ -345,10 +414,14 @@ async def execute_payment_status_update(
     target_status: str,
     gateway_transaction_id: str | None = None,
     failure_reason: str | None = None,
+    cascade_confirm: bool = True,
 ) -> CustomerPayment:
     """Delegated Executor DW2 — Update payment status (PAID / FAILED / REFUNDED).
 
-    If target_status is 'PAID', automatically invokes DW1 to transition order to 'CONFIRMED'.
+    If target_status is 'PAID', automatically invokes DW1 to transition order to
+    'CONFIRMED' — UNLESS cascade_confirm is False. A TOPUP payment (extra items on
+    an already-CONFIRMED/COOKING order) sets cascade_confirm=False: the order is
+    already past PENDING_PAYMENT, so a CONFIRMED transition would be invalid.
     """
     payment = await session.get(CustomerPayment, payment_id)
     assert payment is not None, f"Payment record not found: {payment_id}"
@@ -366,7 +439,7 @@ async def execute_payment_status_update(
     await session.flush()
 
     # Automatic Cascade: If payment becomes PAID, transition order to CONFIRMED via DW1
-    if target_status == "PAID":
+    if target_status == "PAID" and cascade_confirm:
         await execute_order_status_transition(
             session,
             order_id=payment.order_id,

@@ -64,7 +64,13 @@ from app.tools.master_tools import (
     get_kitchen_availability_summary,
     get_order_pipeline_summary,
     mint_payment_link,
+    mint_topup_payment_link,
     process_payment_webhook,
+)
+from app.tools.topup import (
+    relay_topup_request,
+    request_order_topup,
+    respond_to_topup_request,
 )
 
 # Per-agent tool subsets (each agent owns only its own tools).
@@ -79,6 +85,7 @@ CUSTOMER_TOOLS: tuple[BaseTool, ...] = (
     request_payment,
     get_order_status,
     request_dietary_change,
+    request_order_topup,
     cancel_order,
     submit_order_review,
     escalate_to_admin,
@@ -92,6 +99,7 @@ CHEF_TOOLS: tuple[BaseTool, ...] = (
     respond_to_dietary_request,
     respond_to_cancellation,
     respond_to_driver_query,
+    respond_to_topup_request,
     escalate_to_admin,
 )
 DRIVER_TOOLS: tuple[BaseTool, ...] = (
@@ -106,8 +114,10 @@ DRIVER_TOOLS: tuple[BaseTool, ...] = (
 )
 MASTER_TOOLS: tuple[BaseTool, ...] = (
     mint_payment_link,
+    mint_topup_payment_link,
     process_payment_webhook,
     relay_dietary_request,
+    relay_topup_request,
     escalate_to_admin,
     get_kitchen_availability_summary,
     get_order_pipeline_summary,
