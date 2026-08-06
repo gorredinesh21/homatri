@@ -5,10 +5,23 @@ from datetime import date, datetime
 from decimal import Decimal
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.chef import ChefMenuItem, ChefProfile
-from app.models.customer import CustomerOrder, CustomerPayment, CustomerProfile, CustomerReview
+from app.models.chef import ChefMenuItem, ChefOrderReadiness, ChefProfile
+from app.models.customer import (
+    CustomerOrder,
+    CustomerOrderItem,
+    CustomerPayment,
+    CustomerProfile,
+    CustomerReview,
+)
+from app.models.driver import DriverProfile, DriverTripStatus
 from app.tools.common import resolve_time_pool
-from app.models.system import SystemSetting
+from app.models.system import (
+    SystemDeliveryRoute,
+    SystemDeliveryStop,
+    SystemDeliveryStopOrder,
+    SystemMealWindow,
+    SystemSetting,
+)
 from app.tools.customer_tools import (
     _add_item_to_order,
     _create_order,
@@ -424,6 +437,89 @@ async def test_get_order_status_shows_active_order(db_session: AsyncSession):
     assert res["status"] == "OK"
     assert res["orders"][0]["status"] == "PENDING_PAYMENT"
     assert "awaiting payment" in res["message"]
+
+
+# ---- get_order_status: live kitchen/driver stage + ETA ----
+
+async def _seed_in_flight(session, cust, chef, order_id, driver_phone, *, status="PICKED_UP",
+                          stop_index=3, total_stops=3, current_stop_index=1):
+    """A batched order wired to a route/stop/driver/trip, so the status line can enrich it."""
+    session.add(CustomerProfile(customer_phone=cust, name="Asha", delivery_address="X",
+                                latitude=Decimal("19.12"), longitude=Decimal("73.00"), is_registered=True))
+    session.add(ChefProfile(chef_phone=chef, kitchen_name="Test Kitchen", chef_name="Chef", address="G",
+                            latitude=Decimal("19.12"), longitude=Decimal("73.00"), dietary_type="VEG"))
+    session.add(DriverProfile(driver_phone=driver_phone, driver_name="Ravi", vehicle_type="BIKE",
+                              vehicle_number="MH43 X 1", is_on_shift=True, active_status=True))
+    session.add(CustomerOrder(order_id=order_id, customer_phone=cust, chef_phone=chef, kitchen_name="Test Kitchen",
+                              service_date=date(2026, 8, 4), meal_window="LUNCH", status=status,
+                              cart_subtotal=Decimal("100.00"), delivery_fee=Decimal("20.00"),
+                              total_amount=Decimal("120.00")))
+    session.add(CustomerOrderItem(order_id=order_id, menu_item_id="itm_x", chef_phone=chef, dish_name="Thali",
+                                  quantity=1, unit_price=Decimal("100.00"), item_subtotal=Decimal("100.00"),
+                                  service_date=date(2026, 8, 4)))
+    win = SystemMealWindow(service_date=date(2026, 8, 4), meal_type="LUNCH",
+                           cutoff_at=datetime(2026, 8, 4, 11, 30), status="OPEN")
+    session.add(win)
+    await session.flush()
+    route = SystemDeliveryRoute(window_id=win.window_id, driver_phone=driver_phone, service_date=date(2026, 8, 4),
+                                meal_window="LUNCH", total_stops=total_stops, total_orders=total_stops - 1,
+                                status="ASSIGNED")
+    session.add(route)
+    await session.flush()
+    stop = SystemDeliveryStop(route_id=route.route_id, stop_index=stop_index, stop_type="DROPOFF_GATE",
+                              target_ref_id=cust, location_name="Tower A", address="Addr",
+                              latitude=Decimal("19.12"), longitude=Decimal("73.00"),
+                              estimated_arrival=datetime(2026, 8, 4, 12, 30), status="PENDING")
+    session.add(stop)
+    await session.flush()
+    session.add(SystemDeliveryStopOrder(stop_id=stop.stop_id, order_id=order_id))
+    session.add(DriverTripStatus(driver_phone=driver_phone, route_id=route.route_id, service_date=date(2026, 8, 4),
+                                 meal_window="LUNCH", total_stops=total_stops,
+                                 current_stop_index=current_stop_index, status="EN_ROUTE_DELIVERY"))
+    await session.flush()
+
+
+@pytest.mark.asyncio
+async def test_get_order_status_picked_up_shows_eta(db_session: AsyncSession):
+    # order is stop 3, driver at stop 1 -> 2 stops (~20 mins) away
+    await _seed_in_flight(db_session, "7000000047", "9876500047", "ord_pu", "9500000047",
+                          status="PICKED_UP", stop_index=3, total_stops=3, current_stop_index=1)
+    res = await _get_order_status(db_session, customer_phone="7000000047")
+    msg = res["message"]
+    assert "on the way with Ravi" in msg
+    assert "stop 3 of 3" in msg
+    assert "~20 mins away" in msg          # 2 stops * LEG_MINUTES(10)
+    assert "ETA ~12:30" in msg
+    assert res["orders"][0]["stage"]["stops_ahead"] == 2
+
+
+@pytest.mark.asyncio
+async def test_get_order_status_batched_shows_driver(db_session: AsyncSession):
+    await _seed_in_flight(db_session, "7000000048", "9876500048", "ord_bt", "9500000048", status="BATCHED")
+    msg = (await _get_order_status(db_session, customer_phone="7000000048"))["message"]
+    assert "queued to cook at Test Kitchen" in msg
+    assert "Ravi will deliver" in msg
+
+
+@pytest.mark.asyncio
+async def test_get_order_status_packed_waiting_for_driver(db_session: AsyncSession):
+    await _seed_in_flight(db_session, "7000000049", "9876500049", "ord_pk", "9500000049", status="PACKED")
+    msg = (await _get_order_status(db_session, customer_phone="7000000049"))["message"]
+    assert "packed & waiting for 🛵 Ravi to pick up" in msg
+
+
+@pytest.mark.asyncio
+async def test_get_order_status_confirmed_has_no_stage(db_session: AsyncSession):
+    # CONFIRMED (pre-batch) -> no route yet -> plain friendly line, no crash
+    await _seed_customer_and_chef_with_dish(db_session, "7000000050", "9876500050")
+    db_session.add(CustomerOrder(order_id="ord_cf", customer_phone="7000000050", chef_phone="9876500050",
+                                 kitchen_name="K", service_date=date(2026, 8, 4), meal_window="LUNCH",
+                                 status="CONFIRMED", cart_subtotal=Decimal("100.00"),
+                                 delivery_fee=Decimal("20.00"), total_amount=Decimal("120.00")))
+    await db_session.flush()
+    res = await _get_order_status(db_session, customer_phone="7000000050")
+    assert res["orders"][0]["stage"] is None
+    assert "waiting for the kitchen cutoff" in res["message"]
 
 
 # ---- submit_order_review ----

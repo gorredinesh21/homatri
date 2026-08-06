@@ -29,13 +29,14 @@ from app.executors.customer import (
     execute_customer_registration_and_location,
     execute_submit_order_review,
 )
-from app.models.chef import ChefMenuItem, ChefProfile
+from app.models.chef import ChefMenuItem, ChefOrderReadiness, ChefProfile
 from app.models.customer import (
     CustomerOrder,
     CustomerOrderItem,
     CustomerProfile,
     CustomerReview,
 )
+from app.models.driver import DriverProfile, DriverTripStatus
 from app.models.system import (
     SystemDeliveryRoute,
     SystemDeliveryStop,
@@ -43,7 +44,7 @@ from app.models.system import (
     SystemSetting,
 )
 from app.tools.common import haversine_km, resolve_time_pool
-from app.tools.master_tools import _mint_payment_link, _process_payment_webhook
+from app.tools.master_tools import LEG_MINUTES, _mint_payment_link, _process_payment_webhook
 from app.tools.pause import resume_handler, send_and_await_reply
 
 
@@ -743,10 +744,81 @@ class GetOrderStatusInput(BaseModel):
     customer_phone: str = Field(..., description="Normalized 10-digit customer phone.")
 
 
+# Order statuses that have a live kitchen/driver stage worth surfacing.
+IN_FLIGHT_STATUSES = ("BATCHED", "COOKING", "PACKED", "PICKED_UP")
+
+
+async def _delivery_stage(session: AsyncSession, order: CustomerOrder) -> dict[str, Any] | None:
+    """Live kitchen/driver stage + ETA for an in-flight order. None if not yet batched.
+
+    Walks the order -> its delivery stop -> route -> assigned driver, and (for a trip
+    in progress) the driver's current position to compute how many stops away it is.
+    """
+    if order.status not in IN_FLIGHT_STATUSES:
+        return None
+    so = (
+        await session.execute(
+            select(SystemDeliveryStopOrder).where(SystemDeliveryStopOrder.order_id == order.order_id)
+        )
+    ).scalars().first()
+    if so is None:
+        return None                       # batched flag set but route not built yet
+    stop = await session.get(SystemDeliveryStop, so.stop_id)
+    if stop is None:
+        return None
+    route = await session.get(SystemDeliveryRoute, stop.route_id)
+    driver = await session.get(DriverProfile, route.driver_phone) if route is not None else None
+    packed = (
+        await session.execute(
+            select(ChefOrderReadiness).where(ChefOrderReadiness.order_id == order.order_id)
+        )
+    ).scalars().first() is not None
+
+    info: dict[str, Any] = {
+        "driver_name": driver.driver_name if driver else None,
+        "vehicle": f"{driver.vehicle_type.title()} {driver.vehicle_number}" if driver else None,
+        "stop_index": stop.stop_index,
+        "total_stops": route.total_stops if route is not None else None,
+        "eta_clock": stop.estimated_arrival.strftime("%H:%M") if stop.estimated_arrival else None,
+        "packed": packed,
+    }
+    if order.status == "PICKED_UP":
+        trip = (
+            await session.execute(
+                select(DriverTripStatus).where(DriverTripStatus.route_id == stop.route_id)
+                .order_by(DriverTripStatus.created_at.desc())
+            )
+        ).scalars().first()
+        current = trip.current_stop_index if trip is not None else 1
+        info["stops_ahead"] = max(stop.stop_index - current, 0)
+        info["eta_mins"] = info["stops_ahead"] * LEG_MINUTES
+    return info
+
+
+def _stage_line(order: CustomerOrder, stage: dict[str, Any] | None) -> str | None:
+    """A one-line live detail under an order (driver + ETA). None when there's nothing to add."""
+    if stage is None:
+        return None
+    who = stage["driver_name"] or "your driver"
+    veh = f" ({stage['vehicle']})" if stage["vehicle"] else ""
+    if order.status in ("BATCHED", "COOKING"):
+        verb = "cooking now 👨‍🍳" if order.status == "COOKING" else "queued to cook"
+        tail = f" · 🛵 {who} will deliver" if stage["driver_name"] else ""
+        return f"   {verb} at {order.kitchen_name}{tail}"
+    if order.status == "PACKED":
+        return f"   📦 packed & waiting for 🛵 {who} to pick up"
+    # PICKED_UP -> ETA
+    ahead = stage.get("stops_ahead", 0)
+    when = "arriving next!" if ahead == 0 else f"~{stage['eta_mins']} mins away"
+    clock = f" (ETA ~{stage['eta_clock']})" if stage["eta_clock"] else ""
+    total = stage["total_stops"] or stage["stop_index"]
+    return f"   🛵 on the way with {who}{veh} · stop {stage['stop_index']} of {total} · {when}{clock}"
+
+
 async def _get_order_status(
     session: AsyncSession, *, customer_phone: str, include_terminal: bool = False
 ) -> dict[str, Any]:
-    """The customer's active order(s) + where each is in the pipeline. {status, orders, message}.
+    """The customer's active order(s) + where each is in the pipeline, with a live driver/ETA line. {status, orders, message}.
 
     Guard: no active orders -> NO_ORDERS.
     """
@@ -768,8 +840,12 @@ async def _get_order_status(
         item_str = ", ".join(f"{it.quantity}× {it.dish_name}" for it in items) or "(cart empty)"
         friendly = ORDER_STATUS_FRIENDLY.get(o.status, o.status.lower())
         lines.append(f"• {o.kitchen_name} — {item_str} (₹{float(o.total_amount):.0f}) → {friendly}")
+        stage = await _delivery_stage(session, o)
+        stage_line = _stage_line(o, stage)
+        if stage_line:
+            lines.append(stage_line)
         out.append({"order_id": o.order_id, "kitchen_name": o.kitchen_name,
-                    "status": o.status, "total": float(o.total_amount)})
+                    "status": o.status, "total": float(o.total_amount), "stage": stage})
     return {"status": "OK", "orders": out, "message": "Your order(s):\n" + "\n".join(lines)}
 
 
