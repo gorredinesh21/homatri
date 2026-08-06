@@ -54,7 +54,6 @@ from app.tools.driver_tools import (
     confirm_pickup,
     get_driver_profile,
     get_driver_route,
-    register_driver,
     update_duty_status,
 )
 from app.tools.master_tools import mint_payment_link, process_payment_webhook
@@ -85,7 +84,6 @@ CHEF_TOOLS: tuple[BaseTool, ...] = (
 )
 DRIVER_TOOLS: tuple[BaseTool, ...] = (
     get_driver_profile,
-    register_driver,
     update_duty_status,
     get_driver_route,
     confirm_pickup,

@@ -125,34 +125,8 @@ async def get_driver_profile(driver_phone: str) -> str:
         return (await _get_driver_profile(session, driver_phone=driver_phone))["message"]
 
 
-class RegisterDriverInput(BaseModel):
-    driver_phone: str = Field(..., description="Normalized 10-digit driver phone.")
-    driver_name: str = Field(..., description="Driver's name.")
-    vehicle_type: str = Field(default="BIKE", description="BIKE / SCOOTER / CAR.")
-    vehicle_number: str = Field(..., description="Vehicle plate number.")
-
-
-async def _register_driver(session: AsyncSession, *, driver_phone: str, driver_name: str,
-                           vehicle_type: str, vehicle_number: str) -> dict[str, Any]:
-    if not (driver_name or "").strip() or not (vehicle_number or "").strip():
-        return {"status": "INVALID", "message": "I need your name and vehicle number to register you."}
-    if await session.get(DriverProfile, driver_phone) is not None:
-        return {"status": "EXISTS", "message": "You're already registered."}
-    await execute_driver_profile_upsert(
-        session, driver_phone=driver_phone, driver_name=driver_name.strip(),
-        vehicle_type=vehicle_type or "BIKE", vehicle_number=vehicle_number.strip(), is_on_shift=True)
-    return {"status": "REGISTERED", "message": f"Welcome {driver_name.strip()}! You're registered and on shift."}
-
-
-@tool("register_driver", args_schema=RegisterDriverInput)
-async def register_driver(driver_phone: str, driver_name: str, vehicle_number: str, vehicle_type: str = "BIKE") -> str:
-    """Onboard a new driver (name + vehicle)."""
-    async with transaction() as session:
-        res = await _register_driver(session, driver_phone=driver_phone, driver_name=driver_name,
-                                     vehicle_type=vehicle_type, vehicle_number=vehicle_number)
-        return res["message"]
-
-
+# NOTE: drivers (like chefs) are onboarded by the admin/seed — there is deliberately
+# no register_driver self-onboarding tool. update_duty_status only toggles shift.
 class UpdateDutyStatusInput(BaseModel):
     driver_phone: str = Field(..., description="Normalized 10-digit driver phone.")
     on_duty: bool = Field(..., description="True = on shift, False = off shift.")

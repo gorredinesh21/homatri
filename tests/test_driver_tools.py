@@ -19,7 +19,6 @@ from app.tools.driver_tools import (
     _confirm_delivery,
     _confirm_pickup,
     _get_driver_route,
-    _register_driver,
     _update_duty_status,
 )
 
@@ -70,14 +69,6 @@ async def test_update_duty(db_session: AsyncSession):
     await db_session.flush()
     assert (await _update_duty_status(db_session, driver_phone=DRV, on_duty=False))["status"] == "OFF_DUTY"
     assert (await db_session.get(DriverProfile, DRV)).is_on_shift is False
-
-
-@pytest.mark.asyncio
-async def test_register_driver(db_session: AsyncSession):
-    res = await _register_driver(db_session, driver_phone="9500009999", driver_name="New",
-                                 vehicle_type="BIKE", vehicle_number="MH99")
-    assert res["status"] == "REGISTERED"
-    assert (await db_session.get(DriverProfile, "9500009999")) is not None
 
 
 @pytest.mark.asyncio

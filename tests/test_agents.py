@@ -33,5 +33,6 @@ def test_chef_agent_bindings():
 
 def test_driver_agent_bindings():
     names = set(driver_agent.tool_map)
-    assert names == {"get_driver_profile", "register_driver", "update_duty_status",
+    assert names == {"get_driver_profile", "update_duty_status",
                      "get_driver_route", "confirm_pickup", "confirm_delivery"}
+    assert "register_driver" not in names   # drivers are admin/seed-onboarded
