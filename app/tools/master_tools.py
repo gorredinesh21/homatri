@@ -383,11 +383,24 @@ async def _run_cutoff_batch(
             continue
         driver_phone = alloc["driver_phone"]
 
-        # 2) deliveries (one dropoff per order/customer) + route optimization
-        deliveries = []
+        # 2) deliveries (one dropoff per order/customer) + route optimization.
+        # Skip any order whose customer has no saved location — it can't be routed. Don't
+        # crash the whole batch for one bad row; the order stays CONFIRMED for the next run.
+        deliveries, skipped = [], []
         for o in chef_orders:
             cust = await session.get(CustomerProfile, o.customer_phone)
+            if cust is None or cust.latitude is None or cust.longitude is None:
+                skipped.append(o.order_id)
+                continue
             deliveries.append({"lat": float(cust.latitude), "lng": float(cust.longitude), "order": o, "cust": cust})
+        if not deliveries:
+            await execute_system_audit_log(
+                session, event_type="BATCH_SKIPPED", source_role="MASTER", severity="WARN",
+                payload={"chef_phone": chef_phone, "reason": "no deliverable orders (missing customer location)",
+                         "skipped_orders": skipped})
+            batches.append({"chef_phone": chef_phone, "status": "NO_DELIVERIES", "skipped": skipped})
+            continue
+        batch_orders = [d["order"] for d in deliveries]   # only the deliverable orders get batched
         origin = {"lat": float(chef.latitude), "lng": float(chef.longitude)}
         route = await _call_maps_route(origin=origin, stops=deliveries)
         ordered = [deliveries[i] for i in route["order"]]
@@ -413,7 +426,7 @@ async def _run_cutoff_batch(
         # 4) create route + stops + stop-orders (flips orders -> BATCHED)
         route_row = await execute_cutoff_batch_lock_and_routes_creation(
             session, window_id=win.window_id, driver_phone=driver_phone, service_date=service_date,
-            meal_window=window, total_stops=total_stops, total_orders=len(chef_orders),
+            meal_window=window, total_stops=total_stops, total_orders=len(batch_orders),
             total_distance_km=Decimal(str(route["total_distance_km"])),
             estimated_duration_mins=route["estimated_duration_mins"], stops_data=stops_data,
         )
@@ -428,7 +441,7 @@ async def _run_cutoff_batch(
         items = (
             await session.execute(
                 select(CustomerOrderItem).where(
-                    CustomerOrderItem.order_id.in_([o.order_id for o in chef_orders])
+                    CustomerOrderItem.order_id.in_([o.order_id for o in batch_orders])
                 )
             )
         ).scalars().all()
@@ -440,13 +453,13 @@ async def _run_cutoff_batch(
         name_of = {d["order"].order_id: d["cust"].name for d in deliveries}
 
         order_blocks = []
-        for n, o in enumerate(chef_orders, 1):
+        for n, o in enumerate(batch_orders, 1):
             lines = "\n".join(f"      • {it.quantity}× {it.dish_name}" for it in by_order.get(o.order_id, []))
             order_blocks.append(f"  {n}. {name_of.get(o.order_id, o.customer_phone)} · {o.order_id}\n{lines}")
         summary_lines = "\n".join(f"  • {qty}× {name}" for name, qty in summary.items())
         pickup_time = (cutoff_at + timedelta(minutes=COOK_MINUTES)).strftime("%I:%M %p")
         chef_msg = (
-            f"🍳 {window.title()} batch locked — {len(chef_orders)} order(s).\n\n"
+            f"🍳 {window.title()} batch locked — {len(batch_orders)} order(s).\n\n"
             f"ORDERS:\n" + "\n".join(order_blocks) + "\n\n"
             f"COOK SUMMARY:\n{summary_lines}\n\n"
             f"🛵 {alloc['driver_name']} picks up around {pickup_time}."
@@ -455,7 +468,7 @@ async def _run_cutoff_batch(
             session, recipient_phone=chef_phone, recipient_role="CHEF", message_text=chef_msg,
         )
         driver_msg = (
-            f"🛵 New {window.lower()} route: {len(chef_orders)} orders, {total_stops} stops "
+            f"🛵 New {window.lower()} route: {len(batch_orders)} orders, {total_stops} stops "
             f"(~{route['total_distance_km']} km). Pick up at {chef.kitchen_name}.\nRoute: {route['maps_url']}"
         )
         await execute_outbound_whatsapp_enqueue(
@@ -465,11 +478,11 @@ async def _run_cutoff_batch(
         await execute_system_audit_log(
             session, event_type="BATCH_CREATED", source_role="MASTER",
             payload={"route_id": route_row.route_id, "chef_phone": chef_phone,
-                     "driver_phone": driver_phone, "orders": len(chef_orders), "stops": total_stops},
+                     "driver_phone": driver_phone, "orders": len(batch_orders), "stops": total_stops},
         )
         batches.append({
             "chef_phone": chef_phone, "kitchen_name": chef.kitchen_name, "route_id": route_row.route_id,
-            "driver_phone": driver_phone, "orders": len(chef_orders), "stops": total_stops, "status": "BATCHED",
+            "driver_phone": driver_phone, "orders": len(batch_orders), "stops": total_stops, "status": "BATCHED",
         })
 
     # Keep the window OPEN (the batch executor flips it to LOCKED_PROCESSING; undo

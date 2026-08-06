@@ -187,6 +187,25 @@ async def test_run_cutoff_batch_rerun_has_nothing_left(db_session: AsyncSession)
 
 
 @pytest.mark.asyncio
+async def test_run_cutoff_batch_skips_customer_without_location(db_session: AsyncSession):
+    # a CONFIRMED order whose customer has NO saved location must not crash the batch
+    db_session.add(CustomerProfile(customer_phone="7000000085", name="NoLoc", delivery_address="X",
+                                   latitude=None, longitude=None, is_registered=True))
+    db_session.add(ChefProfile(chef_phone="9876500085", kitchen_name="K", chef_name="C", address="G",
+                               latitude=Decimal("19.12"), longitude=Decimal("73.00"), dietary_type="VEG"))
+    db_session.add(CustomerOrder(order_id="ord_noloc", customer_phone="7000000085", chef_phone="9876500085",
+                                 kitchen_name="K", service_date=SERVICE_DATE, meal_window="LUNCH", status="CONFIRMED",
+                                 cart_subtotal=Decimal("100.00"), delivery_fee=Decimal("20.00"),
+                                 total_amount=Decimal("120.00")))
+    await db_session.flush()
+    await _seed_driver(db_session, "9111000085", "Vikram")
+
+    res = await _run_cutoff_batch(db_session, window="LUNCH", service_date=SERVICE_DATE)   # must NOT raise
+    assert any(b.get("status") == "NO_DELIVERIES" for b in res["batches"])
+    assert (await db_session.get(CustomerOrder, "ord_noloc")).status == "CONFIRMED"   # left for a later run
+
+
+@pytest.mark.asyncio
 async def test_run_cutoff_batch_no_driver(db_session: AsyncSession):
     await _seed_confirmed_order(db_session, "7000000082", "9876500082")   # no driver seeded
     res = await _run_cutoff_batch(db_session, window="LUNCH", service_date=SERVICE_DATE)

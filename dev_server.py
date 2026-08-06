@@ -644,10 +644,24 @@ BATCH_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri
    <button data-step="greeting">👋 Greeting</button>
    <button data-step="name">📝 Name+Addr</button>
    <button data-step="location">📍 Location</button>
-   <button data-step="menu">🍔 View menu</button>
+   <button data-step="menu">🍔 Menu</button>
    <button data-step="order">🍽️ Order</button>
    <button data-step="pay">💳 Pay</button>
+   <button data-step="status">📦 Status</button>
+   <button data-step="dietary">🌶️ Cust: dietary</button>
+   <button data-step="topup">➕ Cust: top-up</button>
+   <button data-step="chef_dietary">🍳 Chef: accept diet</button>
+   <button data-step="chef_topup">🍳 Chef: accept add-on</button>
+   <button data-step="pay">💳 Pay (delta)</button>
    <button data-step="cutoff">⏰ Cutoff</button>
+   <button data-step="chef_batch">🍳 Chef: batch</button>
+   <button data-step="chef_ready">🍳 Chef: mark ready</button>
+   <button data-step="driver_route">🛵 Drv: route</button>
+   <button data-step="driver_pickup">🛵 Drv: pickup</button>
+   <button data-step="driver_deliver">🛵 Drv: deliver</button>
+   <button data-step="cancel">❌ Cust: cancel</button>
+   <button data-step="chef_cancel">🍳 Chef: appr. cancel</button>
+   <button data-step="review">⭐ Review</button>
   </div>
  </div>
  <div class="section"><h3 id="adminh">🚨 Admin queue</h3><div id="adminq" style="font-size:12px;color:#e9c46a;line-height:1.6">(empty)</div>
@@ -656,7 +670,7 @@ BATCH_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri
  <div class="section"><h3 id="hh">Chefs</h3><div id="chefs" class="grid"></div></div>
  <div class="section"><h3 id="dh">Drivers</h3><div id="drivers" class="grid"></div></div>
 <script>
- let roster=[]; const tiles={}; const pollers=[];
+ let roster=[], chefs=[], drivers=[]; const tiles={}; const pollers=[];
  const $=id=>document.getElementById(id);
  function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
  function linkify(s){return esc(s).replace(/(https?:\\/\\/[^\\s<]+)/g,'<a href="$1" target="_blank">$1</a>');}
@@ -686,28 +700,50 @@ BATCH_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri
      const j=await r.json(); if(t) t.add('bot', j.reply||'(no reply)'); }
    catch(e){ if(t) t.add('bot','ERR: '+e); }
  }
+ const txt=(phone,body)=>sendWebhook(phone,{from:phone,type:'text',text:{body}}, body);
+ // Each step targets a role group ('cust'|'chef'|'driver') and broadcasts one message to it.
+ // The agents (with DB-backed context) act on their own state — a chef's "accept" resolves
+ // whatever request was pushed to that chef, a driver's "delivered" advances their own route.
  const STEPS={
-   greeting: c=>sendWebhook(c.phone,{from:c.phone,type:'text',text:{body:'hi'}},'hi'),
-   name:     c=>sendWebhook(c.phone,{from:c.phone,type:'text',text:{body:c.name+', '+c.address}}, c.name+', '+c.address),
-   location: c=>sendWebhook(c.phone,{from:c.phone,type:'location',location:{latitude:c.lat,longitude:c.lng}},'📍 '+c.lat+','+c.lng),
-   menu:     c=>sendWebhook(c.phone,{from:c.phone,type:'text',text:{body:`show me the menu for ${c.kitchen}`}}, `menu: ${c.kitchen}`),
-   order:    c=>sendWebhook(c.phone,{from:c.phone,type:'text',text:{body:`order ${c.qty} ${c.dish} from ${c.kitchen}, and send me the payment link`}}, `order ${c.qty}× ${c.dish}`),
-   pay:      c=>payOne(c),
+   greeting: {g:'cust', fn:c=>txt(c.phone,'hi')},
+   name:     {g:'cust', fn:c=>txt(c.phone, c.name+', '+c.address)},
+   location: {g:'cust', fn:c=>sendWebhook(c.phone,{from:c.phone,type:'location',location:{latitude:c.lat,longitude:c.lng}},'📍 '+c.lat+','+c.lng)},
+   menu:     {g:'cust', fn:c=>txt(c.phone,`show me the menu for ${c.kitchen}`)},
+   order:    {g:'cust', fn:c=>txt(c.phone,`order ${c.qty} ${c.dish} from ${c.kitchen}, and send me the payment link`)},
+   pay:      {g:'cust', fn:c=>payOne(c)},
+   status:   {g:'cust', fn:c=>txt(c.phone,'where is my order?')},
+   dietary:  {g:'cust', fn:c=>txt(c.phone,`can you make my ${c.dish} less spicy please?`)},
+   topup:    {g:'cust', fn:c=>txt(c.phone,`please add 1 more ${c.dish} to my order`)},
+   cancel:   {g:'cust', fn:c=>txt(c.phone,'please cancel my order')},
+   review:   {g:'cust', fn:c=>txt(c.phone,'the food was delicious! 5 stars for the kitchen and 5 for the driver')},
+   chef_batch:   {g:'chef', fn:c=>txt(c.phone,'show my batch')},
+   chef_dietary: {g:'chef', fn:c=>txt(c.phone,'accept the dietary request')},
+   chef_topup:   {g:'chef', fn:c=>txt(c.phone,'accept the add-on request')},
+   chef_ready:   {g:'chef', fn:c=>txt(c.phone,'all my orders are packed and ready for pickup')},
+   chef_cancel:  {g:'chef', fn:c=>txt(c.phone,'approve the cancellation')},
+   driver_route:   {g:'driver', fn:c=>txt(c.phone,'show my route')},
+   driver_pickup:  {g:'driver', fn:c=>txt(c.phone,'i have picked up the orders from the kitchen')},
+   driver_deliver: {g:'driver', fn:c=>txt(c.phone,'delivered this stop')},
  };
  function setStatus(t){ $('status').textContent=t; }
  function setBusy(b){ document.querySelectorAll('#steps button').forEach(x=>x.disabled=b); }
  async function runStep(step){
    setBusy(true);
-   if(step==='reset'){ setStatus('resetting + seeding…');
-     await fetch('/batch/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-     Object.values(tiles).forEach(t=>t.clear()); pollers.forEach(p=>p.seen=0);
-     setStatus('reset done — 10 chefs + 10 drivers seeded. Press Greeting.'); setBusy(false); return; }
-   if(step==='cutoff'){ setStatus('running cutoff…');
-     const r=await fetch('/cutoff',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
-     const j=await r.json(); setStatus('cutoff: '+(j.message||'done').slice(0,120)); setBusy(false); return; }
-   const worker=STEPS[step];
-   await pool(roster, worker, 8, (d,n)=>setStatus(step+': '+d+'/'+n));
-   setStatus(step+': done ('+roster.length+')'); setBusy(false);
+   try {
+     if(step==='reset'){ setStatus('resetting + seeding…');
+       await fetch('/batch/reset',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+       Object.values(tiles).forEach(t=>t.clear()); pollers.forEach(p=>p.seen=0);
+       setStatus('reset done — 10 chefs + 10 drivers seeded. Press Greeting.'); return; }
+     if(step==='cutoff'){ setStatus('running cutoff…');
+       const r=await fetch('/cutoff',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+       const j=await r.json().catch(()=>({message:'HTTP '+r.status}));
+       setStatus('cutoff: '+String(j.message||('HTTP '+r.status)).slice(0,140)); return; }
+     const s=STEPS[step];
+     const items = s.g==='chef' ? chefs : s.g==='driver' ? drivers : roster;
+     await pool(items, s.fn, 8, (d,n)=>setStatus(step+': '+d+'/'+n));
+     setStatus(step+': done ('+items.length+')');
+   } catch(e){ setStatus(step+' ERROR: '+e); }
+   finally { setBusy(false); }   // always re-enable the buttons, even on error
  }
  document.querySelectorAll('#steps button').forEach(b=>b.onclick=()=>runStep(b.dataset.step));
  // admin escalation queue (read-only)
@@ -726,7 +762,7 @@ BATCH_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri
  }
  (async function(){
    const j=await (await fetch('/batch/roster')).json();
-   roster=j.customers;
+   roster=j.customers; chefs=j.chefs; drivers=j.drivers;
    $('ch').textContent='Customers ('+roster.length+')';
    $('hh').textContent='Chefs ('+j.chefs.length+')';
    $('dh').textContent='Drivers ('+j.drivers.length+')';
