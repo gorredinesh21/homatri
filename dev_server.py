@@ -317,6 +317,18 @@ async def admin_queue(req: Request):
     ]})
 
 
+@app.get("/admin/summary")
+async def admin_summary(req: Request):
+    """Admin oversight: order pipeline counts + kitchen availability."""
+    from app.tools.master_tools import _get_kitchen_availability_summary, _get_order_pipeline_summary
+    async with SessionFactory() as session:
+        pipeline = await _get_order_pipeline_summary(session)
+        kitchens = await _get_kitchen_availability_summary(session)
+    return JSONResponse({"pipeline": pipeline["counts"], "total": pipeline["total"],
+                         "kitchens_active": sum(1 for k in kitchens["kitchens"] if k["active"]),
+                         "kitchens_total": len(kitchens["kitchens"])})
+
+
 @app.get("/outbox")
 async def outbox(req: Request):
     """The dispatched-message inbox for a phone (chef/driver) — reads system_outbound_queue."""
@@ -514,7 +526,8 @@ BATCH_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri
    <button data-step="cutoff">⏰ Cutoff</button>
   </div>
  </div>
- <div class="section"><h3 id="adminh">🚨 Admin queue</h3><div id="adminq" style="font-size:12px;color:#e9c46a;line-height:1.6">(empty)</div></div>
+ <div class="section"><h3 id="adminh">🚨 Admin queue</h3><div id="adminq" style="font-size:12px;color:#e9c46a;line-height:1.6">(empty)</div>
+   <div id="summary" style="font-size:12px;color:#9fd; margin-top:6px">pipeline: —</div></div>
  <div class="section"><h3 id="ch">Customers</h3><div id="customers" class="grid"></div></div>
  <div class="section"><h3 id="hh">Chefs</h3><div id="chefs" class="grid"></div></div>
  <div class="section"><h3 id="dh">Drivers</h3><div id="drivers" class="grid"></div></div>
@@ -577,6 +590,8 @@ BATCH_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri
  async function pollAdmin(){ try{ const j=await (await fetch('/admin/queue')).json(); const items=j.items||[];
    $('adminh').textContent='🚨 Admin queue ('+items.length+')';
    $('adminq').innerHTML = items.length ? items.map(i=>'• ['+(i.type||'?')+'] '+(i.from||'')+': '+esc(i.summary||'')+(i.order_id?(' ('+i.order_id+')'):'')).join('<br>') : '(empty)';
+   const s=await (await fetch('/admin/summary')).json(); const p=s.pipeline||{};
+   $('summary').textContent='pipeline ('+s.total+'): '+Object.keys(p).filter(k=>p[k]).map(k=>k+' '+p[k]).join(' · ')+'   |   kitchens active '+s.kitchens_active+'/'+s.kitchens_total;
  }catch(e){} }
  setInterval(pollAdmin, 5000); pollAdmin();
  // chef/driver inbox polling

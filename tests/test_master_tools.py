@@ -12,9 +12,12 @@ from app.models.driver import DriverProfile, DriverTripStatus
 from app.models.system import SystemDeliveryRoute, SystemMealWindow, SystemOutboundQueue
 from app.tools.customer_tools import _create_order
 from app.models.system import SystemHitlSession
+from app.models.chef import ChefMenuItem
 from app.tools.master_tools import (
     _allocate_driver,
     _escalate_to_admin,
+    _get_kitchen_availability_summary,
+    _get_order_pipeline_summary,
     _mint_payment_link,
     _process_payment_webhook,
     _run_cutoff_batch,
@@ -213,3 +216,34 @@ async def test_escalate_unknown_type_falls_back_to_stuck(db_session: AsyncSessio
     assert res["status"] == "ESCALATED"
     row = (await db_session.execute(select(SystemHitlSession))).scalars().first()
     assert row.payload["type"] == "STUCK"
+
+
+# ---- oversight summaries ----
+
+@pytest.mark.asyncio
+async def test_order_pipeline_summary(db_session: AsyncSession):
+    await _seed_pending_order(db_session, "7000000090", "9876500090")   # PENDING_PAYMENT
+    db_session.add(CustomerOrder(order_id="ord_conf", customer_phone="7000000090", chef_phone="9876500090",
+                                 kitchen_name="K", service_date=SERVICE_DATE, status="CONFIRMED",
+                                 cart_subtotal=Decimal("1"), delivery_fee=Decimal("1"), total_amount=Decimal("2")))
+    await db_session.flush()
+    res = await _get_order_pipeline_summary(db_session)
+    assert res["counts"]["PENDING_PAYMENT"] >= 1
+    assert res["counts"]["CONFIRMED"] == 1
+    assert res["total"] >= 2
+
+
+@pytest.mark.asyncio
+async def test_kitchen_availability_summary(db_session: AsyncSession):
+    db_session.add(ChefProfile(chef_phone="9876500091", kitchen_name="K1", chef_name="C", address="G",
+                               latitude=Decimal("19.12"), longitude=Decimal("73.00"), dietary_type="VEG",
+                               active_status=True))
+    db_session.add(ChefMenuItem(chef_phone="9876500091", dish_name="D1", unit_price=Decimal("100"),
+                                meal_type="DINNER", is_available=True))
+    db_session.add(ChefMenuItem(chef_phone="9876500091", dish_name="D2", unit_price=Decimal("100"),
+                                meal_type="DINNER", is_available=False))
+    await db_session.flush()
+    res = await _get_kitchen_availability_summary(db_session)
+    k = next(x for x in res["kitchens"] if x["chef_phone"] == "9876500091")
+    assert k["available_dishes"] == 1        # only D1 is available
+    assert k["active"] is True

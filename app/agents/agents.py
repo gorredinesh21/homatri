@@ -59,7 +59,13 @@ from app.tools.driver_tools import (
     respond_to_driver_query,
     update_duty_status,
 )
-from app.tools.master_tools import escalate_to_admin, mint_payment_link, process_payment_webhook
+from app.tools.master_tools import (
+    escalate_to_admin,
+    get_kitchen_availability_summary,
+    get_order_pipeline_summary,
+    mint_payment_link,
+    process_payment_webhook,
+)
 
 # Per-agent tool subsets (each agent owns only its own tools).
 CUSTOMER_TOOLS: tuple[BaseTool, ...] = (
@@ -103,6 +109,8 @@ MASTER_TOOLS: tuple[BaseTool, ...] = (
     process_payment_webhook,
     relay_dietary_request,
     escalate_to_admin,
+    get_kitchen_availability_summary,
+    get_order_pipeline_summary,
 )
 
 

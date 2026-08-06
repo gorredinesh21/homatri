@@ -22,7 +22,7 @@ def test_customer_agent_bindings():
 def test_master_agent_bindings():
     names = set(master_agent.tool_map)
     assert names == {"mint_payment_link", "process_payment_webhook", "relay_dietary_request",
-                     "escalate_to_admin"}
+                     "escalate_to_admin", "get_kitchen_availability_summary", "get_order_pipeline_summary"}
 
 
 def test_escalate_bound_to_every_agent():

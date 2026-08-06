@@ -19,7 +19,7 @@ from typing import Any
 
 from langchain_core.tools import tool
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.ids import generate_id
@@ -36,7 +36,7 @@ from app.executors.master import (
     execute_outbound_whatsapp_enqueue,
     execute_system_audit_log,
 )
-from app.models.chef import ChefProfile
+from app.models.chef import ChefMenuItem, ChefProfile
 from app.models.customer import (
     CustomerOrder,
     CustomerOrderItem,
@@ -488,3 +488,74 @@ async def escalate_to_admin(source_role: str, escalation_type: str, summary: str
         res = await _escalate_to_admin(
             session, source_role=source_role, escalation_type=escalation_type, summary=summary, order_id=order_id)
         return res["message"]
+
+
+# =============================================================================
+# TOOL: get_kitchen_availability_summary  (Master · oversight READ)
+# =============================================================================
+class GetKitchenAvailabilitySummaryInput(BaseModel):
+    window: str | None = Field(default=None, description="Optional 'LUNCH'/'DINNER' — count dishes for that window only.")
+
+
+async def _get_kitchen_availability_summary(session: AsyncSession, *, window: str | None = None) -> dict[str, Any]:
+    """Per-kitchen active status + count of available dishes. {status, kitchens, message}."""
+    chefs = (await session.execute(select(ChefProfile).order_by(ChefProfile.kitchen_name))).scalars().all()
+    if not chefs:
+        return {"status": "OK", "kitchens": [], "message": "No kitchens registered."}
+    kitchens, lines = [], []
+    for c in chefs:
+        q = select(func.count()).select_from(ChefMenuItem).where(
+            ChefMenuItem.chef_phone == c.chef_phone, ChefMenuItem.is_available.is_(True))
+        if window:
+            q = q.where(ChefMenuItem.meal_type == window)
+        avail = (await session.execute(q)).scalar_one()
+        kitchens.append({"chef_phone": c.chef_phone, "kitchen_name": c.kitchen_name,
+                         "active": c.active_status, "available_dishes": int(avail)})
+        flag = "🟢" if c.active_status else "🔴"
+        lines.append(f"{flag} {c.kitchen_name} — {avail} dish(es) available"
+                     + (f" ({window.lower()})" if window else ""))
+    active_n = sum(1 for c in chefs if c.active_status)
+    return {"status": "OK", "kitchens": kitchens,
+            "message": f"Kitchens ({active_n}/{len(chefs)} active):\n" + "\n".join(lines)}
+
+
+@tool("get_kitchen_availability_summary", args_schema=GetKitchenAvailabilitySummaryInput)
+async def get_kitchen_availability_summary(window: str | None = None) -> str:
+    """Admin oversight: each kitchen's active status + how many dishes it has available."""
+    async with SessionFactory() as session:
+        return (await _get_kitchen_availability_summary(session, window=window))["message"]
+
+
+# =============================================================================
+# TOOL: get_order_pipeline_summary  (Master · oversight READ)
+# =============================================================================
+PIPELINE_STATUSES = ["PENDING_PAYMENT", "CONFIRMED", "BATCHED", "COOKING",
+                     "PACKED", "PICKED_UP", "DELIVERED", "CANCELLED"]
+
+
+class GetOrderPipelineSummaryInput(BaseModel):
+    service_date: str | None = Field(default=None, description="Optional ISO date to filter (e.g. '2026-08-06').")
+
+
+async def _get_order_pipeline_summary(session: AsyncSession, *, service_date: date | None = None) -> dict[str, Any]:
+    """Order counts by pipeline status. {status, counts, total, message}."""
+    q = select(CustomerOrder.status, func.count()).group_by(CustomerOrder.status)
+    if service_date is not None:
+        q = q.where(CustomerOrder.service_date == service_date)
+    rows = (await session.execute(q)).all()
+    raw = {s: int(n) for s, n in rows}
+    counts = {s: raw.get(s, 0) for s in PIPELINE_STATUSES}
+    total = sum(raw.values())
+    if not total:
+        return {"status": "OK", "counts": counts, "total": 0, "message": "No orders in the pipeline yet."}
+    parts = [f"{s}: {counts[s]}" for s in PIPELINE_STATUSES if counts[s]]
+    return {"status": "OK", "counts": counts, "total": total,
+            "message": f"Order pipeline ({total} total):\n  " + " · ".join(parts)}
+
+
+@tool("get_order_pipeline_summary", args_schema=GetOrderPipelineSummaryInput)
+async def get_order_pipeline_summary(service_date: str | None = None) -> str:
+    """Admin oversight: how many orders sit at each stage (confirmed / batched / cooking / … / delivered)."""
+    async with SessionFactory() as session:
+        sd = date.fromisoformat(service_date) if service_date else None
+        return (await _get_order_pipeline_summary(session, service_date=sd))["message"]
