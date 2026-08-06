@@ -34,7 +34,7 @@ from app.db.session import SessionFactory, transaction
 from app.models.chef import ChefProfile
 from app.models.customer import CustomerOrder
 from app.models.driver import DriverProfile
-from app.models.system import SystemOutboundQueue
+from app.models.system import SystemHitlSession, SystemOutboundQueue
 from app.router import route
 from app.tools.cancellation import clear_cancellation
 from app.tools.common import resolve_time_pool
@@ -87,6 +87,7 @@ def _driver_extra(phone: str) -> str:
         f"If they ask whether the food is ready, call ask_chef_status(driver_phone). "
         f"If they CAN'T FIND an address, call report_address_issue(driver_phone) — it asks the customer for a "
         f"fresh location pin and sends it to the driver when they share. "
+        f"LAST RESORT if stuck: escalate_to_admin(source_role='DRIVER', escalation_type='STUCK', summary=..., order_id=...). "
         f"These tools RETURN the next stop's details — just relay that to the driver. Keep replies short."
     )
 
@@ -105,6 +106,7 @@ def _chef_extra(phone: str) -> str:
         f"respond_to_cancellation(chef_phone, decision='approve'|'deny'). "
         f"If a DRIVER is waiting and asks how long, reply with respond_to_driver_query(chef_phone, reply) "
         f"(e.g. reply='5 more minutes' or 'ready now'). "
+        f"LAST RESORT if stuck: escalate_to_admin(source_role='CHEF', escalation_type='STUCK', summary=..., order_id=...). "
         f"Refer to dishes by name and orders by their ord_ id from get_chef_batch. Keep replies short."
     )
 
@@ -148,6 +150,8 @@ def _customer_extra(phone: str) -> str:
         f"is asked to approve — tell the customer you're checking. Relay the tool's message; don't decide yourself."
         f"\n- To leave FEEDBACK on a delivered order (ratings/comment), call "
         f"submit_order_review(customer_phone, chef_rating, driver_rating, comment)."
+        f"\n- LAST RESORT: if you're genuinely stuck and can't help after trying, call "
+        f"escalate_to_admin(source_role='CUSTOMER', escalation_type='STUCK', summary=<what's wrong>, order_id=<if any>)."
     )
 
 
@@ -292,6 +296,25 @@ async def cutoff(req: Request):
         runs.append({"window": window, "service_date": str(service_date), **res})
     msg = " | ".join(f"{r['window'].lower()} {r['service_date']}: {r['message']}" for r in runs)
     return JSONResponse({"status": "BATCHED", "runs": runs, "message": msg})
+
+
+@app.get("/admin/queue")
+async def admin_queue(req: Request):
+    """The admin escalation queue — open HITL sessions waiting on ADMIN (from escalate_to_admin)."""
+    async with SessionFactory() as session:
+        rows = (
+            await session.execute(
+                select(SystemHitlSession)
+                .where(SystemHitlSession.waiting_on_role == "ADMIN", SystemHitlSession.status == "WAITING")
+                .order_by(SystemHitlSession.created_at.desc())
+            )
+        ).scalars().all()
+    return JSONResponse({"items": [
+        {"id": r.session_id, "type": (r.payload or {}).get("type"), "from": (r.payload or {}).get("source_role"),
+         "summary": (r.payload or {}).get("summary"), "order_id": r.order_id,
+         "at": r.created_at.isoformat() if r.created_at else None}
+        for r in rows
+    ]})
 
 
 @app.get("/outbox")
@@ -491,6 +514,7 @@ BATCH_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri
    <button data-step="cutoff">⏰ Cutoff</button>
   </div>
  </div>
+ <div class="section"><h3 id="adminh">🚨 Admin queue</h3><div id="adminq" style="font-size:12px;color:#e9c46a;line-height:1.6">(empty)</div></div>
  <div class="section"><h3 id="ch">Customers</h3><div id="customers" class="grid"></div></div>
  <div class="section"><h3 id="hh">Chefs</h3><div id="chefs" class="grid"></div></div>
  <div class="section"><h3 id="dh">Drivers</h3><div id="drivers" class="grid"></div></div>
@@ -549,6 +573,12 @@ BATCH_PAGE = """<!doctype html><html><head><meta charset="utf-8"><title>Homaatri
    setStatus(step+': done ('+roster.length+')'); setBusy(false);
  }
  document.querySelectorAll('#steps button').forEach(b=>b.onclick=()=>runStep(b.dataset.step));
+ // admin escalation queue (read-only)
+ async function pollAdmin(){ try{ const j=await (await fetch('/admin/queue')).json(); const items=j.items||[];
+   $('adminh').textContent='🚨 Admin queue ('+items.length+')';
+   $('adminq').innerHTML = items.length ? items.map(i=>'• ['+(i.type||'?')+'] '+(i.from||'')+': '+esc(i.summary||'')+(i.order_id?(' ('+i.order_id+')'):'')).join('<br>') : '(empty)';
+ }catch(e){} }
+ setInterval(pollAdmin, 5000); pollAdmin();
  // chef/driver inbox polling
  function startPoll(phone){
    const p={phone, seen:0}; pollers.push(p);

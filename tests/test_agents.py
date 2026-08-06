@@ -21,18 +21,25 @@ def test_customer_agent_bindings():
 
 def test_master_agent_bindings():
     names = set(master_agent.tool_map)
-    assert names == {"mint_payment_link", "process_payment_webhook", "relay_dietary_request"}
+    assert names == {"mint_payment_link", "process_payment_webhook", "relay_dietary_request",
+                     "escalate_to_admin"}
+
+
+def test_escalate_bound_to_every_agent():
+    for a in (customer_agent, chef_agent, driver_agent, master_agent):
+        assert "escalate_to_admin" in a.tool_map
 
 
 def test_chef_agent_bindings():
     names = set(chef_agent.tool_map)
     assert names == {"get_chef_profile", "get_chef_batch", "toggle_dish_stock",
                      "set_daily_capacity", "mark_order_ready", "respond_to_dietary_request",
-                     "respond_to_cancellation", "respond_to_driver_query"}
+                     "respond_to_cancellation", "respond_to_driver_query", "escalate_to_admin"}
 
 
 def test_driver_agent_bindings():
     names = set(driver_agent.tool_map)
     assert names == {"get_driver_profile", "update_duty_status", "get_driver_route",
-                     "confirm_pickup", "confirm_delivery", "ask_chef_status", "report_address_issue"}
+                     "confirm_pickup", "confirm_delivery", "ask_chef_status", "report_address_issue",
+                     "escalate_to_admin"}
     assert "register_driver" not in names   # drivers are admin/seed-onboarded

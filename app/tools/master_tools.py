@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.ids import generate_id
 from app.db.session import SessionFactory, transaction
 from app.executors.customer import (
     execute_payment_record_creation,
@@ -30,6 +31,7 @@ from app.executors.customer import (
 from app.executors.driver import execute_driver_trip_initialization
 from app.executors.master import (
     execute_cutoff_batch_lock_and_routes_creation,
+    execute_hitl_session_create_or_resume,
     execute_meal_window_lock_and_creation,
     execute_outbound_whatsapp_enqueue,
     execute_system_audit_log,
@@ -267,11 +269,11 @@ class RunCutoffBatchInput(BaseModel):
 async def _run_cutoff_batch(
     session: AsyncSession, *, window: str, service_date: date
 ) -> dict[str, Any]:
-    """Lock the window and batch every kitchen's CONFIRMED orders. {status, batches, ...}.
+    """Batch every kitchen's CONFIRMED orders (window is NOT locked — re-runnable). {status, batches, ...}.
 
-    Guards:
-      - no CONFIRMED orders      -> NO_ORDERS
-      - window already locked    -> ALREADY_BATCHED (idempotent)
+    Guard: no CONFIRMED orders -> NO_ORDERS. Idempotent at the ORDER level (a re-run
+    finds nothing confirmed and returns NO_ORDERS; orders confirmed after a run still
+    get batched next time). The window stays OPEN so ordering never gets blocked.
     """
     cutoff_time = LUNCH_CUTOFF if window.upper() == "LUNCH" else DINNER_CUTOFF
     cutoff_at = datetime.combine(service_date, cutoff_time)
@@ -439,4 +441,50 @@ async def run_cutoff_batch(window: str, service_date: str) -> str:
     """Master engine: lock the window, batch every kitchen's confirmed orders, dispatch chef & driver."""
     async with transaction() as session:
         res = await _run_cutoff_batch(session, window=window, service_date=date.fromisoformat(service_date))
+        return res["message"]
+
+
+# =============================================================================
+# TOOL: escalate_to_admin  (UNIVERSAL — bound to every agent)
+#
+# The one human-in-the-loop escape hatch. Any agent that's stuck (an exception it
+# can't resolve after trying) records an escalation in the admin queue
+# (system_hitl_sessions, waiting_on=ADMIN) + an audit entry. Deterministic tool;
+# the *decision* to escalate is the agent's (LLM) judgment.
+# =============================================================================
+ESCALATION_TYPES = ("NO_DRIVER", "REPEATED_FAILURE", "AMBIGUOUS", "STUCK")
+
+
+class EscalateToAdminInput(BaseModel):
+    source_role: str = Field(..., description="Who is escalating: CUSTOMER / CHEF / DRIVER / MASTER.")
+    escalation_type: str = Field(..., description="NO_DRIVER | REPEATED_FAILURE | AMBIGUOUS | STUCK.")
+    summary: str = Field(..., description="Short human-readable description of what's wrong.")
+    order_id: str | None = Field(default=None, description="Related order id, if any.")
+
+
+async def _escalate_to_admin(
+    session: AsyncSession, *, source_role: str, escalation_type: str, summary: str,
+    order_id: str | None = None, refs: dict | None = None,
+) -> dict[str, Any]:
+    """Record an escalation for the admin queue + audit. {status: ESCALATED, hitl_id, message}."""
+    etype = escalation_type if escalation_type in ESCALATION_TYPES else "STUCK"
+    hitl = await execute_hitl_session_create_or_resume(
+        session, thread_id=order_id or generate_id("esc"), interrupt_type="ESCALATION",
+        waiting_on_role="ADMIN", order_id=order_id,
+        payload={"type": etype, "summary": summary, "source_role": source_role, "refs": refs or {}},
+        status="WAITING", expires_in_mins=24 * 60,
+    )
+    await execute_system_audit_log(
+        session, event_type="ESCALATED", source_role=source_role, target_role="ADMIN",
+        order_id=order_id, payload={"type": etype, "summary": summary}, severity="HIGH")
+    return {"status": "ESCALATED", "hitl_id": hitl.session_id,
+            "message": f"I've flagged this to the admin team (ref {hitl.session_id}). They'll follow up shortly."}
+
+
+@tool("escalate_to_admin", args_schema=EscalateToAdminInput)
+async def escalate_to_admin(source_role: str, escalation_type: str, summary: str, order_id: str | None = None) -> str:
+    """Escalate to a human admin when you're stuck and can't resolve something yourself. Last resort."""
+    async with transaction() as session:
+        res = await _escalate_to_admin(
+            session, source_role=source_role, escalation_type=escalation_type, summary=summary, order_id=order_id)
         return res["message"]

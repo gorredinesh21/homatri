@@ -11,8 +11,10 @@ from app.models.customer import CustomerOrder, CustomerPayment, CustomerProfile
 from app.models.driver import DriverProfile, DriverTripStatus
 from app.models.system import SystemDeliveryRoute, SystemMealWindow, SystemOutboundQueue
 from app.tools.customer_tools import _create_order
+from app.models.system import SystemHitlSession
 from app.tools.master_tools import (
     _allocate_driver,
+    _escalate_to_admin,
     _mint_payment_link,
     _process_payment_webhook,
     _run_cutoff_batch,
@@ -190,3 +192,24 @@ async def test_run_cutoff_batch_no_driver(db_session: AsyncSession):
     win = (await db_session.execute(
         select(SystemMealWindow).where(SystemMealWindow.service_date == SERVICE_DATE))).scalars().first()
     assert win.status == "OPEN"
+
+
+# ---- escalate_to_admin ----
+
+@pytest.mark.asyncio
+async def test_escalate_to_admin_records_admin_queue(db_session: AsyncSession):
+    res = await _escalate_to_admin(db_session, source_role="DRIVER", escalation_type="NO_DRIVER",
+                                   summary="No driver for the dinner batch", order_id="ord_x")
+    assert res["status"] == "ESCALATED" and res["hitl_id"]
+    row = (await db_session.execute(
+        select(SystemHitlSession).where(SystemHitlSession.waiting_on_role == "ADMIN"))).scalars().first()
+    assert row is not None and row.status == "WAITING"
+    assert row.payload["type"] == "NO_DRIVER" and row.payload["source_role"] == "DRIVER"
+
+
+@pytest.mark.asyncio
+async def test_escalate_unknown_type_falls_back_to_stuck(db_session: AsyncSession):
+    res = await _escalate_to_admin(db_session, source_role="CHEF", escalation_type="WEIRD", summary="huh")
+    assert res["status"] == "ESCALATED"
+    row = (await db_session.execute(select(SystemHitlSession))).scalars().first()
+    assert row.payload["type"] == "STUCK"
