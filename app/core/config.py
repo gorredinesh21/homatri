@@ -11,14 +11,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=".env",
+        env_file=(".env", ".env.local", ".env.dev"),
         env_file_encoding="utf-8",
         extra="ignore",
         case_sensitive=False,
     )
 
+    # ---- Environment Lifecycle ----
+    env_state: str = "development"  # Options: 'development', 'staging', 'production'
+
     # ---- Database (PostgreSQL) ----
     database_url: str = "postgresql+asyncpg://dinesh:homatri_pass@localhost:5432/homatri_db"
+
 
     # ---- LangSmith observability ----
     langchain_tracing_v2: bool = False
