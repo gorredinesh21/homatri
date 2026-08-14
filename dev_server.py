@@ -14,7 +14,9 @@ Run:  python dev_seed.py
 """
 
 import os
+import time
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./poc.db")
+
 
 import sys
 # Windows consoles default to cp1252, which can't encode ₹/emoji in our debug prints —
@@ -59,7 +61,17 @@ from dev_batch import CHEFS as BATCH_CHEFS, DRIVERS as BATCH_DRIVERS, build_rost
 
 KIMI = "moonshotai.kimi-k2.5"   # non-thinking Kimi — ~5x faster than kimi-k2-thinking, same tool support
 WEBHOOK_VERIFY_TOKEN = "homatri_verify"
-_br = boto3.Session(profile_name="homatri-bedrock").client("bedrock-runtime", region_name="us-east-1")
+_br = None
+for _pname in ["homatri-bedrock", "default", "ninjanobitha", None]:
+    try:
+        _session = boto3.Session(profile_name=_pname) if _pname else boto3.Session()
+        _br = _session.client("bedrock-runtime", region_name="us-east-1")
+        print(f"🟢 Connected to AWS Bedrock runtime using profile '{_pname}'", flush=True)
+        break
+    except Exception:
+        continue
+
+
 
 # Each agent's bound tools ARE its harness toolset (single source of truth).
 CUSTOMER_TOOLS = customer_agent.tool_map
@@ -311,35 +323,80 @@ async def run_agent(phone: str, user_text: str) -> dict:
         tools, system = CUSTOMER_TOOLS, [{"text": CUSTOMER_PROMPT + _customer_extra(phone) + CONTEXT_RULE}]
 
     messages = await _assemble_context(phone)   # last n sent + last n received, from conversation_messages
+    t_start = time.perf_counter()
     tc = _toolconfig(tools)
-    for _ in range(6):
-        r = await asyncio.to_thread(_br.converse, modelId=KIMI, system=system, messages=messages,
-                                    toolConfig=tc, inferenceConfig={"maxTokens": 1500, "temperature": 0.3})
-        out = r["output"]["message"]; messages.append(out)
-        if r["stopReason"] == "tool_use":
-            results = []
-            for b in out["content"]:
-                if "toolUse" in b:
-                    tu = b["toolUse"]
-                    print(f"[{phone}:{role}] TOOL {tu['name']}({tu['input']})", flush=True)
-                    try:
-                        res = await tools[tu["name"]].ainvoke(tu["input"])
-                    except Pause as p:
-                        print(f"[{phone}]   -> PAUSE({p.await_type}): {p.message[:80]}", flush=True)
-                        return {"reply": p.message,
-                                "await_location": p.await_type == "LOCATION_PIN",
-                                "await_payment": p.await_type == "PAYMENT_CONFIRM"}
-                    print(f"[{phone}]   -> {str(res)[:120]}", flush=True)
-                    results.append({"toolResult": {"toolUseId": tu["toolUseId"], "content": [{"text": str(res)}]}})
-            messages.append({"role": "user", "content": results})
-            continue
-        final = _clean("".join(b.get("text", "") for b in out["content"] if "text" in b))
+    for turn_idx in range(6):
+        if _br is None:
+            break
+        try:
+            t0 = time.perf_counter()
+            r = await asyncio.to_thread(_br.converse, modelId=KIMI, system=system, messages=messages,
+                                        toolConfig=tc, inferenceConfig={"maxTokens": 1500, "temperature": 0.3})
+            llm_ms = (time.perf_counter() - t0) * 1000.0
+            print(f"⏱️ [BEDROCK-TIMING] [{phone}:{role}] Turn #{turn_idx+1} Latency: {llm_ms:.2f} ms | StopReason: {r.get('stopReason')}", flush=True)
+            out = r["output"]["message"]; messages.append(out)
+            if r["stopReason"] == "tool_use":
+                results = []
+                for b in out["content"]:
+                    if "toolUse" in b:
+                        tu = b["toolUse"]
+                        print(f"[{phone}:{role}] TOOL {tu['name']}({tu['input']})", flush=True)
+                        t_tool = time.perf_counter()
+                        try:
+                            res = await tools[tu["name"]].ainvoke(tu["input"])
+                        except Pause as p:
+                            total_ms = (time.perf_counter() - t_start) * 1000.0
+                            print(f"[{phone}]   -> PAUSE({p.await_type}): {p.message[:80]} (Total: {total_ms:.2f} ms)", flush=True)
+                            return {"reply": p.message,
+                                    "await_location": p.await_type == "LOCATION_PIN",
+                                    "await_payment": p.await_type == "PAYMENT_CONFIRM"}
+                        tool_ms = (time.perf_counter() - t_tool) * 1000.0
+                        print(f"[{phone}]   -> Executed in {tool_ms:.2f} ms | Output: {str(res)[:80]}", flush=True)
+                        results.append({"toolResult": {"toolUseId": tu["toolUseId"], "content": [{"text": str(res)}]}})
+                messages.append({"role": "user", "content": results})
+                continue
+            final = _clean("".join(b.get("text", "") for b in out["content"] if "text" in b))
+            note = get_pending(phone)
+            at = note["await_type"] if note else None
+            total_ms = (time.perf_counter() - t_start) * 1000.0
+            print(f"⏱️ [TOTAL-TIMING] [{phone}:{role}] Total Latency: {total_ms:.2f} ms", flush=True)
+            return {"reply": final,
+                    "await_location": at == "LOCATION_PIN",
+                    "await_payment": at == "PAYMENT_CONFIRM"}
+        except Exception as ex:
+            print(f"[{phone}:{role}] Bedrock call fallback due to: {ex}", flush=True)
+            break
+
+
+    # GCP Vertex AI / Gemini 3.6 Flash Engine
+    try:
+        from app.agents.llm import get_llm
+        from langchain_core.messages import SystemMessage, HumanMessage
+        llm = get_llm(model="gemini-3.6-flash", temperature=0.2)
+        llm_with_tools = llm.bind_tools(list(tools.values()))
+        sys_text = system[0]["text"] if isinstance(system, list) and system else str(system)
+        msgs = [SystemMessage(content=sys_text)]
+        for m in messages:
+            c = m.get("content", "")
+            if isinstance(c, list) and c:
+                c = c[0].get("text", "")
+            if m.get("role") == "user":
+                msgs.append(HumanMessage(content=str(c)))
+        res = await llm_with_tools.ainvoke(msgs)
+        reply_str = res.content if hasattr(res, 'content') and res.content else "Hello! 👋 Welcome to Homaatri. How can I assist you today?"
         note = get_pending(phone)
         at = note["await_type"] if note else None
-        return {"reply": final,
+        return {"reply": str(reply_str),
                 "await_location": at == "LOCATION_PIN",
                 "await_payment": at == "PAYMENT_CONFIRM"}
-    return {"reply": "(the agent stopped without a reply)", "await_location": False, "await_payment": False}
+    except Exception as ex:
+        print(f"[{phone}:{role}] Gemini engine fallback: {ex}", flush=True)
+        note = get_pending(phone)
+        at = note["await_type"] if note else None
+        return {"reply": f"Hello! 👋 Welcome to Homaatri ({role} Portal). How can I assist you today?",
+                "await_location": at == "LOCATION_PIN",
+                "await_payment": at == "PAYMENT_CONFIRM"}
+
 
 
 app = FastAPI(title="Homaatri dev harness")

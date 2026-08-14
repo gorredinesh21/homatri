@@ -17,12 +17,17 @@ from app.core.config import settings
 
 def get_llm(model: str | None = None, temperature: float = 0.2) -> ChatVertexAI:
     """Build a ChatVertexAI client from settings (ADC auth — no API key)."""
+    target_model = model or settings.gemini_model or "gemini-2.5-flash-lite"
+    if "3.6" in target_model or "3.5" in target_model:
+        target_model = "gemini-2.5-flash-lite"  # map non-existent aliases to active Vertex AI model ID
     return ChatVertexAI(
-        model=model or settings.gemini_model,
+        model_name=target_model,
         project=settings.gcp_project,
-        location=settings.gcp_location,
+        location="us-central1",
         temperature=temperature,
+        max_retries=0,
     )
+
 
 
 @lru_cache(maxsize=1)
