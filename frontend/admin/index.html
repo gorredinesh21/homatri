@@ -378,7 +378,53 @@
             </table>
         </section>
 
-        <!-- 4. Live WhatsApp Message Feed -->
+        <!-- 4. Chef & Kitchen Partner Directory -->
+        <section class="panel-card full-width">
+            <div class="panel-header">
+                <div class="panel-title">👨‍🍳 Chef & Kitchen Partners Directory</div>
+                <button class="action-btn" onclick="openAddChefModal()">+ Add New Chef Partner</button>
+            </div>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Chef / Kitchen Name</th>
+                        <th>WhatsApp Phone</th>
+                        <th>Locality / Address</th>
+                        <th>Dietary Type</th>
+                        <th>GPS Coordinates (Lat, Lng)</th>
+                        <th>FSSAI License</th>
+                    </tr>
+                </thead>
+                <tbody id="chefs-table-body">
+                    <tr><td colspan="6" style="text-align: center;">Loading chefs directory...</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- 5. Delivery Rider Fleet Directory -->
+        <section class="panel-card full-width">
+            <div class="panel-header">
+                <div class="panel-title">🛵 Delivery Rider Fleet Directory</div>
+                <button class="action-btn" onclick="openAddDriverModal()" style="background-color: var(--accent-blue);">+ Add New Delivery Rider</button>
+            </div>
+            <table class="data-table">
+                <thead>
+                    <tr>
+                        <th>Rider Name</th>
+                        <th>WhatsApp Phone</th>
+                        <th>Vehicle Type</th>
+                        <th>Vehicle Number</th>
+                        <th>Vehicle Model</th>
+                        <th>Shift Status</th>
+                    </tr>
+                </thead>
+                <tbody id="drivers-table-body">
+                    <tr><td colspan="6" style="text-align: center;">Loading riders directory...</td></tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- 6. Live WhatsApp Message Feed -->
         <section class="panel-card full-width">
             <div class="panel-header">
                 <div class="panel-title">💬 Live WhatsApp Conversation Stream</div>
@@ -389,6 +435,96 @@
         </section>
 
     </main>
+
+    <!-- Add Chef Modal -->
+    <div class="modal-overlay" id="add-chef-modal">
+        <div class="modal-box">
+            <h3>👨‍🍳 Add New Home Chef Partner</h3>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px;">Enter kitchen details and location coordinates for automatic route optimization.</p>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                <div>
+                    <label style="font-size: 0.8rem; font-weight: 600;">Chef Name *</label>
+                    <input type="text" id="chef-name" class="form-input" placeholder="e.g. Chef Sunita Sharma" style="width:100%; padding:8px; background:var(--header-bg); border:1px solid var(--border-color); color:#fff; border-radius:6px;">
+                </div>
+                <div>
+                    <label style="font-size: 0.8rem; font-weight: 600;">Kitchen Name *</label>
+                    <input type="text" id="kitchen-name" class="form-input" placeholder="e.g. Indravati Pure Veg Tiffins" style="width:100%; padding:8px; background:var(--header-bg); border:1px solid var(--border-color); color:#fff; border-radius:6px;">
+                </div>
+                <div>
+                    <label style="font-size: 0.8rem; font-weight: 600;">WhatsApp Phone Number *</label>
+                    <input type="text" id="chef-phone" class="form-input" placeholder="e.g. 9876543210" style="width:100%; padding:8px; background:var(--header-bg); border:1px solid var(--border-color); color:#fff; border-radius:6px;">
+                </div>
+                <div>
+                    <label style="font-size: 0.8rem; font-weight: 600;">Dietary Type *</label>
+                    <select id="chef-diet" style="width:100%; padding:8px; background:var(--header-bg); border:1px solid var(--border-color); color:#fff; border-radius:6px;">
+                        <option value="VEG">VEG (Pure Veg)</option>
+                        <option value="NON_VEG">NON_VEG</option>
+                        <option value="BOTH">BOTH (Veg & Non-Veg)</option>
+                    </select>
+                </div>
+            </div>
+            <div style="margin-top: 10px;">
+                <label style="font-size: 0.8rem; font-weight: 600;">Full Address *</label>
+                <textarea id="chef-address" rows="2" placeholder="e.g. Flat 302, Indravati CHS, Sector 6, Ghansoli" style="width:100%; padding:8px; background:var(--header-bg); border:1px solid var(--border-color); color:#fff; border-radius:6px;"></textarea>
+            </div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; margin-top: 10px;">
+                <div>
+                    <label style="font-size: 0.8rem; font-weight: 600;">Locality / Sector</label>
+                    <input type="text" id="chef-locality" placeholder="e.g. Sector 6, Ghansoli" style="width:100%; padding:8px; background:var(--header-bg); border:1px solid var(--border-color); color:#fff; border-radius:6px;">
+                </div>
+                <div>
+                    <label style="font-size: 0.8rem; font-weight: 600;">Latitude Coordinates *</label>
+                    <input type="number" step="0.000001" id="chef-lat" value="19.1240" style="width:100%; padding:8px; background:var(--header-bg); border:1px solid var(--border-color); color:#fff; border-radius:6px;">
+                </div>
+                <div>
+                    <label style="font-size: 0.8rem; font-weight: 600;">Longitude Coordinates *</label>
+                    <input type="number" step="0.000001" id="chef-lng" value="73.0018" style="width:100%; padding:8px; background:var(--header-bg); border:1px solid var(--border-color); color:#fff; border-radius:6px;">
+                </div>
+            </div>
+            <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px;">
+                <button class="btn-refresh" onclick="closeChefModal()">Cancel</button>
+                <button class="action-btn" onclick="submitAddChef()">Save Chef Partner</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Add Driver Modal -->
+    <div class="modal-overlay" id="add-driver-modal">
+        <div class="modal-box">
+            <h3>🛵 Add New Delivery Rider</h3>
+            <p style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 12px;">Register a delivery partner to receive automated route assignments on WhatsApp.</p>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                <div>
+                    <label style="font-size: 0.8rem; font-weight: 600;">Rider Full Name *</label>
+                    <input type="text" id="driver-name" placeholder="e.g. Vikram Solanki" style="width:100%; padding:8px; background:var(--header-bg); border:1px solid var(--border-color); color:#fff; border-radius:6px;">
+                </div>
+                <div>
+                    <label style="font-size: 0.8rem; font-weight: 600;">WhatsApp Phone Number *</label>
+                    <input type="text" id="driver-phone" placeholder="e.g. 9111222333" style="width:100%; padding:8px; background:var(--header-bg); border:1px solid var(--border-color); color:#fff; border-radius:6px;">
+                </div>
+                <div>
+                    <label style="font-size: 0.8rem; font-weight: 600;">Vehicle Type *</label>
+                    <select id="driver-vehicle-type" style="width:100%; padding:8px; background:var(--header-bg); border:1px solid var(--border-color); color:#fff; border-radius:6px;">
+                        <option value="BIKE">BIKE / Scooter</option>
+                        <option value="EV_SCOOTER">Electric Scooter</option>
+                        <option value="CYCLE">Bicycle</option>
+                    </select>
+                </div>
+                <div>
+                    <label style="font-size: 0.8rem; font-weight: 600;">Vehicle Number *</label>
+                    <input type="text" id="driver-vehicle-number" placeholder="e.g. MH43 AB 1234" style="width:100%; padding:8px; background:var(--header-bg); border:1px solid var(--border-color); color:#fff; border-radius:6px;">
+                </div>
+            </div>
+            <div style="margin-top: 10px;">
+                <label style="font-size: 0.8rem; font-weight: 600;">Vehicle Model (Optional)</label>
+                <input type="text" id="driver-vehicle-model" placeholder="e.g. Honda Activa 6G" style="width:100%; padding:8px; background:var(--header-bg); border:1px solid var(--border-color); color:#fff; border-radius:6px;">
+            </div>
+            <div style="display: flex; gap: 10px; justify-content: flex-end; margin-top: 16px;">
+                <button class="btn-refresh" onclick="closeDriverModal()">Cancel</button>
+                <button class="action-btn" onclick="submitAddDriver()" style="background-color: var(--accent-blue);">Save Delivery Rider</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Resolution Modal -->
     <div class="modal-overlay" id="resolution-modal">
@@ -437,8 +573,135 @@
                 loadPipelineSummary(),
                 loadMealWindows(),
                 loadEscalations(),
+                loadChefs(),
+                loadDrivers(),
                 loadLiveChatFeed()
             ]);
+        }
+
+        async function loadChefs() {
+            try {
+                const res = await fetch('/api/admin/chefs');
+                const chefs = await res.json();
+                const tbody = document.getElementById('chefs-table-body');
+                if(!chefs.length) {
+                    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;">No chefs registered.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = chefs.map(c => `
+                    <tr>
+                        <td><strong>${c.kitchen_name}</strong><br><span style="font-size:0.75rem; color:var(--text-secondary);">${c.chef_name}</span></td>
+                        <td>+91${c.chef_phone}</td>
+                        <td>${c.address} (${c.apartment_or_locality || 'Navi Mumbai'})</td>
+                        <td><span class="status-badge badge-pending">${c.dietary_type}</span></td>
+                        <td style="font-family:monospace; font-size:0.8rem;">📍 ${c.latitude.toFixed(4)}, ${c.longitude.toFixed(4)}</td>
+                        <td>${c.fssai_license_number || 'Pending Verification'}</td>
+                    </tr>
+                `).join('');
+            } catch(e) { console.error("Error loading chefs:", e); }
+        }
+
+        async function loadDrivers() {
+            try {
+                const res = await fetch('/api/admin/drivers');
+                const drivers = await res.json();
+                const tbody = document.getElementById('drivers-table-body');
+                if(!drivers.length) {
+                    tbody.innerHTML = '<tr><td colspan="6" style="text-align: center;">No delivery riders registered.</td></tr>';
+                    return;
+                }
+                tbody.innerHTML = drivers.map(d => `
+                    <tr>
+                        <td><strong>${d.driver_name}</strong></td>
+                        <td>+91${d.driver_phone}</td>
+                        <td><span class="status-badge badge-resolved">${d.vehicle_type}</span></td>
+                        <td><strong>${d.vehicle_number}</strong></td>
+                        <td>${d.vehicle_model || 'N/A'}</td>
+                        <td><span class="status-badge ${d.is_on_shift ? 'badge-resolved' : 'badge-pending'}">${d.is_on_shift ? 'ON SHIFT' : 'OFF SHIFT'}</span></td>
+                    </tr>
+                `).join('');
+            } catch(e) { console.error("Error loading drivers:", e); }
+        }
+
+        function openAddChefModal() { document.getElementById('add-chef-modal').style.display = 'flex'; }
+        function closeChefModal() { document.getElementById('add-chef-modal').style.display = 'none'; }
+        function openAddDriverModal() { document.getElementById('add-driver-modal').style.display = 'flex'; }
+        function closeDriverModal() { document.getElementById('add-driver-modal').style.display = 'none'; }
+
+        async function submitAddChef() {
+            const chefName = document.getElementById('chef-name').value;
+            const kitchenName = document.getElementById('kitchen-name').value;
+            const chefPhone = document.getElementById('chef-phone').value;
+            const chefDiet = document.getElementById('chef-diet').value;
+            const chefAddress = document.getElementById('chef-address').value;
+            const chefLocality = document.getElementById('chef-locality').value;
+            const chefLat = parseFloat(document.getElementById('chef-lat').value);
+            const chefLng = parseFloat(document.getElementById('chef-lng').value);
+
+            if(!chefName || !kitchenName || !chefPhone || !chefAddress) {
+                alert("Please fill in all required fields (Chef Name, Kitchen Name, Phone, Address).");
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/admin/chefs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        chef_phone: chefPhone,
+                        chef_name: chefName,
+                        kitchen_name: kitchenName,
+                        address: chefAddress,
+                        apartment_or_locality: chefLocality || null,
+                        latitude: chefLat,
+                        longitude: chefLng,
+                        dietary_type: chefDiet
+                    })
+                });
+                const result = await res.json();
+                if(res.ok) {
+                    alert(`🟢 ${result.message}`);
+                    closeChefModal();
+                    loadAllAdminData();
+                } else {
+                    alert(`🔴 ${result.detail || 'Error creating chef profile.'}`);
+                }
+            } catch(e) { alert("Error: " + e); }
+        }
+
+        async function submitAddDriver() {
+            const driverName = document.getElementById('driver-name').value;
+            const driverPhone = document.getElementById('driver-phone').value;
+            const vehicleType = document.getElementById('driver-vehicle-type').value;
+            const vehicleNumber = document.getElementById('driver-vehicle-number').value;
+            const vehicleModel = document.getElementById('driver-vehicle-model').value;
+
+            if(!driverName || !driverPhone || !vehicleNumber) {
+                alert("Please fill in all required fields (Rider Name, Phone, Vehicle Number).");
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/admin/drivers', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        driver_phone: driverPhone,
+                        driver_name: driverName,
+                        vehicle_type: vehicleType,
+                        vehicle_number: vehicleNumber,
+                        vehicle_model: vehicleModel || null
+                    })
+                });
+                const result = await res.json();
+                if(res.ok) {
+                    alert(`🟢 ${result.message}`);
+                    closeDriverModal();
+                    loadAllAdminData();
+                } else {
+                    alert(`🔴 ${result.detail || 'Error creating rider profile.'}`);
+                }
+            } catch(e) { alert("Error: " + e); }
         }
 
         async function loadPipelineSummary() {
