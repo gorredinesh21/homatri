@@ -27,6 +27,7 @@ from backend.app.executors.master import execute_meal_window_lock_and_creation
 from backend.app.models.admin import AdminActivityLog, AdminUser
 from backend.app.models.chef import ChefProfile
 from backend.app.models.customer import CustomerOrder
+from backend.app.models.driver import DriverProfile
 from backend.app.models.shared import ConversationMessage
 from backend.app.models.system import SystemHitlSession, SystemMealWindow
 from backend.app.services.whatsapp_service import send_whatsapp_text_message
@@ -57,6 +58,30 @@ class LoginInput(BaseModel):
 class LockWindowInput(BaseModel):
     meal_type: str = "LUNCH"  # LUNCH or DINNER
     service_date: str | None = None  # YYYY-MM-DD (defaults to today)
+
+
+class CreateChefInput(BaseModel):
+    chef_phone: str
+    chef_name: str
+    kitchen_name: str
+    address: str
+    apartment_or_locality: str | None = None
+    city: str = "Navi Mumbai"
+    pincode: str | None = None
+    latitude: float = 19.1240
+    longitude: float = 73.0018
+    dietary_type: str = "VEG"
+    fssai_license_number: str | None = None
+    kitchen_bio: str | None = None
+
+
+class CreateDriverInput(BaseModel):
+    driver_phone: str
+    driver_name: str
+    vehicle_type: str = "BIKE"
+    vehicle_number: str
+    vehicle_model: str | None = None
+    driver_license_number: str | None = None
 
 
 class ResolveEscalationInput(BaseModel):
@@ -383,3 +408,110 @@ async def get_chat_feed(
             }
             for m in messages
         ]
+
+
+# ==============================================================================
+# 6. CHEF & RIDER MANAGEMENT ENDPOINTS
+# ==============================================================================
+@router.get("/chefs")
+async def list_chefs(current_admin: dict[str, Any] = Depends(get_current_admin)):
+    """List all registered chefs and their location coordinates."""
+    async with SessionFactory() as session:
+        res = await session.execute(select(ChefProfile).order_by(ChefProfile.created_at.desc()))
+        chefs = res.scalars().all()
+        return [
+            {
+                "chef_phone": c.chef_phone,
+                "chef_name": c.chef_name,
+                "kitchen_name": c.kitchen_name,
+                "address": c.address,
+                "apartment_or_locality": c.apartment_or_locality,
+                "city": c.city,
+                "pincode": c.pincode,
+                "latitude": float(c.latitude),
+                "longitude": float(c.longitude),
+                "dietary_type": c.dietary_type,
+                "fssai_license_number": c.fssai_license_number,
+                "active_status": c.active_status,
+            }
+            for c in chefs
+        ]
+
+
+@router.post("/chefs")
+async def create_chef(
+    payload: CreateChefInput,
+    current_admin: dict[str, Any] = Depends(get_current_admin)
+):
+    """Add a new Chef profile with exact location coordinates."""
+    from decimal import Decimal
+    async with SessionFactory() as session:
+        existing = await session.get(ChefProfile, payload.chef_phone)
+        if existing:
+            raise HTTPException(status_code=400, detail="Chef with this phone number already exists.")
+
+        chef = ChefProfile(
+            chef_phone=payload.chef_phone,
+            chef_name=payload.chef_name,
+            kitchen_name=payload.kitchen_name,
+            address=payload.address,
+            apartment_or_locality=payload.apartment_or_locality,
+            city=payload.city,
+            pincode=payload.pincode,
+            latitude=Decimal(str(payload.latitude)),
+            longitude=Decimal(str(payload.longitude)),
+            dietary_type=payload.dietary_type,
+            fssai_license_number=payload.fssai_license_number,
+            kitchen_bio=payload.kitchen_bio,
+            is_verified=True,
+            active_status=True
+        )
+        session.add(chef)
+        await session.commit()
+        return {"status": "SUCCESS", "message": f"Chef {payload.chef_name} added successfully!"}
+
+
+@router.get("/drivers")
+async def list_drivers(current_admin: dict[str, Any] = Depends(get_current_admin)):
+    """List all registered delivery drivers."""
+    async with SessionFactory() as session:
+        res = await session.execute(select(DriverProfile).order_by(DriverProfile.created_at.desc()))
+        drivers = res.scalars().all()
+        return [
+            {
+                "driver_phone": d.driver_phone,
+                "driver_name": d.driver_name,
+                "vehicle_type": d.vehicle_type,
+                "vehicle_number": d.vehicle_number,
+                "vehicle_model": d.vehicle_model,
+                "is_on_shift": d.is_on_shift,
+                "active_status": d.active_status,
+            }
+            for d in drivers
+        ]
+
+
+@router.post("/drivers")
+async def create_driver(
+    payload: CreateDriverInput,
+    current_admin: dict[str, Any] = Depends(get_current_admin)
+):
+    """Add a new Delivery Rider profile."""
+    async with SessionFactory() as session:
+        existing = await session.get(DriverProfile, payload.driver_phone)
+        if existing:
+            raise HTTPException(status_code=400, detail="Driver with this phone number already exists.")
+
+        driver = DriverProfile(
+            driver_phone=payload.driver_phone,
+            driver_name=payload.driver_name,
+            vehicle_type=payload.vehicle_type,
+            vehicle_number=payload.vehicle_number,
+            vehicle_model=payload.vehicle_model,
+            driver_license_number=payload.driver_license_number,
+            is_on_shift=True,
+            active_status=True
+        )
+        session.add(driver)
+        await session.commit()
+        return {"status": "SUCCESS", "message": f"Rider {payload.driver_name} added successfully!"}
