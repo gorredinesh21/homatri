@@ -52,10 +52,27 @@ from backend.app.api.admin import router as admin_router
 logger = logging.getLogger("homatri_server")
 WEBHOOK_VERIFY_TOKEN = getattr(settings, "webhook_verify_token", "homatri_verify")
 
+from contextlib import asynccontextmanager
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan event ensuring all database tables are created on startup."""
+    try:
+        from backend.app.db.base import Base
+        from backend.app.db.session import engine
+        import backend.app.models  # noqa: F401
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+        logger.info("🟢 Database tables verified/created successfully on startup!")
+    except Exception as e:
+        logger.error(f"🔴 Database table creation on startup notice: {e}")
+    yield
+
 app = FastAPI(
     title="Homaatri Agentic Backend Engine",
     description="Stateless agentic multi-role WhatsApp concierges powered by GCP Vertex AI",
-    version="1.0.0"
+    version="1.0.0",
+    lifespan=lifespan
 )
 
 # Register Admin Operations Router
