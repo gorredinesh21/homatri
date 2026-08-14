@@ -32,7 +32,7 @@ class Settings(BaseSettings):
     # ---- GCP Vertex AI / Gemini ----
     gcp_project: str = "homatri-503308"
     gcp_location: str = "global"
-    gemini_model: str = "gemini-3.6-flash"
+    gemini_model: str = "gemini-2.5-flash-lite"
 
     # ---- Business config fallbacks (authoritative values live in system_settings) ----
     default_delivery_fee: float = 30.00
