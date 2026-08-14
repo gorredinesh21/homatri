@@ -6,10 +6,9 @@ echo "🚀 Homaatri Container Entrypoint Starting..."
 # Ensure PYTHONPATH includes root directory
 export PYTHONPATH="/app:${PYTHONPATH}"
 
-# Execute Database Auto-Seeding & Tables Setup
+# Execute Database Auto-Seeding & Tables Setup in background
 echo "⚡ Running Database Auto-Seeding & Schema Setup..."
-python3 backend/dev_reset.py || echo "⚠️ Database reset skipped or already initialized."
-python3 backend/dev_seed.py || echo "⚠️ Database seed skipped or already initialized."
+(python3 backend/dev_reset.py && python3 backend/dev_seed.py || echo "⚠️ Database seed notice") &
 
 # Set default PORT if not set by Cloud Run
 PORT="${PORT:-8000}"
