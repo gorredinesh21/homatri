@@ -1,0 +1,385 @@
+"""Admin Operations REST API Router with JWT & Cookie Authentication.
+
+Endpoints servicing the Admin Operations Portal:
+- POST /api/admin/login: Admin Login & JWT Cookie issuance
+- GET /api/admin/me: Get active admin user profile
+- POST /api/admin/logout: Admin Logout & Cookie clearing
+- POST /api/admin/lock-window: Lock meal window (LUNCH/DINNER) & run cutoff batching
+- GET /api/admin/escalations: List active HITL escalations
+- POST /api/admin/escalations/resolve: Resolve HITL escalation with admin note/action
+- GET /api/admin/pipeline: Today's order stage counts & kitchen capacity
+- GET /api/admin/chats: Live WhatsApp conversation feeds
+"""
+
+from __future__ import annotations
+
+from datetime import date, datetime, timedelta
+import hashlib
+import logging
+from typing import Any
+
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response, status
+from pydantic import BaseModel
+from sqlalchemy import func, select, update
+
+from backend.app.db.session import SessionFactory
+from backend.app.executors.master import execute_meal_window_lock_and_creation
+from backend.app.models.admin import AdminActivityLog, AdminUser
+from backend.app.models.chef import ChefProfile
+from backend.app.models.customer import CustomerOrder
+from backend.app.models.shared import ConversationMessage
+from backend.app.models.system import SystemHitlSession, SystemMealWindow
+from backend.app.services.whatsapp_service import send_whatsapp_text_message
+from backend.app.tools.master_tools import _run_cutoff_batch
+
+logger = logging.getLogger("admin_api")
+
+router = APIRouter(prefix="/api/admin", tags=["Admin Operations"])
+
+SECRET_SESSION_TOKEN = "homatri_admin_session_token_2026"
+DEFAULT_ADMIN_EMAIL = "admin@homatri.in"
+DEFAULT_ADMIN_PASS = "THORkills@21"
+
+
+def hash_password(password: str) -> str:
+    """Hash password using SHA-256 for simple secure comparison."""
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+
+# ==============================================================================
+# PYDANTIC INPUT MODELS
+# ==============================================================================
+class LoginInput(BaseModel):
+    email: str
+    password: str
+
+
+class LockWindowInput(BaseModel):
+    meal_type: str = "LUNCH"  # LUNCH or DINNER
+    service_date: str | None = None  # YYYY-MM-DD (defaults to today)
+
+
+class ResolveEscalationInput(BaseModel):
+    session_id: str
+    admin_notes: str
+    custom_reply: str | None = None
+
+
+# ==============================================================================
+# AUTH DEPENDENCY & SEEDING
+# ==============================================================================
+async def get_current_admin(
+    homatri_admin_token: str | None = Cookie(None),
+    authorization: str | None = Header(None)
+) -> dict[str, Any]:
+    """Dependency protecting all admin operational endpoints."""
+    token = homatri_admin_token
+    if not token and authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ")[1]
+
+    if not token or not token.startswith("token_adm_"):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required. Please log in to access Admin Portal."
+        )
+
+    admin_id = token.replace("token_", "")
+    async with SessionFactory() as session:
+        admin = await session.get(AdminUser, admin_id)
+        if not admin or not admin.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Admin user profile not active or invalid."
+            )
+        return {
+            "admin_id": admin.admin_id,
+            "email": admin.email,
+            "name": admin.name,
+            "role": admin.role
+        }
+
+
+# ==============================================================================
+# 1. AUTHENTICATION ENDPOINTS
+# ==============================================================================
+@router.post("/login")
+async def admin_login(payload: LoginInput, response: Response):
+    """Authenticate Admin User & Set HttpOnly Session Cookie."""
+    async with SessionFactory() as session:
+        # Seed default super-admin if table empty
+        admin_res = await session.execute(select(AdminUser).where(AdminUser.email == payload.email))
+        admin = admin_res.scalar_one_or_none()
+
+        # Auto-seed / update default super-admin password hash
+        if payload.email == DEFAULT_ADMIN_EMAIL:
+            if not admin:
+                admin = AdminUser(
+                    admin_id="adm_super_admin_001",
+                    email=DEFAULT_ADMIN_EMAIL,
+                    name="Super Admin",
+                    password_hash=hash_password(DEFAULT_ADMIN_PASS),
+                    role="SUPER_ADMIN",
+                    is_active=True
+                )
+                session.add(admin)
+            else:
+                admin.password_hash = hash_password(DEFAULT_ADMIN_PASS)
+            await session.commit()
+
+        # Validate credentials
+        if not admin or admin.password_hash != hash_password(payload.password):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid admin email or password."
+            )
+
+        if not admin.is_active:
+            raise HTTPException(status_code=403, detail="Admin account is inactive.")
+
+        # Update last login
+        admin.last_login_at = datetime.now()
+        session_token = f"token_{admin.admin_id}"
+        await session.commit()
+
+        # Set HttpOnly Cookie
+        response.set_cookie(
+            key="homatri_admin_token",
+            value=session_token,
+            httponly=True,
+            samesite="lax",
+            max_age=86400  # 24 hours
+        )
+
+        logger.info(f"🟢 Admin Logged In: {admin.email} ({admin.role})")
+
+        return {
+            "status": "SUCCESS",
+            "token": session_token,
+            "admin": {
+                "admin_id": admin.admin_id,
+                "email": admin.email,
+                "name": admin.name,
+                "role": admin.role
+            }
+        }
+
+
+@router.get("/me")
+async def get_admin_me(current_admin: dict[str, Any] = Depends(get_current_admin)):
+    """Get active authenticated admin user profile."""
+    return current_admin
+
+
+@router.post("/logout")
+async def admin_logout(response: Response):
+    """Clear admin session cookie."""
+    response.delete_cookie(key="homatri_admin_token")
+    return {"status": "SUCCESS", "message": "Logged out successfully."}
+
+
+# ==============================================================================
+# 2. MEAL WINDOW LOCKING & CUTOFF CONTROLS (PROTECTED)
+# ==============================================================================
+@router.post("/lock-window")
+async def lock_meal_window(
+    payload: LockWindowInput,
+    current_admin: dict[str, Any] = Depends(get_current_admin)
+):
+    """Lock a meal window (LUNCH or DINNER) for a service date and trigger cutoff batching."""
+    meal_type = payload.meal_type.upper()
+    if meal_type not in ("LUNCH", "DINNER"):
+        raise HTTPException(status_code=400, detail="Invalid meal_type. Must be LUNCH or DINNER.")
+
+    s_date = date.fromisoformat(payload.service_date) if payload.service_date else date.today()
+    cutoff_time = datetime.now()
+
+    async with SessionFactory() as session:
+        # 1. Lock the meal window
+        window = await execute_meal_window_lock_and_creation(
+            session,
+            service_date=s_date,
+            meal_type=meal_type,
+            cutoff_at=cutoff_time,
+            status="LOCKED"
+        )
+
+        # 2. Run cutoff batching across kitchens
+        batch_result = await _run_cutoff_batch(session, window=meal_type, service_date=s_date)
+
+        # 3. Log Admin Action
+        audit = AdminActivityLog(
+            admin_id=current_admin["admin_id"],
+            action="LOCK_MEAL_WINDOW",
+            target_table="system_meal_windows",
+            target_id=window.window_id,
+            changes_diff={"meal_type": meal_type, "service_date": str(s_date), "result": batch_result}
+        )
+        session.add(audit)
+        await session.commit()
+
+        logger.info(f"🔒 Admin {current_admin['email']} LOCKED {meal_type} window for {s_date}: {batch_result}")
+
+        return {
+            "status": "SUCCESS",
+            "message": f"{meal_type} window for {s_date} locked successfully.",
+            "window_id": window.window_id,
+            "window_status": window.status,
+            "batch_summary": batch_result
+        }
+
+
+@router.get("/windows")
+async def get_meal_windows(
+    service_date: str | None = None,
+    current_admin: dict[str, Any] = Depends(get_current_admin)
+):
+    """Get status of today's meal windows."""
+    s_date = date.fromisoformat(service_date) if service_date else date.today()
+    async with SessionFactory() as session:
+        res = await session.execute(
+            select(SystemMealWindow).where(SystemMealWindow.service_date == s_date)
+        )
+        windows = res.scalars().all()
+        return [
+            {
+                "window_id": w.window_id,
+                "meal_type": w.meal_type,
+                "service_date": str(w.service_date),
+                "status": w.status,
+                "locked_at": w.locked_at.isoformat() if w.locked_at else None,
+            }
+            for w in windows
+        ]
+
+
+# ==============================================================================
+# 3. HITL ESCALATIONS QUEUE (PROTECTED)
+# ==============================================================================
+@router.get("/escalations")
+async def list_escalations(
+    status: str = "PENDING",
+    current_admin: dict[str, Any] = Depends(get_current_admin)
+):
+    """List pending HITL escalations flagged via escalate_to_admin."""
+    async with SessionFactory() as session:
+        res = await session.execute(
+            select(SystemHitlSession)
+            .where(SystemHitlSession.waiting_on_role == "ADMIN")
+            .order_by(SystemHitlSession.created_at.desc())
+        )
+        escalations = res.scalars().all()
+        return [
+            {
+                "session_id": e.session_id,
+                "actor_phone": e.customer_phone,
+                "source_role": e.source_role,
+                "reason": e.reason,
+                "order_id": e.order_id,
+                "status": e.status,
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in escalations
+            if e.status == status or status == "ALL"
+        ]
+
+
+@router.post("/escalations/resolve")
+async def resolve_escalation(
+    payload: ResolveEscalationInput,
+    current_admin: dict[str, Any] = Depends(get_current_admin)
+):
+    """Resolve an escalation, updating state and optionally sending a WhatsApp reply."""
+    async with SessionFactory() as session:
+        hitl = await session.get(SystemHitlSession, payload.session_id)
+        if not hitl:
+            raise HTTPException(status_code=404, detail="Escalation session not found.")
+
+        hitl.status = "RESOLVED"
+        hitl.resolution_notes = payload.admin_notes
+        hitl.resolved_at = datetime.now()
+
+        # Send custom WhatsApp reply if provided
+        if payload.custom_reply and hitl.customer_phone:
+            await send_whatsapp_text_message(hitl.customer_phone, payload.custom_reply)
+
+        audit = AdminActivityLog(
+            admin_id=current_admin["admin_id"],
+            action="RESOLVE_ESCALATION",
+            target_table="system_hitl_sessions",
+            target_id=hitl.session_id,
+            changes_diff={"admin_notes": payload.admin_notes, "custom_reply": payload.custom_reply}
+        )
+        session.add(audit)
+
+        await session.commit()
+        return {"status": "SUCCESS", "message": f"Escalation {payload.session_id} resolved."}
+
+
+# ==============================================================================
+# 4. KITCHEN PIPELINE & CHAT STREAM (PROTECTED)
+# ==============================================================================
+@router.get("/pipeline")
+async def get_pipeline_summary(
+    service_date: str | None = None,
+    current_admin: dict[str, Any] = Depends(get_current_admin)
+):
+    """Get live order pipeline stage counts and active kitchen capacities."""
+    s_date = date.fromisoformat(service_date) if service_date else date.today()
+
+    async with SessionFactory() as session:
+        # Order stage counts
+        order_counts_res = await session.execute(
+            select(CustomerOrder.status, func.count(CustomerOrder.order_id))
+            .where(CustomerOrder.service_date == s_date)
+            .group_by(CustomerOrder.status)
+        )
+        stage_counts = {status: count for status, count in order_counts_res.all()}
+
+        # Active Kitchen count
+        chefs_res = await session.execute(select(ChefProfile))
+        chefs = chefs_res.scalars().all()
+
+        return {
+            "service_date": str(s_date),
+            "stage_counts": stage_counts,
+            "active_kitchens_count": len(chefs),
+            "kitchens": [
+                {
+                    "kitchen_name": c.kitchen_name,
+                    "chef_phone": c.chef_phone,
+                    "locality": c.locality,
+                    "is_accepting_orders": getattr(c, "is_accepting_orders", True),
+                    "max_daily_capacity": c.max_daily_capacity,
+                }
+                for c in chefs
+            ]
+        }
+
+
+@router.get("/chats")
+async def get_chat_feed(
+    phone: str | None = None,
+    limit: int = 50,
+    current_admin: dict[str, Any] = Depends(get_current_admin)
+):
+    """Get recent WhatsApp messages across all conversations."""
+    async with SessionFactory() as session:
+        query = select(ConversationMessage).order_by(ConversationMessage.created_at.desc()).limit(limit)
+        if phone:
+            query = query.where(ConversationMessage.phone == phone)
+
+        res = await session.execute(query)
+        messages = res.scalars().all()
+
+        return [
+            {
+                "message_id": m.message_id,
+                "actor_phone": m.phone,
+                "actor_role": m.actor_role,
+                "direction": m.direction,
+                "text": m.message_text or "",
+                "message_type": m.message_type,
+                "created_at": m.created_at.isoformat() if m.created_at else None,
+            }
+            for m in messages
+        ]

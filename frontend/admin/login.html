@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Homaatri Admin Portal — Login</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-dark: #0b141a;
+            --panel-bg: #111b21;
+            --header-bg: #202c33;
+            --accent-teal: #00a884;
+            --accent-teal-hover: #029071;
+            --text-primary: #e9edef;
+            --text-secondary: #8696a0;
+            --border-color: #222d34;
+            --card-bg: #182229;
+            --error-red: #e53935;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg-dark);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .login-card {
+            background-color: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 16px;
+            padding: 36px 32px;
+            width: 100%;
+            max-width: 420px;
+            box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+
+        .login-header {
+            text-align: center;
+        }
+
+        .brand-logo {
+            font-size: 1.5rem;
+            font-weight: 800;
+            margin-bottom: 6px;
+            letter-spacing: -0.5px;
+        }
+
+        .brand-logo span {
+            color: var(--accent-teal);
+        }
+
+        .login-subtitle {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .form-group label {
+            font-size: 0.8rem;
+            font-weight: 600;
+            color: var(--text-secondary);
+        }
+
+        .form-input {
+            background-color: var(--card-bg);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 12px 14px;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+
+        .form-input:focus {
+            border-color: var(--accent-teal);
+        }
+
+        .btn-login {
+            background-color: var(--accent-teal);
+            color: #fff;
+            border: none;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 0.95rem;
+            font-weight: 700;
+            cursor: pointer;
+            transition: background 0.2s, transform 0.1s;
+            margin-top: 8px;
+        }
+
+        .btn-login:hover {
+            background-color: var(--accent-teal-hover);
+            transform: translateY(-1px);
+        }
+
+        .error-box {
+            background-color: rgba(229, 57, 53, 0.15);
+            border: 1px solid var(--error-red);
+            color: #ff8a80;
+            padding: 10px 12px;
+            border-radius: 8px;
+            font-size: 0.82rem;
+            display: none;
+            text-align: center;
+        }
+
+        .demo-credentials {
+            background-color: var(--card-bg);
+            border: 1px dashed var(--border-color);
+            border-radius: 8px;
+            padding: 10px 12px;
+            font-size: 0.78rem;
+            color: var(--text-secondary);
+            text-align: center;
+        }
+
+        .demo-credentials strong {
+            color: var(--accent-teal);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="login-card">
+        <div class="login-header">
+            <div class="brand-logo"><span>🛡️ HOMAATRI</span></div>
+            <div class="login-subtitle">Admin Operations & Control Desk Portal</div>
+        </div>
+
+        <div id="error-message" class="error-box"></div>
+
+        <form id="login-form" onsubmit="handleLogin(event)">
+            <div class="form-group">
+                <label>Admin Email Address</label>
+                <input type="email" id="email" class="form-input" placeholder="admin@homatri.in" required value="admin@homatri.in">
+            </div>
+
+            <div class="form-group" style="margin-top: 12px;">
+                <label>Password</label>
+                <input type="password" id="password" class="form-input" placeholder="••••••••••••" required value="THORkills@21">
+            </div>
+
+            <button type="submit" class="btn-login">Sign In to Admin Portal</button>
+        </form>
+
+        <div class="demo-credentials">
+            Default Credentials:<br>
+            <strong>admin@homatri.in</strong> / <strong>THORkills@21</strong>
+        </div>
+    </div>
+
+    <script>
+        async function handleLogin(e) {
+            e.preventDefault();
+            const email = document.getElementById('email').value;
+            const password = document.getElementById('password').value;
+            const errorBox = document.getElementById('error-message');
+
+            errorBox.style.display = 'none';
+
+            try {
+                const res = await fetch('/api/admin/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email, password })
+                });
+
+                const data = await res.json();
+
+                if (res.ok && data.status === 'SUCCESS') {
+                    // Redirect to Admin Operations Portal
+                    window.location.href = '/admin';
+                } else {
+                    errorBox.innerText = data.detail || 'Login failed. Invalid email or password.';
+                    errorBox.style.display = 'block';
+                }
+            } catch (err) {
+                errorBox.innerText = 'Network error. Please try again.';
+                errorBox.style.display = 'block';
+            }
+        }
+    </script>
+
+</body>
+</html>
