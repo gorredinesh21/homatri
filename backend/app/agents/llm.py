@@ -8,18 +8,16 @@ happens when the model is actually invoked.
 
 from __future__ import annotations
 
+from typing import Any
+from backend.app.core.config import settings
 from functools import lru_cache
 
-from langchain_google_vertexai import ChatVertexAI
-
-from backend.app.core.config import settings
-
-
-def get_llm(model: str | None = None, temperature: float = 0.2) -> ChatVertexAI:
-    """Build a ChatVertexAI client from settings (ADC auth — no API key)."""
+def get_llm(model: str | None = None, temperature: float = 0.2) -> Any:
+    """Build a ChatVertexAI client lazily (ADC auth — no API key)."""
+    from langchain_google_vertexai import ChatVertexAI
     target_model = model or settings.gemini_model or "gemini-2.5-flash-lite"
     if "3.6" in target_model or "3.5" in target_model:
-        target_model = "gemini-2.5-flash-lite"  # map non-existent aliases to active Vertex AI model ID
+        target_model = "gemini-2.5-flash-lite"
     return ChatVertexAI(
         model_name=target_model,
         project=settings.gcp_project,
