@@ -223,7 +223,7 @@ async def _determine_role(phone: str) -> str:
 
 def _agent_runner_factory(role: str, phone: str):
     """Factory creating the specific agent runner for a phone/role turn."""
-    async def _run_agent(prompt: str) -> str:
+    async def _run_agent(user_phone: str, prompt: str) -> str:
         # Select active persona agent
         if role == "CHEF":
             agent = chef_agent
@@ -236,7 +236,7 @@ def _agent_runner_factory(role: str, phone: str):
         t0 = time.perf_counter()
         res = await agent.agent.ainvoke({"messages": [("user", prompt)]})
         dt_ms = (time.perf_counter() - t0) * 1000.0
-        logger.info(f"⏱️ [LLM-TIMING] {role} agent call: {dt_ms:.2f} ms")
+        logger.info(f"⏱️ [LLM-TIMING] {role} agent call for {user_phone}: {dt_ms:.2f} ms")
 
         # Extract text reply from agent response
         last_msg = res["messages"][-1]
