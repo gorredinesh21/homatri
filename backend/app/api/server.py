@@ -209,7 +209,10 @@ async def webhook(req: Request):
     )
 
     # 4. Dispatch outbound reply to real Meta WhatsApp if API credentials configured
-    asyncio.create_task(send_whatsapp_text_message(phone, outtext))
+    try:
+        await send_whatsapp_text_message(phone, outtext)
+    except Exception as e:
+        logger.error(f"🔴 Error dispatching WhatsApp outbound message: {e}")
 
     return JSONResponse(res_data)
 
