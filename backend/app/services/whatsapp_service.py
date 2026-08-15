@@ -66,15 +66,30 @@ async def send_whatsapp_text_message(
         "text": {"body": text},
     }
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    import asyncio
+    import json
+    import urllib.request
+    import urllib.error
+
+    def _do_post():
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers
+        )
         try:
-            resp = await client.post(url, json=payload, headers=headers)
-            data = resp.json()
-            if resp.status_code == 200:
-                logger.info(f"🟢 WhatsApp message delivered to {recipient} (wamid: {data.get('messages', [{}])[0].get('id')})")
-            else:
-                logger.error(f"🔴 WhatsApp API Error {resp.status_code}: {data}")
-            return data
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                body = resp.read().decode("utf-8")
+                data = json.loads(body)
+                msg_id = data.get("messages", [{}])[0].get("id", "")
+                logger.info(f"🟢 WhatsApp message delivered to {recipient} (wamid: {msg_id})")
+                return data
+        except urllib.error.HTTPError as e:
+            err_body = e.read().decode("utf-8")
+            logger.error(f"🔴 WhatsApp API HTTP {e.code} Error: {err_body}")
+            return {"error": err_body, "code": e.code}
         except Exception as e:
             logger.error(f"🔴 Network error sending WhatsApp message to {recipient}: {e}")
             return {"error": str(e)}
+
+    return await asyncio.to_thread(_do_post)
