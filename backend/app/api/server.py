@@ -196,7 +196,13 @@ async def webhook(req: Request):
     logger.info(f"⏱️ [TOTAL-TIMING] {phone} ({role}): {dt_ms:.2f} ms")
 
     # 3. Log outbound reply
-    outtext = result.get("reply", "")
+    if isinstance(result, dict):
+        outtext = result.get("reply", "")
+        res_data = result
+    else:
+        outtext = str(result)
+        res_data = {"reply": outtext}
+
     await _log_message(
         phone, actor_role=role, direction="OUTBOUND",
         source="WHATSAPP", text=outtext
@@ -205,7 +211,7 @@ async def webhook(req: Request):
     # 4. Dispatch outbound reply to real Meta WhatsApp if API credentials configured
     asyncio.create_task(send_whatsapp_text_message(phone, outtext))
 
-    return JSONResponse(result)
+    return JSONResponse(res_data)
 
 
 # ==============================================================================
