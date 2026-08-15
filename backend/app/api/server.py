@@ -99,6 +99,16 @@ if os.path.exists("frontend/admin"):
 # ==============================================================================
 # 1. FRONTEND HOMEPAGE ROUTES (Serves Decoupled Frontend UI)
 # ==============================================================================
+@app.get("/privacy-policy", response_class=HTMLResponse)
+async def serve_privacy_policy():
+    """Serves the Official Homaatri Privacy Policy Page."""
+    privacy_path = "frontend/privacy.html"
+    if os.path.exists(privacy_path):
+        with open(privacy_path, "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    return HTMLResponse(content="<h1>Privacy Policy Page</h1>")
+
+
 @app.get("/admin/login", response_class=HTMLResponse)
 async def serve_admin_login():
     """Serves the Admin Login Page."""
