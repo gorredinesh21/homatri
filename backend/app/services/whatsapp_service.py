@@ -44,9 +44,14 @@ async def send_whatsapp_text_message(
         )
         return {"status": "mock_logged", "to": to_phone, "text": text}
 
-    # Standardize recipient phone with country code (91)
-    digits = "".join(c for c in to_phone if c.isdigit())
-    recipient = f"91{digits[-10:]}" if len(digits) >= 10 else digits
+    # Standardize recipient phone with country code (91XXXXXXXXXX)
+    digits = "".join(c for c in str(to_phone) if c.isdigit())
+    if len(digits) == 10:
+        recipient = f"91{digits}"
+    elif len(digits) == 12 and digits.startswith("91"):
+        recipient = digits
+    else:
+        recipient = f"91{digits[-10:]}"
 
     url = f"https://graph.facebook.com/v18.0/{pid}/messages"
     headers = {
