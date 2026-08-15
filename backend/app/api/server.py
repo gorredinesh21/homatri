@@ -253,12 +253,12 @@ async def _log_message(
     async with SessionFactory() as session:
         await execute_conversation_message_insert(
             session=session,
-            actor_phone=phone,
+            phone=phone,
             actor_role=actor_role,
             direction=direction,
             source=source,
             message_type=message_type,
-            content_text=text
+            message_text=text
         )
         await session.commit()
 
