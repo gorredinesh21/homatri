@@ -234,13 +234,13 @@ def _agent_runner_factory(role: str, phone: str):
 
         # Invoke agent with system prompt + user message
         t0 = time.perf_counter()
-        res = await agent.agent.ainvoke({"messages": [("user", prompt)]})
+        from langchain_core.messages import HumanMessage
+        res = await agent.ainvoke([HumanMessage(content=prompt)])
         dt_ms = (time.perf_counter() - t0) * 1000.0
         logger.info(f"⏱️ [LLM-TIMING] {role} agent call for {user_phone}: {dt_ms:.2f} ms")
 
         # Extract text reply from agent response
-        last_msg = res["messages"][-1]
-        return getattr(last_msg, "content", str(last_msg))
+        return getattr(res, "content", str(res))
 
     return _run_agent
 
