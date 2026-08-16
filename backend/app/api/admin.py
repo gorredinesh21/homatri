@@ -372,9 +372,9 @@ async def get_pipeline_summary(
                 {
                     "kitchen_name": c.kitchen_name,
                     "chef_phone": c.chef_phone,
-                    "locality": c.locality,
-                    "is_accepting_orders": getattr(c, "is_accepting_orders", True),
-                    "max_daily_capacity": c.max_daily_capacity,
+                    "locality": c.apartment_or_locality or c.address,
+                    "is_accepting_orders": getattr(c, "active_status", True),
+                    "max_daily_capacity": getattr(c, "daily_capacity", 15),
                 }
                 for c in chefs
             ]
