@@ -290,15 +290,15 @@ async def _build_user_db_summary(phone: str, role: str) -> str:
         return f"[LIVE DB STATE]: Role: {role}, Phone: {clean_phone}."
 
 
-async def _fetch_recent_history(phone: str, limit: int = 6):
-    """Fetch recent INBOUND and OUTBOUND messages to build LLM chat memory."""
+async def _fetch_recent_history(phone: str, limit: int = 6) -> list[Any]:
+    """Query last `limit` messages for user from conversation_messages master table."""
     from langchain_core.messages import AIMessage, HumanMessage
     clean_phone = phone[-10:] if len(phone) >= 10 else phone
     async with SessionFactory() as session:
         from sqlalchemy import select
         res = await session.execute(
             select(ConversationMessage)
-            .where(ConversationMessage.actor_phone == clean_phone)
+            .where(ConversationMessage.phone.like(f"%{clean_phone}"))
             .order_by(ConversationMessage.created_at.desc())
             .limit(limit)
         )
@@ -306,12 +306,13 @@ async def _fetch_recent_history(phone: str, limit: int = 6):
 
     msgs = []
     for msg in history:
-        if not msg.text or not msg.text.strip():
+        m_text = msg.message_text
+        if not m_text or not m_text.strip():
             continue
         if msg.direction == "INBOUND":
-            msgs.append(HumanMessage(content=msg.text))
+            msgs.append(HumanMessage(content=m_text))
         elif msg.direction == "OUTBOUND":
-            msgs.append(AIMessage(content=msg.text))
+            msgs.append(AIMessage(content=m_text))
     return msgs
 
 
