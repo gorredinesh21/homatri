@@ -35,7 +35,7 @@ from backend.app.core.config import settings
 from backend.app.db.session import SessionFactory
 from backend.app.executors.master import execute_conversation_message_insert
 from backend.app.models.chef import ChefProfile
-from backend.app.models.customer import CustomerOrder
+from backend.app.models.customer import CustomerOrder, CustomerProfile
 from backend.app.models.driver import DriverProfile
 from backend.app.models.shared import ConversationMessage
 from backend.app.models.system import SystemOutboundQueue
