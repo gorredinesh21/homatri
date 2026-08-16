@@ -348,31 +348,25 @@ def _agent_runner_factory(role: str, phone: str):
         history_msgs = await _fetch_recent_history(clean_phone, limit=6)
         messages = [SystemMessage(content=system_ctx), *history_msgs, HumanMessage(content=prompt)]
 
-        reply_text = ""
         from backend.app.tools.pause import Pause
-        # Multi-turn loop (up to 3 iterations) to resolve tool calls and obtain final text reply
-        for _ in range(3):
-            try:
-                res = await agent.ainvoke(messages)
-            except Pause as p:
-                logger.info(f"⏸️ Agent paused turn for {clean_phone}: {p.prompt}")
-                return p.prompt
-            except Exception as e:
-                # If Pause is wrapped inside another exception, check its args
-                if "Pause" in str(type(e)):
-                    logger.info(f"⏸️ Agent paused turn for {clean_phone}: {e}")
-                    return str(e)
-                raise e
-
-            content = getattr(res, "content", "")
-            if isinstance(content, str) and content.strip():
-                reply_text = content.strip()
-                break
-            # Append model message to history if it contained tool calls or intermediate state
-            messages.append(res)
+        try:
+            res = await agent.ainvoke(messages)
+            reply_text = getattr(res, "content", "")
+            if isinstance(reply_text, list):
+                reply_text = " ".join([str(item) for item in reply_text])
+            reply_text = str(reply_text).strip()
+        except Pause as p:
+            logger.info(f"⏸️ Agent paused turn for {clean_phone}: {p.prompt}")
+            return p.prompt
+        except Exception as e:
+            if "Pause" in str(type(e)):
+                logger.info(f"⏸️ Agent paused turn for {clean_phone}: {e}")
+                return str(e)
+            logger.error(f"🔴 Error in _run_agent: {e}", exc_info=True)
+            reply_text = "I've processed your request. How can I help you next?"
 
         if not reply_text:
-            reply_text = "Thanks! Your details have been processed. Please share your location pin to complete registration."
+            reply_text = "How can I help you with your order today?"
 
         dt_ms = (time.perf_counter() - t0) * 1000.0
         logger.info(f"⏱️ [LLM-TIMING] {role} agent call for {clean_phone}: {dt_ms:.2f} ms")
