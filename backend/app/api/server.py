@@ -349,9 +349,21 @@ def _agent_runner_factory(role: str, phone: str):
         messages = [SystemMessage(content=system_ctx), *history_msgs, HumanMessage(content=prompt)]
 
         reply_text = ""
+        from backend.app.tools.pause import Pause
         # Multi-turn loop (up to 3 iterations) to resolve tool calls and obtain final text reply
         for _ in range(3):
-            res = await agent.ainvoke(messages)
+            try:
+                res = await agent.ainvoke(messages)
+            except Pause as p:
+                logger.info(f"⏸️ Agent paused turn for {clean_phone}: {p.prompt}")
+                return p.prompt
+            except Exception as e:
+                # If Pause is wrapped inside another exception, check its args
+                if "Pause" in str(type(e)):
+                    logger.info(f"⏸️ Agent paused turn for {clean_phone}: {e}")
+                    return str(e)
+                raise e
+
             content = getattr(res, "content", "")
             if isinstance(content, str) and content.strip():
                 reply_text = content.strip()
