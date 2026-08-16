@@ -230,6 +230,31 @@ async def _determine_role(phone: str) -> str:
     return "CUSTOMER"
 
 
+async def _fetch_recent_history(phone: str, limit: int = 6):
+    """Fetch recent INBOUND and OUTBOUND messages to build LLM chat memory."""
+    from langchain_core.messages import AIMessage, HumanMessage
+    clean_phone = phone[-10:] if len(phone) >= 10 else phone
+    async with SessionFactory() as session:
+        from sqlalchemy import select
+        res = await session.execute(
+            select(ConversationMessage)
+            .where(ConversationMessage.actor_phone == clean_phone)
+            .order_by(ConversationMessage.created_at.desc())
+            .limit(limit)
+        )
+        history = list(reversed(res.scalars().all()))
+
+    msgs = []
+    for msg in history:
+        if not msg.text or not msg.text.strip():
+            continue
+        if msg.direction == "INBOUND":
+            msgs.append(HumanMessage(content=msg.text))
+        elif msg.direction == "OUTBOUND":
+            msgs.append(AIMessage(content=msg.text))
+    return msgs
+
+
 def _agent_runner_factory(role: str, phone: str):
     """Factory creating the specific agent runner for a phone/role turn."""
     async def _run_agent(user_phone: str, prompt: str) -> str:
@@ -253,7 +278,10 @@ def _agent_runner_factory(role: str, phone: str):
 
         t0 = time.perf_counter()
         from langchain_core.messages import SystemMessage, HumanMessage
-        messages = [SystemMessage(content=system_ctx), HumanMessage(content=prompt)]
+
+        # Fetch recent chat history from database
+        history_msgs = await _fetch_recent_history(clean_phone, limit=6)
+        messages = [SystemMessage(content=system_ctx), *history_msgs, HumanMessage(content=prompt)]
 
         reply_text = ""
         # Multi-turn loop (up to 3 iterations) to resolve tool calls and obtain final text reply
