@@ -137,7 +137,7 @@ async def _find_nearby_kitchens(
     window = resolve_time_pool(now)["window"]  # LUNCH or DINNER
     window_phrase = describe_meal_window(now)   # e.g. "tomorrow's lunch (today's dinner ordering has closed)"
 
-    # active chefs with at least one available dish for this meal window
+    # active chefs with at least one available dish for this meal window (or fallback to any available dish)
     serving = select(ChefMenuItem.chef_phone).where(
         ChefMenuItem.meal_type == window,
         ChefMenuItem.is_available.is_(True),
@@ -150,6 +150,27 @@ async def _find_nearby_kitchens(
             )
         )
     ).scalars().all()
+
+    if not chefs:
+        # Fallback to any active chef with available items
+        serving_any = select(ChefMenuItem.chef_phone).where(ChefMenuItem.is_available.is_(True))
+        chefs = (
+            await session.execute(
+                select(ChefProfile).where(
+                    ChefProfile.active_status.is_(True),
+                    ChefProfile.chef_phone.in_(serving_any),
+                )
+            )
+        ).scalars().all()
+
+    if not chefs:
+        # Fallback to all active chefs
+        chefs = (
+            await session.execute(
+                select(ChefProfile).where(ChefProfile.active_status.is_(True))
+            )
+        ).scalars().all()
+
     if not chefs:
         return {
             "status": "NONE_OPEN",
