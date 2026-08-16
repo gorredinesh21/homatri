@@ -170,6 +170,7 @@ def webhook_verify(req: Request):
 
 
 _PROCESSED_WAMIDS: dict[str, float] = {}
+_BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 
 async def _process_inbound_message(msg: dict[str, Any]):
@@ -231,8 +232,10 @@ async def webhook(req: Request):
             return JSONResponse({"status": "duplicate_ignored"})
         _PROCESSED_WAMIDS[wamid] = now_ts
 
-    # Process AI turn in background task
-    asyncio.create_task(_process_inbound_message(msg))
+    # Process AI turn in strongly referenced background task
+    task = asyncio.create_task(_process_inbound_message(msg))
+    _BACKGROUND_TASKS.add(task)
+    task.add_done_callback(_BACKGROUND_TASKS.discard)
 
     # Return HTTP 200 OK immediately to Meta (in ~5ms)
     return JSONResponse({"status": "ok"})
