@@ -230,6 +230,42 @@ async def _determine_role(phone: str) -> str:
     return "CUSTOMER"
 
 
+async def _build_user_db_summary(phone: str, role: str) -> str:
+    """Query Cloud SQL Postgres DB for live profile & active order state."""
+    from sqlalchemy import select
+    clean_phone = phone[-10:] if len(phone) >= 10 else phone
+    async with SessionFactory() as session:
+        if role == "CUSTOMER":
+            profile = await session.get(CustomerProfile, clean_phone)
+            if profile is None:
+                return f"[LIVE DB STATE]: Customer ({clean_phone}) is NEW (Not registered in database)."
+
+            # Check active orders
+            res = await session.execute(
+                select(CustomerOrder)
+                .where(CustomerOrder.customer_phone == clean_phone)
+                .order_by(CustomerOrder.created_at.desc())
+                .limit(1)
+            )
+            latest_order = res.scalar_one_or_none()
+            order_info = (
+                f"Latest Order ID: {latest_order.order_id}, Status: {latest_order.order_status}, Amount: ₹{latest_order.total_amount}"
+                if latest_order else "No active orders."
+            )
+            return (
+                f"[LIVE DB STATE]: Customer Name: '{profile.name}', Address: '{profile.delivery_address}', "
+                f"Is Registered: {profile.is_registered}, Location Pin: ({profile.latitude}, {profile.longitude}), "
+                f"{order_info}"
+            )
+        elif role == "CHEF":
+            chef = await session.get(ChefProfile, clean_phone)
+            return f"[LIVE DB STATE]: Chef Kitchen: '{chef.kitchen_name if chef else 'Unknown'}', Phone: {clean_phone}."
+        elif role == "DRIVER":
+            driver = await session.get(DriverProfile, clean_phone)
+            return f"[LIVE DB STATE]: Driver Name: '{driver.name if driver else 'Unknown'}', Duty: {driver.duty_status if driver else 'OFF'}."
+        return f"[LIVE DB STATE]: Role: {role}, Phone: {clean_phone}."
+
+
 async def _fetch_recent_history(phone: str, limit: int = 6):
     """Fetch recent INBOUND and OUTBOUND messages to build LLM chat memory."""
     from langchain_core.messages import AIMessage, HumanMessage
@@ -269,11 +305,15 @@ def _agent_runner_factory(role: str, phone: str):
         # Normalize phone to 10 digits
         clean_phone = user_phone[-10:] if len(user_phone) >= 10 else user_phone
 
-        # Inject system context so LLM never asks for phone number
+        # Fetch live database user summary
+        db_summary = await _build_user_db_summary(clean_phone, role)
+
+        # Inject system context so LLM never asks for phone number & knows user DB state
         system_ctx = (
             f"[SYSTEM NOTICE]: User's verified 10-digit phone number is '{clean_phone}'. "
             f"They are ALREADY messaging from this phone number on WhatsApp. "
-            f"Do NOT ask the user for their phone number or mobile number."
+            f"Do NOT ask the user for their phone number or mobile number.\n"
+            f"{db_summary}"
         )
 
         t0 = time.perf_counter()
