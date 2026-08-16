@@ -356,12 +356,13 @@ def _agent_runner_factory(role: str, phone: str):
                 reply_text = " ".join([str(item) for item in reply_text])
             reply_text = str(reply_text).strip()
         except Pause as p:
-            logger.info(f"⏸️ Agent paused turn for {clean_phone}: {p.prompt}")
-            return p.prompt
+            logger.info(f"⏸️ Agent paused turn for {clean_phone}: {p.message}")
+            return p.message
         except Exception as e:
             if "Pause" in str(type(e)):
-                logger.info(f"⏸️ Agent paused turn for {clean_phone}: {e}")
-                return str(e)
+                msg = getattr(e, "message", str(e))
+                logger.info(f"⏸️ Agent paused turn for {clean_phone}: {msg}")
+                return msg
             logger.error(f"🔴 Error in _run_agent: {e}", exc_info=True)
             reply_text = "I've processed your request. How can I help you next?"
 
