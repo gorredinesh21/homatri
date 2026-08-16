@@ -174,39 +174,39 @@ _PROCESSED_WAMIDS: dict[str, float] = {}
 
 async def _process_inbound_message(msg: dict[str, Any]):
     """Background worker: Log inbound -> Route & Run Gemini AI -> Log outbound -> Dispatch to WhatsApp."""
-    phone = msg["phone"]
-    role = await _determine_role(phone)
-
-    # 1. Log inbound message to conversation history
-    intext = msg.get("text") or f"(shared location: {msg.get('location')})"
-    await _log_message(
-        phone, actor_role=role, direction="INBOUND",
-        source="WHATSAPP", text=intext,
-        message_type="LOCATION" if msg.get("type") == "location" else "TEXT"
-    )
-
-    # 2. Pass normalized message through check-first router
-    t0 = time.perf_counter()
-    result = await route(msg, _agent_runner_factory(role, phone))
-    dt_ms = (time.perf_counter() - t0) * 1000.0
-    logger.info(f"⏱️ [TOTAL-TIMING] {phone} ({role}): {dt_ms:.2f} ms")
-
-    # 3. Log outbound reply
-    if isinstance(result, dict):
-        outtext = result.get("reply", "")
-    else:
-        outtext = str(result)
-
-    await _log_message(
-        phone, actor_role=role, direction="OUTBOUND",
-        source="WHATSAPP", text=outtext
-    )
-
-    # 4. Dispatch outbound reply to real Meta WhatsApp if API credentials configured
     try:
+        phone = msg["phone"]
+        role = await _determine_role(phone)
+
+        # 1. Log inbound message to conversation history
+        intext = msg.get("text") or f"(shared location: {msg.get('location')})"
+        await _log_message(
+            phone, actor_role=role, direction="INBOUND",
+            source="WHATSAPP", text=intext,
+            message_type="LOCATION" if msg.get("type") == "location" else "TEXT"
+        )
+
+        # 2. Pass normalized message through check-first router
+        t0 = time.perf_counter()
+        result = await route(msg, _agent_runner_factory(role, phone))
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        logger.info(f"⏱️ [TOTAL-TIMING] {phone} ({role}): {dt_ms:.2f} ms")
+
+        # 3. Log outbound reply
+        if isinstance(result, dict):
+            outtext = result.get("reply", "")
+        else:
+            outtext = str(result)
+
+        await _log_message(
+            phone, actor_role=role, direction="OUTBOUND",
+            source="WHATSAPP", text=outtext
+        )
+
+        # 4. Dispatch outbound reply to real Meta WhatsApp if API credentials configured
         await send_whatsapp_text_message(phone, outtext)
     except Exception as e:
-        logger.error(f"🔴 Error dispatching WhatsApp outbound message: {e}")
+        logger.error(f"🔴 Exception inside _process_inbound_message: {e}", exc_info=True)
 
 
 @app.post("/webhook")
