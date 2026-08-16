@@ -241,15 +241,38 @@ def _agent_runner_factory(role: str, phone: str):
         else:
             agent = customer_agent
 
-        # Invoke agent with system prompt + user message
-        t0 = time.perf_counter()
-        from langchain_core.messages import HumanMessage
-        res = await agent.ainvoke([HumanMessage(content=prompt)])
-        dt_ms = (time.perf_counter() - t0) * 1000.0
-        logger.info(f"⏱️ [LLM-TIMING] {role} agent call for {user_phone}: {dt_ms:.2f} ms")
+        # Normalize phone to 10 digits
+        clean_phone = user_phone[-10:] if len(user_phone) >= 10 else user_phone
 
-        # Extract text reply from agent response
-        return getattr(res, "content", str(res))
+        # Inject system context so LLM never asks for phone number
+        system_ctx = (
+            f"[SYSTEM NOTICE]: User's verified 10-digit phone number is '{clean_phone}'. "
+            f"They are ALREADY messaging from this phone number on WhatsApp. "
+            f"Do NOT ask the user for their phone number or mobile number."
+        )
+
+        t0 = time.perf_counter()
+        from langchain_core.messages import SystemMessage, HumanMessage
+        messages = [SystemMessage(content=system_ctx), HumanMessage(content=prompt)]
+
+        reply_text = ""
+        # Multi-turn loop (up to 3 iterations) to resolve tool calls and obtain final text reply
+        for _ in range(3):
+            res = await agent.ainvoke(messages)
+            content = getattr(res, "content", "")
+            if isinstance(content, str) and content.strip():
+                reply_text = content.strip()
+                break
+            # Append model message to history if it contained tool calls or intermediate state
+            messages.append(res)
+
+        if not reply_text:
+            reply_text = "Thanks! Your details have been processed. Please share your location pin to complete registration."
+
+        dt_ms = (time.perf_counter() - t0) * 1000.0
+        logger.info(f"⏱️ [LLM-TIMING] {role} agent call for {clean_phone}: {dt_ms:.2f} ms")
+
+        return reply_text
 
     return _run_agent
 
