@@ -34,18 +34,20 @@ def parse_webhook(payload: dict[str, Any]) -> dict[str, Any] | None:
 
     phone = normalize_phone(msg.get("from", ""))
     mtype = msg.get("type")
+    wamid = msg.get("id")
 
     if mtype == "text":
-        return {"phone": phone, "type": "text", "text": msg["text"]["body"]}
+        return {"phone": phone, "type": "text", "text": msg["text"]["body"], "wamid": wamid}
     if mtype == "location":
         loc = msg["location"]
         return {
             "phone": phone,
             "type": "location",
             "location": {"latitude": float(loc["latitude"]), "longitude": float(loc["longitude"])},
+            "wamid": wamid,
         }
     # images/audio/etc. — surface as text so the agent can respond gracefully
-    return {"phone": phone, "type": "text", "text": f"[unsupported message type: {mtype}]"}
+    return {"phone": phone, "type": "text", "text": f"[unsupported message type: {mtype}]", "wamid": wamid}
 
 
 def verify_challenge(mode: str, token: str, challenge: str, expected_token: str) -> str | None:

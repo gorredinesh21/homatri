@@ -169,15 +169,11 @@ def webhook_verify(req: Request):
     return JSONResponse({"error": "verification failed"}, status_code=403)
 
 
-@app.post("/webhook")
-async def webhook(req: Request):
-    """Inbound message webhook (Meta Cloud API JSON shape) → parse → router → reply."""
-    raw_payload = await req.json()
-    msg = parse_webhook(raw_payload)
+_PROCESSED_WAMIDS: dict[str, float] = {}
 
-    if msg is None:
-        return JSONResponse({"status": "ignored"})  # Delivery statuses, etc.
 
+async def _process_inbound_message(msg: dict[str, Any]):
+    """Background worker: Log inbound -> Route & Run Gemini AI -> Log outbound -> Dispatch to WhatsApp."""
     phone = msg["phone"]
     role = await _determine_role(phone)
 
@@ -198,10 +194,8 @@ async def webhook(req: Request):
     # 3. Log outbound reply
     if isinstance(result, dict):
         outtext = result.get("reply", "")
-        res_data = result
     else:
         outtext = str(result)
-        res_data = {"reply": outtext}
 
     await _log_message(
         phone, actor_role=role, direction="OUTBOUND",
@@ -214,7 +208,34 @@ async def webhook(req: Request):
     except Exception as e:
         logger.error(f"🔴 Error dispatching WhatsApp outbound message: {e}")
 
-    return JSONResponse(res_data)
+
+@app.post("/webhook")
+async def webhook(req: Request):
+    """Inbound message webhook (Meta Cloud API JSON shape) → parse → instant 200 OK → background process."""
+    raw_payload = await req.json()
+    msg = parse_webhook(raw_payload)
+
+    if msg is None:
+        return JSONResponse({"status": "ignored"})  # Delivery statuses, etc.
+
+    wamid = msg.get("wamid")
+    if wamid:
+        now_ts = time.time()
+        # Clean up stale entries older than 300s
+        for k in list(_PROCESSED_WAMIDS.keys()):
+            if now_ts - _PROCESSED_WAMIDS[k] > 300:
+                _PROCESSED_WAMIDS.pop(k, None)
+
+        if wamid in _PROCESSED_WAMIDS:
+            logger.info(f"⏭️ Ignored duplicate Meta webhook retry for wamid: {wamid}")
+            return JSONResponse({"status": "duplicate_ignored"})
+        _PROCESSED_WAMIDS[wamid] = now_ts
+
+    # Process AI turn in background task
+    asyncio.create_task(_process_inbound_message(msg))
+
+    # Return HTTP 200 OK immediately to Meta (in ~5ms)
+    return JSONResponse({"status": "ok"})
 
 
 # ==============================================================================
