@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     # (GCP: enable Routes API + billing) to switch to live route optimization.
     google_maps_api_key: str = ""
 
+    # ---- Meta WhatsApp Cloud API ----
+    meta_phone_number_id: str = ""
+    meta_whatsapp_token: str = ""
+
 
 
 settings = Settings()
