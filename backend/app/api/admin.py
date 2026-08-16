@@ -410,6 +410,34 @@ async def get_chat_feed(
         ]
 
 
+@router.post("/clear-all-data")
+async def clear_all_admin_data(
+    current_admin: dict[str, Any] = Depends(get_current_admin)
+):
+    """Clear all customer profiles, orders, and conversation messages directly on Cloud SQL database."""
+    from backend.app.models.customer import CustomerOrder, CustomerOrderItem, CustomerProfile, CustomerReview
+    from backend.app.tools.pause import _pending
+    from sqlalchemy import delete
+
+    # 1. Reset in-memory pending state
+    _pending.clear()
+
+    # 2. Delete database records
+    async with SessionFactory() as session:
+        async with session.begin():
+            r1 = await session.execute(delete(CustomerOrderItem))
+            r2 = await session.execute(delete(CustomerReview))
+            r3 = await session.execute(delete(CustomerOrder))
+            r4 = await session.execute(delete(CustomerProfile))
+            r5 = await session.execute(delete(ConversationMessage))
+
+    logger.info(f"🧹 ADMIN RESET EXECUTED BY {current_admin.get('email')}: Deleted {r5.rowcount} messages, {r4.rowcount} profiles.")
+    return {
+        "status": "SUCCESS",
+        "message": f"Successfully cleared {r5.rowcount} chat messages, {r4.rowcount} profiles, and {r3.rowcount} orders from production Cloud SQL database!",
+    }
+
+
 # ==============================================================================
 # 6. CHEF & RIDER MANAGEMENT ENDPOINTS
 # ==============================================================================
