@@ -48,6 +48,8 @@ import backend.app.tools.customer_tools  # noqa: F401
 import backend.app.tools.topup  # noqa: F401
 
 from backend.app.api.admin import router as admin_router
+from backend.app.api.v1.auth import router as auth_router
+from backend.app.api.v1.bulk import router as bulk_router
 
 logger = logging.getLogger("homatri_server")
 WEBHOOK_VERIFY_TOKEN = getattr(settings, "webhook_verify_token", "homatri_verify")
@@ -77,11 +79,20 @@ app = FastAPI(
 
 # Register Admin Operations Router
 app.include_router(admin_router)
+app.include_router(auth_router, prefix="/api/v1")
+app.include_router(bulk_router, prefix="/api/v1")
 
-# Enable CORS for decoupled frontends
+# Enable CORS for the Next.js app (cookies require explicit origins).
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://localhost:3005",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:3005",
+        "https://homatri.com",
+        "https://www.homatri.com",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

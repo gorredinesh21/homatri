@@ -52,6 +52,17 @@ class Settings(BaseSettings):
     meta_phone_number_id: str = ""
     meta_whatsapp_token: str = ""
 
+    # ---- Auth / MSG91 OTP Widget / Google OAuth ----
+    jwt_secret: str = "homatri-dev-jwt-secret-change-in-production"
+    jwt_access_ttl_seconds: int = 3600
+    jwt_refresh_ttl_seconds: int = 60 * 60 * 24 * 30
+    msg91_widget_id: str = "3668776a6f65313935373431"
+    msg91_widget_token: str = "563549TIHmC7w7bhL6a8acd1aP1"
+    google_oauth_client_id: str = (
+        "195132182954-ooatsl0i96re4hcd8fvm95s4g2g6lf8d.apps.googleusercontent.com"
+    )
+    google_oauth_client_secret: str = ""
+
 
 
 settings = Settings()

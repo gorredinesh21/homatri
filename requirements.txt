@@ -17,7 +17,9 @@ langsmith>=0.2.0                        # tracing dashboard (LANGCHAIN_TRACING_V
 # ---- Web / API (WhatsApp + payment webhooks) ----
 fastapi>=0.115.0
 uvicorn[standard]>=0.34.0
-httpx>=0.28.0                           # outbound calls (Meta WhatsApp / payment gateway)
+httpx>=0.28.0                           # outbound calls (Meta WhatsApp / payment gateway / MSG91)
+PyJWT>=2.9.0                            # 30-day session JWTs
+google-auth>=2.36.0                     # Google ID token verification
 python-multipart>=0.0.9                 # form / webhook parsing
 
 # ---- Database (PostgreSQL) ----
