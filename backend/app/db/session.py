@@ -36,6 +36,12 @@ async def transaction() -> AsyncIterator[AsyncSession]:
             yield session
 
 
+async def get_db() -> AsyncIterator[AsyncSession]:
+    """FastAPI AsyncSession dependency provider."""
+    async with SessionFactory() as session:
+        yield session
+
+
 async def create_all() -> None:
     """Create every table (dev/tests on SQLite). Postgres uses Alembic migrations."""
     import backend.app.models  # noqa: F401  (registers all models on Base.metadata)
