@@ -92,6 +92,20 @@ async def checkout_order(
 
     # 4. Save Customer Order into PostgreSQL DB
     try:
+        profile = await db.get(CustomerProfile, customer_phone)
+        if not profile:
+            profile = CustomerProfile(
+                customer_phone=customer_phone,
+                name="Homaatri Member",
+                full_name="Homaatri Member",
+                delivery_address=full_addr,
+                address_line1=full_addr,
+                city="Navi Mumbai",
+                is_registered=True,
+            )
+            db.add(profile)
+            await db.commit()
+
         new_order = CustomerOrder(
             order_id=order_id,
             customer_phone=customer_phone,
@@ -103,9 +117,6 @@ async def checkout_order(
             cart_subtotal=subtotal,
             delivery_fee=delivery_fee,
             total_amount=total_amount,
-            delivery_address=full_addr,
-            latitude=req.delivery_address.latitude if req.delivery_address else 19.1234,
-            longitude=req.delivery_address.longitude if req.delivery_address else 73.0123,
             special_instructions=req.dietary_notes,
             created_at=datetime.utcnow(),
         )
@@ -113,7 +124,6 @@ async def checkout_order(
         await db.commit()
     except Exception as e:
         logger.error(f"Error persisting order: {e}")
-        await db.rollback()
         await db.rollback()
 
     # 5. Handle Razorpay Gateway (Mock Mode vs Live Mode)
