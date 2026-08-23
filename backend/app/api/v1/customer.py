@@ -26,6 +26,7 @@ router = APIRouter(prefix="/customer", tags=["Customer Addresses"])
 
 
 class AddressCreateSchema(BaseModel):
+    id: Optional[str] = None
     address_type: str = Field(default="HOME")  # HOME, WORK, OTHER
     flat_no: str
     street_address: str
@@ -84,7 +85,7 @@ async def save_address(
     authorization: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """Save a new delivery address for the customer (Zomato/Swiggy style)."""
+    """Save or Update a delivery address for the customer (Zomato/Swiggy style)."""
     customer_phone = "7416767453"
     if authorization and authorization.startswith("Bearer "):
         token = authorization.split(" ")[1]
@@ -96,6 +97,32 @@ async def save_address(
             pass
 
     full_addr = f"{req.flat_no}, {req.street_address}{f', Near {req.landmark}' if req.landmark else ''}, {req.cluster}"
+
+    # Update existing address if id provided
+    if req.id and not req.id.startswith("addr_"):
+        try:
+            target_uuid = UUID(req.id)
+            existing = await db.get(CustomerAddress, target_uuid)
+            if existing:
+                existing.address_type = req.address_type.upper()
+                existing.flat_no = req.flat_no
+                existing.street_address = req.street_address
+                existing.landmark = req.landmark
+                existing.full_address = full_addr
+                existing.phone = req.phone
+                existing.cluster = req.cluster
+                existing.latitude = req.latitude
+                existing.longitude = req.longitude
+                await db.commit()
+                await db.refresh(existing)
+                return {
+                    "id": str(existing.id),
+                    "full_address": existing.full_address,
+                    "address_type": existing.address_type,
+                    "message": "Delivery address updated successfully.",
+                }
+        except Exception as e:
+            logger.warning(f"Address update lookup notice: {e}")
 
     new_address = CustomerAddress(
         customer_phone=customer_phone,
