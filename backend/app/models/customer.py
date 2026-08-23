@@ -131,3 +131,21 @@ class CustomerReview(Base):
     review_text: Mapped[str | None] = mapped_column(Text)
     is_public: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+
+
+class CustomerAddress(Base, TimestampMixin):
+    __tablename__ = "customer_addresses"
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    customer_phone: Mapped[str] = mapped_column(String(20), nullable=False, index=True)
+    address_type: Mapped[str] = mapped_column(String(20), nullable=False, default="HOME")  # HOME, WORK, OTHER
+    flat_no: Mapped[str] = mapped_column(String(100), nullable=False)
+    street_address: Mapped[str] = mapped_column(String(255), nullable=False)
+    landmark: Mapped[str | None] = mapped_column(String(255))
+    full_address: Mapped[str] = mapped_column(Text, nullable=False)
+    phone: Mapped[str] = mapped_column(String(20), nullable=False)
+    cluster: Mapped[str] = mapped_column(String(50), default="Ghansoli")
+    latitude: Mapped[Decimal | None] = mapped_column(Numeric(10, 8), default=Decimal("19.1234"))
+    longitude: Mapped[Decimal | None] = mapped_column(Numeric(11, 8), default=Decimal("73.0123"))
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+

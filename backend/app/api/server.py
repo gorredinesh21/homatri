@@ -51,6 +51,7 @@ from backend.app.api.admin import router as admin_router
 from backend.app.api.v1.auth import router as auth_router
 from backend.app.api.v1.bulk import router as bulk_router
 from backend.app.api.v1.orders import router as orders_router
+from backend.app.api.v1.customer import router as customer_router
 
 logger = logging.getLogger("homatri_server")
 WEBHOOK_VERIFY_TOKEN = getattr(settings, "webhook_verify_token", "homatri_verify")
@@ -83,6 +84,7 @@ app.include_router(admin_router)
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(bulk_router, prefix="/api/v1")
 app.include_router(orders_router, prefix="/api/v1")
+app.include_router(customer_router, prefix="/api/v1")
 
 # Enable CORS for the Next.js app (cookies require explicit origins).
 app.add_middleware(
