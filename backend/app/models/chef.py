@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean,
@@ -14,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    Uuid,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -25,26 +27,36 @@ from backend.app.db.base import TS, Base, JSONB, TimestampMixin
 class ChefProfile(Base, TimestampMixin):
     __tablename__ = "chef_profiles"
 
-    chef_phone: Mapped[str] = mapped_column(String(15), primary_key=True)
+    chef_phone: Mapped[str] = mapped_column(String(20), primary_key=True)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), unique=True, nullable=False, default=uuid4)
     kitchen_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     chef_name: Mapped[str] = mapped_column(String(100), nullable=False)
     address: Mapped[str] = mapped_column(Text, nullable=False)
+    address_line1: Mapped[str | None] = mapped_column(String(255))
     apartment_or_locality: Mapped[str | None] = mapped_column(String(100), index=True)
-    city: Mapped[str] = mapped_column(String(50), nullable=False, default="Hyderabad")
-    pincode: Mapped[str | None] = mapped_column(String(10))
+    city: Mapped[str] = mapped_column(String(100), nullable=False, default="Navi Mumbai")
+    pincode: Mapped[str | None] = mapped_column(String(20))
     latitude: Mapped[Decimal] = mapped_column(Numeric(10, 8), nullable=False)
     longitude: Mapped[Decimal] = mapped_column(Numeric(11, 8), nullable=False)
-    fssai_license_number: Mapped[str | None] = mapped_column(String(50))
+    fssai_license_number: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")
+    hometown_region: Mapped[str | None] = mapped_column(String(100), index=True)
     dietary_type: Mapped[str | None] = mapped_column(String(20))
     kitchen_bio: Mapped[str | None] = mapped_column(Text)
+    bio: Mapped[str | None] = mapped_column(Text)
     profile_image_url: Mapped[str | None] = mapped_column(Text)
+    avatar_url: Mapped[str | None] = mapped_column(Text, default="avatar_chef_cartoon_1.png")
     alternate_phone: Mapped[str | None] = mapped_column(String(15))
+    payout_upi_id: Mapped[str | None] = mapped_column(String(100))
+    rating_average: Mapped[Decimal] = mapped_column(Numeric(3, 2), nullable=False, default=Decimal("4.80"))
+    daily_capacity: Mapped[int] = mapped_column(Integer, nullable=False, default=15)
+    accepting_orders: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     bank_account_details: Mapped[dict] = mapped_column(JSONB, default=dict)
     operating_days: Mapped[list] = mapped_column(
         JSONB, default=lambda: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
     )
     is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     active_status: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(TS)
 
 
 class ChefMenuItem(Base, TimestampMixin):

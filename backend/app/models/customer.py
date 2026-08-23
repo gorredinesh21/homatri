@@ -4,32 +4,44 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from decimal import Decimal
+from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, Date, ForeignKey, Integer, Numeric, String, Text, func
+from sqlalchemy import Boolean, Date, ForeignKey, Integer, Numeric, String, Text, Uuid, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.core.ids import id_factory
-from backend.app.db.base import TS, Base, TimestampMixin
+from backend.app.db.base import TS, Base, JSONB, TimestampMixin
 
 
 class CustomerProfile(Base, TimestampMixin):
     __tablename__ = "customer_profiles"
 
-    customer_phone: Mapped[str] = mapped_column(String(15), primary_key=True)
+    # Phone remains the live PK so existing WhatsApp/order FKs stay intact.
+    customer_phone: Mapped[str] = mapped_column(String(20), primary_key=True)
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), unique=True, nullable=False, default=uuid4)
     name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
+    full_name: Mapped[str | None] = mapped_column(String(100))
     delivery_address: Mapped[str] = mapped_column(Text, nullable=False)
     apartment_name: Mapped[str | None] = mapped_column(String(100), index=True)
     flat_number: Mapped[str | None] = mapped_column(String(50))
     landmark: Mapped[str | None] = mapped_column(String(100))
-    city: Mapped[str | None] = mapped_column(String(50), default="Hyderabad")
-    pincode: Mapped[str | None] = mapped_column(String(10))
+    address_line1: Mapped[str | None] = mapped_column(String(255))
+    address_line2: Mapped[str | None] = mapped_column(String(255))
+    city: Mapped[str | None] = mapped_column(String(100), default="Navi Mumbai")
+    pincode: Mapped[str | None] = mapped_column(String(20))
+    postal_code: Mapped[str | None] = mapped_column(String(20))
     latitude: Mapped[Decimal | None] = mapped_column(Numeric(10, 8))
     longitude: Mapped[Decimal | None] = mapped_column(Numeric(11, 8))
     alternate_phone: Mapped[str | None] = mapped_column(String(15))
-    email: Mapped[str | None] = mapped_column(String(100))
+    email: Mapped[str | None] = mapped_column(String(255), unique=True)
+    google_sub: Mapped[str | None] = mapped_column(String(255), unique=True)
+    avatar_url: Mapped[str | None] = mapped_column(Text, default="avatar_tiffin_cartoon_1.png")
+    is_cartoon_avatar: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     dietary_preference: Mapped[str | None] = mapped_column(String(20), default="VEG")
+    dietary_preferences: Mapped[list] = mapped_column(JSONB, default=lambda: ["PURE_VEG"])
     delivery_instructions: Mapped[str | None] = mapped_column(Text)
     is_registered: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
+    deleted_at: Mapped[datetime | None] = mapped_column(TS)
 
 
 class CustomerOrder(Base, TimestampMixin):

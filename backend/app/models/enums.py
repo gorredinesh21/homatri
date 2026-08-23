@@ -156,3 +156,31 @@ class MessageType(str, Enum):
     INTERACTIVE = "INTERACTIVE"
     IMAGE = "IMAGE"
     TEMPLATE = "TEMPLATE"
+
+
+class UserRole(str, Enum):
+    CUSTOMER = "CUSTOMER"
+    CHEF = "CHEF"
+    RIDER = "RIDER"
+    ADMIN = "ADMIN"
+
+
+class CateringItemCategory(str, Enum):
+    BREAD = "BREAD"
+    RICE = "RICE"
+    SABZI = "SABZI"
+    DAL = "DAL"
+    PROTEIN = "PROTEIN"
+    DESSERT = "DESSERT"
+
+
+class BulkOrderStatus(str, Enum):
+    PENDING_CHEF_ACCEPTANCE = "PENDING_CHEF_ACCEPTANCE"
+    ACCEPTED = "ACCEPTED"
+    COUNTER_QUOTED = "COUNTER_QUOTED"
+    ADVANCE_PENDING = "ADVANCE_PENDING"
+    CONFIRMED = "CONFIRMED"
+    PREPARING = "PREPARING"
+    DISPATCHED = "DISPATCHED"
+    DELIVERED = "DELIVERED"
+    CANCELLED = "CANCELLED"

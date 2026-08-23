@@ -564,7 +564,7 @@ async def create_chef(
             latitude=Decimal(str(payload.latitude)),
             longitude=Decimal(str(payload.longitude)),
             dietary_type=payload.dietary_type,
-            fssai_license_number=payload.fssai_license_number,
+            fssai_license_number=payload.fssai_license_number or "PENDING",
             kitchen_bio=payload.kitchen_bio,
             is_verified=True,
             active_status=True
@@ -610,8 +610,10 @@ async def create_driver(
             driver_name=payload.driver_name,
             vehicle_type=payload.vehicle_type,
             vehicle_number=payload.vehicle_number,
+            vehicle_reg_number=payload.vehicle_number,
             vehicle_model=payload.vehicle_model,
             driver_license_number=payload.driver_license_number,
+            driving_license_number=payload.driver_license_number or "PENDING",
             is_on_shift=True,
             active_status=True
         )
