@@ -95,19 +95,25 @@ async def checkout_order(
         new_order = CustomerOrder(
             order_id=order_id,
             customer_phone=customer_phone,
-            chef_phone=chef_id,
-            order_status="BATCHED",
+            chef_phone=chef_id if chef_id and len(chef_id) <= 15 else "9876543210",
+            kitchen_name="Surmai Konkan Kitchen",
+            meal_window=req.meal_window or "LUNCH",
+            service_date=datetime.utcnow().date(),
+            status="BATCHED",
+            cart_subtotal=subtotal,
+            delivery_fee=delivery_fee,
             total_amount=total_amount,
             delivery_address=full_addr,
             latitude=req.delivery_address.latitude if req.delivery_address else 19.1234,
             longitude=req.delivery_address.longitude if req.delivery_address else 73.0123,
-            dietary_notes=req.dietary_notes,
+            special_instructions=req.dietary_notes,
             created_at=datetime.utcnow(),
         )
         db.add(new_order)
         await db.commit()
     except Exception as e:
         logger.error(f"Error persisting order: {e}")
+        await db.rollback()
         await db.rollback()
 
     # 5. Handle Razorpay Gateway (Mock Mode vs Live Mode)
