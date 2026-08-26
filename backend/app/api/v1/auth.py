@@ -37,6 +37,18 @@ UPI_RE = re.compile(r"^[\w.\-]{2,}@[\w.\-]{2,}$")
 VEHICLE_RE = re.compile(r"^[A-Z]{2}\d{1,2}[A-Z]{1,3}\d{1,4}$", re.I)
 
 
+class RegisterIn(BaseModel):
+    phone: str
+    email: str
+    password: str
+    full_name: str | None = None
+
+
+class LoginIn(BaseModel):
+    phone: str
+    password: str
+
+
 class Msg91VerifyIn(BaseModel):
     phone: str
     msg91_token: str
@@ -47,6 +59,7 @@ class Msg91VerifyIn(BaseModel):
 
 class GoogleLoginIn(BaseModel):
     id_token: str
+    phone: str | None = None
     avatar_url: str | None = None
     is_cartoon_avatar: bool | None = None
 
@@ -85,6 +98,74 @@ def _phone(raw: str) -> str:
     if not PHONE_RE.match(digits):
         raise HTTPException(status_code=400, detail="Enter a valid 10-digit Indian mobile number")
     return digits
+
+
+def _hash_pwd(password: str) -> str:
+    import hashlib
+    return hashlib.sha256((password + "homatri_secure_salt").encode("utf-8")).hexdigest()
+
+
+@router.post("/register")
+async def register(payload: RegisterIn, request: Request, response: Response) -> dict[str, Any]:
+    phone = _phone(payload.phone)
+    email = payload.email.strip().lower()
+    if not email or "@" not in email or "." not in email:
+        raise HTTPException(status_code=400, detail="Enter a valid email address")
+    if not payload.password or len(payload.password) < 4:
+        raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
+
+    async with SessionFactory() as db:
+        existing = await db.get(CustomerProfile, phone)
+        if existing and existing.password_hash:
+            raise HTTPException(status_code=400, detail="Phone number already registered. Please log in.")
+
+        if existing is None:
+            existing = CustomerProfile(
+                customer_phone=phone,
+                name=payload.full_name.strip() if payload.full_name else f"User {phone[-4:]}",
+                full_name=payload.full_name.strip() if payload.full_name else f"User {phone[-4:]}",
+                email=email,
+                password_hash=_hash_pwd(payload.password),
+                delivery_address="Default Delivery Address, Ghansoli",
+                is_registered=True,
+            )
+            db.add(existing)
+        else:
+            existing.email = email
+            existing.password_hash = _hash_pwd(payload.password)
+            if payload.full_name:
+                existing.name = payload.full_name.strip()
+                existing.full_name = payload.full_name.strip()
+            existing.is_registered = True
+
+        await db.commit()
+        await db.refresh(existing)
+        profile = _customer_public(existing)
+
+    return await _issue_session(
+        response=response, user_id=phone, role="CUSTOMER", request=request, profile=profile
+    )
+
+
+@router.post("/login")
+async def login(payload: LoginIn, request: Request, response: Response) -> dict[str, Any]:
+    phone = _phone(payload.phone)
+    if not payload.password:
+        raise HTTPException(status_code=400, detail="Password is required")
+
+    async with SessionFactory() as db:
+        user = await db.get(CustomerProfile, phone)
+        if user is None or not user.password_hash:
+            raise HTTPException(status_code=400, detail="No account found with this phone number. Please sign up.")
+
+        if user.password_hash != _hash_pwd(payload.password):
+            raise HTTPException(status_code=400, detail="Incorrect password. Please try again.")
+
+        profile = _customer_public(user)
+
+    return await _issue_session(
+        response=response, user_id=phone, role="CUSTOMER", request=request, profile=profile
+    )
 
 
 def _customer_public(profile: CustomerProfile) -> dict[str, Any]:
@@ -301,8 +382,9 @@ async def google_login(payload: GoogleLoginIn, request: Request, response: Respo
     cartoon = True if payload.avatar_url else False if info.get("picture") else True
     if payload.is_cartoon_avatar is not None:
         cartoon = payload.is_cartoon_avatar
+    phone_clean = _phone(payload.phone) if payload.phone else None
     profile = await _upsert_customer(
-        phone=None,
+        phone=phone_clean,
         name=info.get("name") or "Guest",
         email=info.get("email"),
         google_sub=str(info.get("sub")),

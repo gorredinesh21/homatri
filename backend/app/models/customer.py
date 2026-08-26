@@ -34,6 +34,7 @@ class CustomerProfile(Base, TimestampMixin):
     longitude: Mapped[Decimal | None] = mapped_column(Numeric(11, 8))
     alternate_phone: Mapped[str | None] = mapped_column(String(15))
     email: Mapped[str | None] = mapped_column(String(255), unique=True)
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     google_sub: Mapped[str | None] = mapped_column(String(255), unique=True)
     avatar_url: Mapped[str | None] = mapped_column(Text, default="avatar_tiffin_cartoon_1.png")
     is_cartoon_avatar: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
