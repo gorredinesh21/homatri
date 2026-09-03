@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from backend.app.db.session import get_db
 from backend.app.models.customer import CustomerAddress
-from backend.app.core.security import decode_access_token
+from backend.app.api.deps import require_phone
 
 logger = logging.getLogger("homatri_customer")
 router = APIRouter(prefix="/customer", tags=["Customer Addresses"])
@@ -33,26 +33,16 @@ class AddressCreateSchema(BaseModel):
     landmark: Optional[str] = None
     phone: str
     cluster: str = "Ghansoli"
-    latitude: Optional[float] = 19.1234
-    longitude: Optional[float] = 73.0123
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
     is_default: bool = False
 
 
 @router.get("/addresses", status_code=status.HTTP_200_OK)
 async def get_saved_addresses(
-    authorization: Optional[str] = Header(None),
+    customer_phone: str = Depends(require_phone),
     db: AsyncSession = Depends(get_db),
 ) -> List[dict[str, Any]]:
-    """Fetch all saved delivery addresses for the logged-in customer."""
-    customer_phone = "7416767453"
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization.split(" ")[1]
-        try:
-            payload = decode_access_token(token)
-            if payload and payload.get("sub"):
-                customer_phone = payload.get("sub")
-        except Exception:
-            pass
 
     res = await db.execute(
         select(CustomerAddress)
@@ -72,8 +62,8 @@ async def get_saved_addresses(
             "full_address": addr.full_address,
             "phone": addr.phone,
             "cluster": addr.cluster,
-            "latitude": float(addr.latitude) if addr.latitude else 19.1234,
-            "longitude": float(addr.longitude) if addr.longitude else 73.0123,
+            "latitude": float(addr.latitude) if addr.latitude is not None else None,
+            "longitude": float(addr.longitude) if addr.longitude is not None else None,
             "is_default": addr.is_default,
         })
     return out
@@ -82,19 +72,9 @@ async def get_saved_addresses(
 @router.post("/addresses", status_code=status.HTTP_201_CREATED)
 async def save_address(
     req: AddressCreateSchema,
-    authorization: Optional[str] = Header(None),
+    customer_phone: str = Depends(require_phone),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
-    """Save or Update a delivery address for the customer (Zomato/Swiggy style)."""
-    customer_phone = "7416767453"
-    if authorization and authorization.startswith("Bearer "):
-        token = authorization.split(" ")[1]
-        try:
-            payload = decode_access_token(token)
-            if payload and payload.get("sub"):
-                customer_phone = payload.get("sub")
-        except Exception:
-            pass
 
     full_addr = f"{req.flat_no}, {req.street_address}{f', Near {req.landmark}' if req.landmark else ''}, {req.cluster}"
 
@@ -103,7 +83,7 @@ async def save_address(
         try:
             target_uuid = UUID(req.id)
             existing = await db.get(CustomerAddress, target_uuid)
-            if existing:
+            if existing and existing.customer_phone == customer_phone:
                 existing.address_type = req.address_type.upper()
                 existing.flat_no = req.flat_no
                 existing.street_address = req.street_address
@@ -113,6 +93,8 @@ async def save_address(
                 existing.cluster = req.cluster
                 existing.latitude = req.latitude
                 existing.longitude = req.longitude
+                if req.is_default:
+                    existing.is_default = True
                 await db.commit()
                 await db.refresh(existing)
                 return {
@@ -152,11 +134,12 @@ async def save_address(
 @router.delete("/addresses/{address_id}", status_code=status.HTTP_200_OK)
 async def delete_address(
     address_id: UUID,
+    customer_phone: str = Depends(require_phone),
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, Any]:
     """Delete a saved address."""
     addr = await db.get(CustomerAddress, address_id)
-    if not addr:
+    if not addr or addr.customer_phone != customer_phone:
         raise HTTPException(status_code=404, detail="Address not found.")
     await db.delete(addr)
     await db.commit()

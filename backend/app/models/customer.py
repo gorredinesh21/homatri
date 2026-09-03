@@ -35,6 +35,8 @@ class CustomerProfile(Base, TimestampMixin):
     alternate_phone: Mapped[str | None] = mapped_column(String(15))
     email: Mapped[str | None] = mapped_column(String(255), unique=True)
     password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    username: Mapped[str | None] = mapped_column(String(50), unique=True, index=True)
+    role: Mapped[str] = mapped_column(String(20), nullable=False, default="CUSTOMER", index=True)
     google_sub: Mapped[str | None] = mapped_column(String(255), unique=True)
     avatar_url: Mapped[str | None] = mapped_column(Text, default="avatar_tiffin_cartoon_1.png")
     is_cartoon_avatar: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -65,6 +67,13 @@ class CustomerOrder(Base, TimestampMixin):
     special_instructions: Mapped[str | None] = mapped_column(Text)
     cancellation_reason: Mapped[str | None] = mapped_column(Text)
     cancelled_at: Mapped[datetime | None] = mapped_column(TS)
+    delivery_address: Mapped[str | None] = mapped_column(Text)
+    delivery_latitude: Mapped[Decimal | None] = mapped_column(Numeric(10, 8))
+    delivery_longitude: Mapped[Decimal | None] = mapped_column(Numeric(11, 8))
+    delivery_otp: Mapped[str | None] = mapped_column(String(6), index=True)
+    delivery_otp_verified_at: Mapped[datetime | None] = mapped_column(TS)
+    payment_method: Mapped[str] = mapped_column(String(20), nullable=False, default="RAZORPAY")  # RAZORPAY | COD
+    payment_status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")  # PENDING | PAID | COD_PENDING | COD_COLLECTED
 
 
 class CustomerOrderItem(Base):

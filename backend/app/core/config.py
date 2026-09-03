@@ -36,12 +36,18 @@ class Settings(BaseSettings):
 
     # ---- Business config fallbacks (authoritative values live in system_settings) ----
     default_delivery_fee: float = 30.00
+    ops_phone: str = ""
+    uploads_dir: str = "backend/uploads"
 
     # ---- Razorpay Payment Gateway ----
     razorpay_key_id: str = "rzp_test_mock_12345"
     razorpay_key_secret: str = "mock_secret_67890"
     razorpay_webhook_secret: str = "mock_webhook_secret_9999"
     razorpay_mock_mode: bool = True
+    # When True, online orders charge a fixed token amount (e.g. ₹1) regardless of
+    # cart total — used while testing payments. Set False to charge real totals.
+    payment_force_token_amount: bool = True
+    payment_token_amount_rupees: float = 1.00
 
     # ---- Google Maps (Routes API) ----
     # Empty -> maps_service runs in MOCK mode (nearest-neighbour). Set a real key

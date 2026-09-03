@@ -52,6 +52,11 @@ from backend.app.api.v1.auth import router as auth_router
 from backend.app.api.v1.bulk import router as bulk_router
 from backend.app.api.v1.orders import router as orders_router
 from backend.app.api.v1.customer import router as customer_router
+from backend.app.api.v1.reels import router as reels_router
+from backend.app.api.v1.chat import router as chat_router
+from backend.app.api.v1.kitchens import router as kitchens_router
+from backend.app.api.v1.chef_ops import router as chef_ops_router
+from backend.app.api.v1.rider_ops import router as rider_ops_router
 
 logger = logging.getLogger("homatri_server")
 WEBHOOK_VERIFY_TOKEN = getattr(settings, "webhook_verify_token", "homatri_verify")
@@ -85,6 +90,11 @@ app.include_router(auth_router, prefix="/api/v1")
 app.include_router(bulk_router, prefix="/api/v1")
 app.include_router(orders_router, prefix="/api/v1")
 app.include_router(customer_router, prefix="/api/v1")
+app.include_router(reels_router, prefix="/api/v1")
+app.include_router(chat_router, prefix="/api/v1")
+app.include_router(kitchens_router, prefix="/api/v1")
+app.include_router(chef_ops_router, prefix="/api/v1")
+app.include_router(rider_ops_router, prefix="/api/v1")
 
 # Enable CORS for the Next.js app (cookies require explicit origins).
 app.add_middleware(
@@ -97,10 +107,48 @@ app.add_middleware(
         "https://homatri.com",
         "https://www.homatri.com",
     ],
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1|192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from fastapi import WebSocket, WebSocketDisconnect
+from backend.app.core.security import decode_access_token
+from backend.app.services.rider_gps import record_rider_fix
+
+_uploads = os.path.abspath(getattr(settings, "uploads_dir", "backend/uploads"))
+os.makedirs(os.path.join(_uploads, "reels"), exist_ok=True)
+if os.path.isdir(_uploads):
+    app.mount("/media", StaticFiles(directory=_uploads), name="media")
+
+
+@app.websocket("/ws/v1/rider/location")
+async def rider_location_ws(ws: WebSocket):
+    token = ws.query_params.get("token") or (ws.headers.get("authorization") or "").replace("Bearer ", "")
+    try:
+        payload = decode_access_token(token)
+    except Exception:
+        await ws.close(code=4401)
+        return
+    if payload.get("role") != "RIDER":
+        await ws.close(code=4403)
+        return
+    await ws.accept()
+    phone = payload["sub"]
+    try:
+        while True:
+            raw = await ws.receive_json()
+            lat = float(raw.get("latitude"))
+            lng = float(raw.get("longitude"))
+            heading = raw.get("heading")
+            fix = await record_rider_fix(phone, lat, lng, float(heading) if heading is not None else None)
+            await ws.send_json({"ok": True, "timestamp": fix["timestamp"]})
+    except WebSocketDisconnect:
+        return
+    except Exception:
+        await ws.close()
+
 
 # Mount Decoupled Frontend Static Files
 if os.path.exists("frontend/tester"):

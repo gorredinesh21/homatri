@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import random
 import re
 from datetime import timedelta
 from decimal import Decimal
@@ -47,6 +48,11 @@ class RegisterIn(BaseModel):
 class LoginIn(BaseModel):
     phone: str
     password: str
+
+
+class UsernameSetupIn(BaseModel):
+    phone: str
+    requested_username: str | None = None
 
 
 class Msg91VerifyIn(BaseModel):
@@ -161,11 +167,81 @@ async def login(payload: LoginIn, request: Request, response: Response) -> dict[
         if user.password_hash != _hash_pwd(payload.password):
             raise HTTPException(status_code=400, detail="Incorrect password. Please try again.")
 
-        profile = _customer_public(user)
+        chef = await db.get(ChefProfile, phone)
+        driver = await db.get(DriverProfile, phone)
+        if chef is not None:
+            role = "CHEF"
+            profile = {
+                "phone": phone,
+                "chef_name": chef.chef_name,
+                "kitchen_name": chef.kitchen_name,
+                "avatar_url": chef.avatar_url,
+                "role": "CHEF",
+            }
+        elif driver is not None:
+            role = "RIDER"
+            profile = {
+                "phone": phone,
+                "driver_name": driver.driver_name,
+                "assigned_cluster": driver.assigned_cluster,
+                "role": "RIDER",
+            }
+        else:
+            role = "CUSTOMER"
+            profile = _customer_public(user)
 
     return await _issue_session(
-        response=response, user_id=phone, role="CUSTOMER", request=request, profile=profile
+        response=response, user_id=phone, role=role, request=request, profile=profile
     )
+
+
+def _sanitize_username(raw: str) -> str:
+    cleaned = re.sub(r"[^a-z0-9\s_]", "", (raw or "").lower())
+    cleaned = re.sub(r"[\s]+", "_", cleaned.strip())
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    return cleaned[:20]
+
+
+def generate_smart_username(full_name: str | None, phone: str) -> str:
+    name_part = _sanitize_username(full_name or "")
+    digits = re.sub(r"\D", "", phone or "")[-4:] or "0000"
+    suffix = random.randint(1000, 9999)
+    if name_part:
+        return f"{name_part}_{suffix}"
+    return f"foodie_{digits}_{suffix}"
+
+
+async def _allocate_username(db, base: str) -> str:
+    candidate = base[:50]
+    for _ in range(12):
+        taken = (
+            await db.execute(select(CustomerProfile).where(CustomerProfile.username == candidate))
+        ).scalar_one_or_none()
+        if taken is None:
+            return candidate
+        stem = _sanitize_username(base)[:18] or "foodie"
+        candidate = f"{stem}_{random.randint(1000, 9999)}"
+    return f"foodie_{random.randint(10000, 99999)}"
+
+
+@router.post("/setup-username")
+async def setup_username(payload: UsernameSetupIn) -> dict[str, Any]:
+    phone = _phone(payload.phone)
+    async with SessionFactory() as db:
+        user = await db.get(CustomerProfile, phone)
+        if not user:
+            raise HTTPException(status_code=404, detail="User profile not found")
+
+        requested = (payload.requested_username or "").strip()
+        if requested and len(_sanitize_username(requested)) >= 3:
+            target = _sanitize_username(requested)
+        else:
+            target = generate_smart_username(user.full_name or user.name, phone)
+
+        user.username = await _allocate_username(db, target)
+        await db.commit()
+        await db.refresh(user)
+        return {"status": "success", "username": user.username, "user": _customer_public(user)}
 
 
 def _customer_public(profile: CustomerProfile) -> dict[str, Any]:
@@ -174,9 +250,10 @@ def _customer_public(profile: CustomerProfile) -> dict[str, Any]:
         "phone": profile.customer_phone,
         "full_name": profile.full_name or profile.name,
         "email": profile.email,
+        "username": profile.username,
         "avatar_url": profile.avatar_url,
         "is_cartoon_avatar": profile.is_cartoon_avatar,
-        "role": "CUSTOMER",
+        "role": getattr(profile, "role", None) or "CUSTOMER",
     }
 
 

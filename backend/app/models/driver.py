@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import Boolean, Date, ForeignKey, Integer, String, Text, Uuid
+from sqlalchemy import Boolean, Date, ForeignKey, Integer, Numeric, String, Text, Uuid
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.core.ids import id_factory
@@ -57,3 +58,16 @@ class DriverTripStatus(Base, TimestampMixin):
     trip_started_at: Mapped[datetime | None] = mapped_column(TS)
     trip_completed_at: Mapped[datetime | None] = mapped_column(TS)
     delay_notes: Mapped[str | None] = mapped_column(Text)
+
+
+class DriverLocationPing(Base, TimestampMixin):
+    __tablename__ = "driver_location_pings"
+
+    ping_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=id_factory("gps"))
+    driver_phone: Mapped[str] = mapped_column(
+        String(15), ForeignKey("driver_profiles.driver_phone"), nullable=False, index=True
+    )
+    latitude: Mapped[Decimal] = mapped_column(Numeric(10, 8), nullable=False)
+    longitude: Mapped[Decimal] = mapped_column(Numeric(11, 8), nullable=False)
+    heading: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    recorded_at: Mapped[datetime] = mapped_column(TS, nullable=False, index=True)

@@ -67,6 +67,14 @@ class ReelComment(Base):
         index=True,
     )
     content: Mapped[str] = mapped_column(Text, nullable=False)
+    username: Mapped[str | None] = mapped_column(String(50))
+    avatar_url: Mapped[str | None] = mapped_column(Text)
+    parent_comment_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True),
+        ForeignKey("reel_comments.comment_id", ondelete="CASCADE"),
+        index=True,
+    )
+    likes_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         TS, nullable=False, server_default=func.now(), onupdate=func.now()

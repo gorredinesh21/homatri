@@ -119,3 +119,24 @@ class ChefOrderReadiness(Base):
     special_packing_notes: Mapped[str | None] = mapped_column(Text)
     driver_notified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+
+
+class ChefDietaryRequest(Base, TimestampMixin):
+    """Persistent dietary/negotiation request on an order (chef-side actions)."""
+
+    __tablename__ = "chef_dietary_requests"
+
+    request_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=id_factory("dtr"))
+    order_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("customer_orders.order_id"), nullable=False, index=True
+    )
+    customer_phone: Mapped[str] = mapped_column(String(15), nullable=False, index=True)
+    chef_phone: Mapped[str] = mapped_column(
+        String(15), ForeignKey("chef_profiles.chef_phone"), nullable=False, index=True
+    )
+    note: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="WAITING_CHEF", index=True)
+    # WAITING_CHEF -> ACCEPTED | REJECTED | COUNTERED -> (customer) ACCEPTED | KEPT_ORIGINAL
+    counter_offer: Mapped[str | None] = mapped_column(Text)
+    turn: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    resolved_at: Mapped[datetime | None] = mapped_column(TS)
