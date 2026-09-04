@@ -360,24 +360,36 @@ async def get_pipeline_summary(
         )
         stage_counts = {status: count for status, count in order_counts_res.all()}
 
-        # Active Kitchen count
-        chefs_res = await session.execute(select(ChefProfile))
+        # Active kitchens only — demo/retired chefs stay out of ops views.
+        chefs_res = await session.execute(
+            select(ChefProfile).where(
+                ChefProfile.active_status.is_(True), ChefProfile.deleted_at.is_(None)
+            )
+        )
         chefs = chefs_res.scalars().all()
+
+        from backend.app.services.kitchens import committed_meals
+
+        kitchen_rows = []
+        for c in chefs:
+            used_l = await committed_meals(session, c.chef_phone, s_date, "LUNCH")
+            used_d = await committed_meals(session, c.chef_phone, s_date, "DINNER")
+            kitchen_rows.append(
+                {
+                    "kitchen_name": c.kitchen_name,
+                    "chef_phone": c.chef_phone,
+                    "locality": c.apartment_or_locality or c.address,
+                    "is_accepting_orders": bool(c.active_status and c.accepting_orders),
+                    "max_daily_capacity": int(c.daily_capacity or 15),
+                    "committed_meals": int(used_l + used_d),
+                }
+            )
 
         return {
             "service_date": str(s_date),
             "stage_counts": stage_counts,
             "active_kitchens_count": len(chefs),
-            "kitchens": [
-                {
-                    "kitchen_name": c.kitchen_name,
-                    "chef_phone": c.chef_phone,
-                    "locality": c.apartment_or_locality or c.address,
-                    "is_accepting_orders": getattr(c, "active_status", True),
-                    "max_daily_capacity": getattr(c, "daily_capacity", 15),
-                }
-                for c in chefs
-            ]
+            "kitchens": kitchen_rows,
         }
 
 
