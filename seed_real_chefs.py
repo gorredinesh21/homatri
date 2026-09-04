@@ -38,6 +38,7 @@ REAL_CHEFS = [
         signature="Pineapple Sheera",
         photo=f"{GCS}/shrushti_vivek_sutar_chef.jpeg",
         lat="19.1197", lng="73.0078",
+        featured=True,
         dishes=[
             ("Chapati Bhaji Salad", 70, "VEG"),
             ("Chapati, Dal, Rice, 2 Bhaji, Salad", 160, "VEG"),
@@ -135,6 +136,7 @@ async def seed() -> None:
                 accepting_orders=True,
                 active_status=True,
                 is_verified=True,
+                is_featured=bool(c.get("featured")),
                 rating_average=Decimal("4.80"),
             )
             if chef is None:

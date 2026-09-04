@@ -191,7 +191,10 @@ async def list_kitchens(
     session: AsyncSession, *, cluster: str | None = None, meal_window: str | None = None
 ) -> list[dict[str, Any]]:
     q = select(ChefProfile).where(ChefProfile.active_status.is_(True), ChefProfile.deleted_at.is_(None))
-    chefs = (await session.execute(q.order_by(ChefProfile.kitchen_name))).scalars().all()
+    # Featured kitchens pin to the top of every feed (cards, reels, public site).
+    chefs = (
+        await session.execute(q.order_by(ChefProfile.is_featured.desc(), ChefProfile.kitchen_name))
+    ).scalars().all()
     cluster_l = (cluster or "").strip().lower()
     out = []
     for chef in chefs:

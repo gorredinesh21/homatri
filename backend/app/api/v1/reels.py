@@ -140,8 +140,13 @@ async def reels_feed() -> list[dict[str, Any]]:
                 (
                     await db.execute(
                         select(ChefReel)
+                        .join(ChefProfile, ChefProfile.chef_phone == ChefReel.chef_phone)
                         .where(ChefReel.deleted_at.is_(None), ChefReel.published.is_(True))
-                        .order_by(ChefReel.created_at.desc())
+                        .order_by(
+                            ChefProfile.is_featured.desc(),
+                            ChefReel.created_at.desc(),
+                            ChefReel.reel_id.desc(),
+                        )
                         .limit(40)
                     )
                 )

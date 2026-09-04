@@ -55,6 +55,8 @@ class ChefProfile(Base, TimestampMixin):
         JSONB, default=lambda: ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"]
     )
     is_verified: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Featured kitchens pin to the top of every feed (cards, reels, public site).
+    is_featured: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, index=True)
     active_status: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     deleted_at: Mapped[datetime | None] = mapped_column(TS)
 
