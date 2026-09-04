@@ -270,11 +270,7 @@ async def checkout_order(
     )
     await execute_outbound_for_chef(db, chef_phone, order)
 
-    if payment_method == "COD" and (
-        is_past_cutoff(meal_window, service_date) or datetime.now().hour * 60 + datetime.now().minute >= (
-            11 * 60 + 30 if meal_window == "LUNCH" else 18 * 60 + 30
-        )
-    ):
+    if payment_method == "COD" and is_past_cutoff(meal_window, service_date):
         await _run_cutoff_batch(db, window=meal_window, service_date=service_date)
 
     await db.commit()
@@ -348,9 +344,7 @@ async def verify_payment(
     )
 
     window_info = active_window()
-    if is_past_cutoff(order.meal_window, order.service_date) or datetime.now().hour * 60 + datetime.now().minute >= (
-        11 * 60 + 30 if order.meal_window == "LUNCH" else 18 * 60 + 30
-    ):
+    if is_past_cutoff(order.meal_window, order.service_date):
         await _run_cutoff_batch(db, window=order.meal_window, service_date=order.service_date)
 
     await db.commit()
