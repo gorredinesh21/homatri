@@ -8,6 +8,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean,
+    JSON,
     ForeignKey,
     Integer,
     Numeric,
@@ -124,3 +125,24 @@ class ChefFollower(Base):
         index=True,
     )
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())
+
+
+class ChefContentProgress(Base):
+    """30-day content challenge progress: which day + which scene clips are shot."""
+
+    __tablename__ = "chef_content_progress"
+    __table_args__ = (UniqueConstraint("chef_phone", "day", name="uq_chef_content_day"),)
+
+    id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
+    chef_phone: Mapped[str] = mapped_column(
+        String(20),
+        ForeignKey("chef_profiles.chef_phone", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    day: Mapped[int] = mapped_column(Integer, nullable=False)
+    completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    scene_states: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict, server_default="{}")
+    updated_at: Mapped[datetime] = mapped_column(
+        TS, nullable=False, server_default=func.now(), onupdate=func.now()
+    )

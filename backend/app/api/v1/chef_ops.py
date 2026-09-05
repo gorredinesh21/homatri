@@ -17,7 +17,7 @@ from backend.app.db.session import get_db
 from backend.app.models.chef import ChefDietaryRequest, ChefMenuItem, ChefProfile
 from backend.app.models.customer import CustomerOrder, CustomerOrderItem, CustomerProfile
 from backend.app.models.driver import DriverProfile
-from backend.app.models.social import ChefReel
+from backend.app.models.social import ChefContentProgress, ChefReel
 from backend.app.models.system import SystemDeliveryRoute, SystemDeliveryStop, SystemDeliveryStopOrder
 from backend.app.services.fulfillment import chef_earnings, mark_kitchen_packed
 from backend.app.services.kitchens import committed_meals, menu_card, serialize_kitchen
@@ -439,3 +439,62 @@ async def patch_kitchen(
         chef.kitchen_bio = data["bio"]
     await db.commit()
     return {"status": "ok"}
+
+
+# ---------------- 30-day content challenge ----------------
+
+class ContentDayPatch(BaseModel):
+    completed: Optional[bool] = None
+    scenes: Optional[list[bool]] = None
+
+
+@router.get("/me/content-plan")
+async def get_content_plan(
+    payload: dict = Depends(require_role("CHEF")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Shot-list progress for the 30-day content challenge (one row per day touched)."""
+    phone = _chef_phone(payload)
+    rows = (
+        await db.execute(
+            select(ChefContentProgress).where(ChefContentProgress.chef_phone == phone)
+        )
+    ).scalars().all()
+    return {
+        "progress": [
+            {
+                "day": row.day,
+                "completed": row.completed,
+                "scenes": row.scene_states or {},
+            }
+            for row in rows
+        ]
+    }
+
+
+@router.put("/me/content-plan/{day}")
+async def put_content_day(
+    day: int,
+    body: ContentDayPatch,
+    payload: dict = Depends(require_role("CHEF")),
+    db: AsyncSession = Depends(get_db),
+):
+    phone = _chef_phone(payload)
+    if not 1 <= day <= 31:
+        raise HTTPException(status_code=400, detail="day must be 1..30")
+    row = (
+        await db.execute(
+            select(ChefContentProgress).where(
+                ChefContentProgress.chef_phone == phone, ChefContentProgress.day == day
+            )
+        )
+    ).scalar_one_or_none()
+    if row is None:
+        row = ChefContentProgress(chef_phone=phone, day=day)
+        db.add(row)
+    if body.completed is not None:
+        row.completed = body.completed
+    if body.scenes is not None:
+        row.scene_states = {str(i): bool(done) for i, done in enumerate(body.scenes)}
+    await db.commit()
+    return {"day": day, "completed": row.completed, "scenes": row.scene_states or {}}
