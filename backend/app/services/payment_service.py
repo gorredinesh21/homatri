@@ -30,6 +30,95 @@ class RazorpayPaymentService:
         self.webhook_secret = webhook_secret or settings.razorpay_webhook_secret
         self.mock_mode = settings.razorpay_mock_mode if mock_mode is None else mock_mode
 
+    def _is_real(self) -> bool:
+        return (
+            not self.mock_mode
+            and bool(self.key_id)
+            and bool(self.key_secret)
+            and "mock" not in self.key_id.lower()
+            and "mock" not in self.key_secret.lower()
+        )
+
+    async def create_order(
+        self,
+        order_id: str,
+        amount_in_rupees: float,
+        customer_phone: str,
+        customer_name: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Create a Razorpay Order for the Checkout.js modal flow.
+
+        In Real Mode: POST https://api.razorpay.com/v1/orders (Basic auth).
+        In Mock Mode: a locally-scoped order id so the simulator flow still works.
+        """
+        amount_paise = int(round(amount_in_rupees * 100))
+
+        if self._is_real():
+            url = "https://api.razorpay.com/v1/orders"
+            payload = {
+                "amount": amount_paise,
+                "currency": "INR",
+                "receipt": order_id,
+                "notes": {
+                    "order_id": order_id,
+                    "customer_phone": customer_phone[-10:],
+                    "platform": "Homaatri",
+                },
+            }
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        url,
+                        json=payload,
+                        auth=(self.key_id, self.key_secret),
+                        headers={"Content-Type": "application/json"},
+                        timeout=10.0,
+                    )
+                if resp.status_code in (200, 201):
+                    data = resp.json()
+                    return {
+                        "mode": "REAL",
+                        "razorpay_order_id": data.get("id"),
+                        "amount_rupees": amount_in_rupees,
+                        "key_id": self.key_id,
+                        "status": data.get("status"),
+                    }
+                return {
+                    "mode": "ERROR",
+                    "error": f"Razorpay Orders API HTTP {resp.status_code}: {resp.text[:300]}",
+                }
+            except Exception as exc:  # network / timeout — never silently fake a payment
+                return {"mode": "ERROR", "error": f"Razorpay Orders API unreachable: {exc}"}
+
+        return {
+            "mode": "MOCK",
+            "razorpay_order_id": f"order_mock_{uuid.uuid4().hex[:12]}",
+            "amount_rupees": amount_in_rupees,
+            "key_id": self.key_id,
+            "status": "created",
+        }
+
+    def verify_payment_signature(
+        self,
+        razorpay_order_id: str,
+        razorpay_payment_id: str,
+        razorpay_signature: str,
+    ) -> bool:
+        """Verify the Checkout.js success handler HMAC-SHA256 signature.
+
+        signature == hex(hmac_sha256(key_secret, f"{order_id}|{payment_id}")).
+        """
+        if not self._is_real():
+            return True  # mock/token mode: simulator confirmations accepted
+        if not (razorpay_order_id and razorpay_payment_id and razorpay_signature):
+            return False
+        expected = hmac.new(
+            self.key_secret.encode("utf-8"),
+            f"{razorpay_order_id}|{razorpay_payment_id}".encode("utf-8"),
+            hashlib.sha256,
+        ).hexdigest()
+        return hmac.compare_digest(expected, razorpay_signature.strip())
+
     async def create_payment_link(
         self,
         order_id: str,

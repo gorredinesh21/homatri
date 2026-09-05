@@ -226,34 +226,38 @@ async def checkout_order(
     if payment_method == "RAZORPAY":
         from backend.app.services.payment_service import razorpay_service
 
-        # Token amount (₹1) while payment_force_token_amount is on — real totals later.
+        # Token amount only while payment_force_token_amount is on; real totals now.
         charge_amount = (
             float(settings.payment_token_amount_rupees)
             if settings.payment_force_token_amount
             else float(order.total_amount)
         )
-        link = await razorpay_service.create_payment_link(
+        rp = await razorpay_service.create_order(
             order_id=order_id,
             amount_in_rupees=charge_amount,
             customer_phone=phone,
             customer_name=profile.name,
         )
+        if rp.get("mode") == "ERROR":
+            await db.rollback()
+            raise HTTPException(status_code=502, detail=f"Payment gateway error: {rp.get('error')}")
         db.add(
             CustomerPayment(
                 order_id=order_id,
                 customer_phone=phone,
                 payment_type="INITIAL",
                 amount_due=Decimal(str(charge_amount)),
-                payment_link_url=link.get("short_url"),
+                payment_link_url=None,
                 gateway="RAZORPAY",
-                gateway_payment_id=link.get("payment_link_id"),
+                gateway_order_id=rp.get("razorpay_order_id"),
                 status="PENDING",
             )
         )
         await db.flush()
         payment_info = {
-            "mode": link.get("mode"),
-            "payment_link_url": link.get("short_url"),
+            "mode": rp.get("mode"),
+            "razorpay_order_id": rp.get("razorpay_order_id"),
+            "key_id": rp.get("key_id"),
             "amount_rupees": charge_amount,
             "token_mode": settings.payment_force_token_amount,
             "order_total_rupees": float(order.total_amount),
@@ -279,7 +283,7 @@ async def checkout_order(
     if payment_method == "COD":
         body["message"] = "Order confirmed. Pay ₹{:.0f} cash on delivery.".format(float(order.total_amount))
     else:
-        body["message"] = "Order created. Complete the ₹{:.0f} token payment to confirm.".format(
+        body["message"] = "Order created. Complete the ₹{:.0f} payment to confirm.".format(
             float(payment_info["amount_rupees"])
         )
         body["payment"] = payment_info
@@ -287,9 +291,50 @@ async def checkout_order(
 
 
 class VerifyPaymentIn(BaseModel):
+    razorpay_order_id: Optional[str] = None
     razorpay_payment_id: Optional[str] = None
     razorpay_signature: Optional[str] = None
     simulate: bool = False  # mock-mode gateway simulator confirmation
+
+
+@router.get("/{order_id}/payment")
+async def get_order_payment(
+    order_id: str,
+    payload: dict = Depends(require_user),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    """Pending-payment details so the client can re-open the Razorpay checkout
+    (e.g. from the tracking page after a dismissed modal)."""
+    order = await db.get(CustomerOrder, order_id)
+    if order is None:
+        raise HTTPException(status_code=404, detail="Order not found")
+    if order.customer_phone != payload["sub"]:
+        raise HTTPException(status_code=403, detail="Not your order")
+    if order.payment_method != "RAZORPAY":
+        raise HTTPException(status_code=409, detail="This order is not an online-payment order.")
+    if order.status != "PENDING_PAYMENT":
+        return {"status": "PAID", "order_status": order.status}
+
+    payment = (
+        await db.execute(
+            select(CustomerPayment).where(
+                CustomerPayment.order_id == order_id, CustomerPayment.payment_type == "INITIAL"
+            )
+        )
+    ).scalar_one_or_none()
+
+    from backend.app.services.payment_service import razorpay_service
+
+    mock_flow = settings.razorpay_mock_mode or settings.payment_force_token_amount
+    return {
+        "status": "PENDING",
+        "mode": "MOCK" if mock_flow else "REAL",
+        "razorpay_order_id": payment.gateway_order_id if payment else None,
+        "key_id": settings.razorpay_key_id,
+        "amount_rupees": float(payment.amount_due) if payment else float(order.total_amount),
+        "order_total_rupees": float(order.total_amount),
+        "token_mode": settings.payment_force_token_amount,
+    }
 
 
 @router.post("/{order_id}/verify-payment")
@@ -323,13 +368,26 @@ async def verify_payment(
         )
     ).scalar_one_or_none()
 
-    if not (settings.razorpay_mock_mode or settings.payment_force_token_amount or body.simulate):
-        if not (body.razorpay_payment_id and body.razorpay_signature):
-            raise HTTPException(status_code=400, detail="razorpay_payment_id and razorpay_signature required.")
+    # Real mode ALWAYS verifies the gateway signature — the simulate flag is only
+    # honoured in mock/token mode (a client must never be able to self-confirm a
+    # live payment by passing simulate=true).
+    mock_flow = settings.razorpay_mock_mode or settings.payment_force_token_amount
+    if not mock_flow:
+        from backend.app.services.payment_service import razorpay_service
+
+        if not (body.razorpay_order_id and body.razorpay_payment_id and body.razorpay_signature):
+            raise HTTPException(status_code=400, detail="razorpay_order_id, razorpay_payment_id and razorpay_signature required.")
+        if payment is not None and payment.gateway_order_id and body.razorpay_order_id != payment.gateway_order_id:
+            raise HTTPException(status_code=400, detail="razorpay_order_id does not match this order.")
+        if not razorpay_service.verify_payment_signature(
+            body.razorpay_order_id, body.razorpay_payment_id, body.razorpay_signature
+        ):
+            raise HTTPException(status_code=400, detail="Payment signature verification failed.")
 
     if payment is not None:
         payment.status = "PAID"
         payment.amount_paid = payment.amount_due
+        payment.gateway_order_id = body.razorpay_order_id or payment.gateway_order_id
         payment.gateway_payment_id = body.razorpay_payment_id or payment.gateway_payment_id or f"pay_mock_{order_id}"
         payment.transaction_id = payment.gateway_payment_id
         payment.paid_at = datetime.now()
