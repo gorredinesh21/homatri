@@ -633,9 +633,13 @@ async def reset_password(payload: ResetPasswordIn) -> dict[str, Any]:
 @router.post("/onboarding/chef")
 async def onboard_chef(payload: ChefOnboardingIn, request: Request, response: Response) -> dict[str, Any]:
     phone = _phone(payload.chef_phone)
-    fssai = re.sub(r"\D", "", payload.fssai_license_number)
-    if not FSSAI_RE.match(fssai):
+    # FSSAI is optional at signup — kitchens can add it later (admin keeps
+    # seeing "PENDING" until then). Validate format only when provided.
+    fssai = re.sub(r"\D", "", payload.fssai_license_number or "")
+    if fssai and not FSSAI_RE.match(fssai):
         raise HTTPException(status_code=400, detail="FSSAI license must be 14 digits")
+    if not fssai:
+        fssai = "PENDING"
     if not UPI_RE.match(payload.payout_upi_id.strip()):
         raise HTTPException(status_code=400, detail="Enter a valid UPI ID (example: homemaker@upi)")
     if not (-90 <= payload.latitude <= 90 and -180 <= payload.longitude <= 180):
