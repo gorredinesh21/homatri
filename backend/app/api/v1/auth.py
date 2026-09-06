@@ -26,7 +26,7 @@ from backend.app.core.security import (
 from backend.app.db.session import SessionFactory
 from backend.app.models.auth import UserSession
 from backend.app.models.chef import ChefProfile
-from backend.app.models.customer import CustomerProfile
+from backend.app.models.customer import CustomerProfile, PasswordResetOtp
 from backend.app.models.driver import DriverProfile
 
 logger = logging.getLogger("homatri_auth")
@@ -477,6 +477,159 @@ async def google_login(payload: GoogleLoginIn, request: Request, response: Respo
     )
 
 
+class ForgotPasswordIn(BaseModel):
+    phone: str
+
+
+class ResetPasswordIn(BaseModel):
+    phone: str
+    otp: str
+    new_password: str
+
+
+def _otp_hash(code: str) -> str:
+    import hashlib
+    return hashlib.sha256((code + "homatri_otp_salt").encode("utf-8")).hexdigest()
+
+
+async def _send_reset_email(to_email: str, code: str) -> None:
+    subject = "Your Homatri password reset code"
+    html = (
+        "<div style=\"font-family:Arial,sans-serif;max-width:420px;margin:auto\">"
+        "<h2 style=\"color:#E8501E\">Homatri</h2>"
+        f"<p>Your password reset code is:</p>"
+        f"<p style=\"font-size:30px;font-weight:bold;letter-spacing:6px\">{code}</p>"
+        "<p>It expires in 10 minutes. If you didn\'t ask for this, you can ignore this email.</p>"
+        "</div>"
+    )
+    if settings.resend_api_key:
+        import httpx
+        async with httpx.AsyncClient(timeout=10) as client:
+            res = await client.post(
+                "https://api.resend.com/emails",
+                headers={"Authorization": f"Bearer {settings.resend_api_key}"},
+                json={"from": settings.smtp_from, "to": [to_email], "subject": subject, "html": html},
+            )
+            res.raise_for_status()
+        return
+    import asyncio
+    import smtplib
+    from email.mime.text import MIMEText
+
+    msg = MIMEText(html, "html")
+    msg["Subject"] = subject
+    msg["From"] = settings.smtp_from
+    msg["To"] = to_email
+
+    def _smtp_send() -> None:
+        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=10) as server:
+            server.starttls()
+            server.login(settings.smtp_user, settings.smtp_pass)
+            server.send_message(msg)
+
+    await asyncio.to_thread(_smtp_send)
+
+
+async def _send_reset_sms(phone: str, code: str) -> None:
+    import httpx
+    async with httpx.AsyncClient(timeout=10) as client:
+        res = await client.post(
+            "https://control.msg91.com/api/v5/otp",
+            params={
+                "template_id": settings.msg91_otp_template_id,
+                "mobile": f"91{phone}",
+                "otp": code,
+            },
+            headers={"authkey": settings.msg91_authkey},
+        )
+        res.raise_for_status()
+
+
+@router.post("/forgot-password")
+async def forgot_password(payload: ForgotPasswordIn) -> dict[str, Any]:
+    """Send a password-reset OTP over email (SMTP/Resend) or SMS (MSG91)."""
+    import random
+
+    phone = _phone(payload.phone)
+    async with SessionFactory() as db:
+        user = await db.get(CustomerProfile, phone)
+        if user is None or not user.password_hash:
+            # Don't reveal which phones have accounts.
+            return {"sent": True, "channel": "NONE"}
+
+        email_ready = (
+            (settings.resend_api_key or (settings.smtp_host and settings.smtp_user and settings.smtp_pass))
+            and user.email
+        )
+        sms_ready = settings.msg91_authkey and settings.msg91_otp_template_id
+        if not email_ready and not sms_ready:
+            raise HTTPException(
+                status_code=503,
+                detail="Password reset isn't configured yet. WhatsApp us at +91 8369384157 and we'll reset it for you.",
+            )
+
+        code = f"{random.randint(0, 999999):06d}"
+        from datetime import datetime, timedelta, timezone
+
+        db.add(
+            PasswordResetOtp(
+                phone=phone,
+                otp_hash=_otp_hash(code),
+                expires_at=datetime.now(timezone.utc) + timedelta(minutes=10),
+            )
+        )
+        await db.commit()
+
+        if email_ready:
+            await _send_reset_email(user.email, code)
+            masked = user.email.split("@")
+            hint = f"{masked[0][:2]}***@{masked[1]}" if len(masked) == 2 else ""
+            return {"sent": True, "channel": "EMAIL", "hint": hint}
+        await _send_reset_sms(phone, code)
+        return {"sent": True, "channel": "SMS", "hint": f"+91 {phone[:2]}****{phone[-3:]}"}
+
+
+@router.post("/reset-password")
+async def reset_password(payload: ResetPasswordIn) -> dict[str, Any]:
+    """Verify the OTP and set a new password (revokes active sessions)."""
+    phone = _phone(payload.phone)
+    if len(payload.new_password) < 4:
+        raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
+
+    from datetime import datetime, timezone
+
+    from sqlalchemy import delete
+
+    async with SessionFactory() as db:
+        rows = (
+            await db.execute(
+                select(PasswordResetOtp)
+                .where(PasswordResetOtp.phone == phone, PasswordResetOtp.used_at.is_(None))
+                .order_by(PasswordResetOtp.created_at.desc())
+                .limit(1)
+            )
+        ).scalars().all()
+        otp = rows[0] if rows else None
+        now = datetime.now(timezone.utc)
+        if otp is None or otp.expires_at.replace(tzinfo=timezone.utc) < now:
+            raise HTTPException(status_code=400, detail="This code has expired. Request a new one.")
+        if otp.attempts >= 5:
+            raise HTTPException(status_code=429, detail="Too many attempts. Request a new code.")
+        if otp.otp_hash != _otp_hash(payload.otp.strip()):
+            otp.attempts += 1
+            await db.commit()
+            raise HTTPException(status_code=400, detail="Wrong code. Please try again.")
+
+        user = await db.get(CustomerProfile, phone)
+        if user is None:
+            raise HTTPException(status_code=404, detail="No account found.")
+        user.password_hash = _hash_pwd(payload.new_password)
+        otp.used_at = now
+        await db.execute(delete(UserSession).where(UserSession.user_id == phone))
+        await db.commit()
+    return {"reset": True}
+
+
 @router.post("/onboarding/chef")
 async def onboard_chef(payload: ChefOnboardingIn, request: Request, response: Response) -> dict[str, Any]:
     phone = _phone(payload.chef_phone)
@@ -507,9 +660,10 @@ async def onboard_chef(payload: ChefOnboardingIn, request: Request, response: Re
                 daily_capacity=payload.daily_capacity,
                 payout_upi_id=payload.payout_upi_id.strip(),
                 avatar_url=payload.avatar_url,
-                is_verified=True,
-                active_status=True,
-                accepting_orders=True,
+                # New kitchens wait for Homatri admin approval before going live.
+                is_verified=False,
+                active_status=False,
+                accepting_orders=False,
             )
             db.add(chef)
         else:
@@ -528,8 +682,7 @@ async def onboard_chef(payload: ChefOnboardingIn, request: Request, response: Re
             chef.payout_upi_id = payload.payout_upi_id.strip()
             if payload.avatar_url:
                 chef.avatar_url = payload.avatar_url
-            chef.is_verified = True
-            chef.active_status = True
+            # Re-onboarding keeps the kitchen's existing verification state.
         await db.commit()
 
     public = {

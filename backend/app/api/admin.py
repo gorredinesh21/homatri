@@ -548,6 +548,7 @@ async def list_chefs(current_admin: dict[str, Any] = Depends(get_current_admin))
                 "dietary_type": c.dietary_type,
                 "fssai_license_number": c.fssai_license_number,
                 "active_status": c.active_status,
+                "is_verified": c.is_verified,
             }
             for c in chefs
         ]
@@ -584,6 +585,36 @@ async def create_chef(
         session.add(chef)
         await session.commit()
         return {"status": "SUCCESS", "message": f"Chef {payload.chef_name} added successfully!"}
+
+
+@router.post("/chefs/{chef_phone}/approve")
+async def approve_chef(chef_phone: str, current_admin: dict[str, Any] = Depends(get_current_admin)):
+    """Approve a pending home kitchen: verifies + activates it for customers."""
+    async with SessionFactory() as session:
+        chef = await session.get(ChefProfile, chef_phone)
+        if chef is None or chef.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Chef not found")
+        chef.is_verified = True
+        chef.active_status = True
+        chef.accepting_orders = True
+        await session.commit()
+        return {"status": "SUCCESS", "message": f"{chef.kitchen_name} approved and live."}
+
+
+@router.post("/chefs/{chef_phone}/reject")
+async def reject_chef(chef_phone: str, current_admin: dict[str, Any] = Depends(get_current_admin)):
+    """Reject a pending kitchen: soft-deletes it so the phone can onboard again."""
+    from datetime import datetime, timezone
+
+    async with SessionFactory() as session:
+        chef = await session.get(ChefProfile, chef_phone)
+        if chef is None or chef.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Chef not found")
+        chef.deleted_at = datetime.now(timezone.utc)
+        chef.active_status = False
+        chef.accepting_orders = False
+        await session.commit()
+        return {"status": "SUCCESS", "message": f"{chef.kitchen_name} rejected."}
 
 
 @router.get("/drivers")

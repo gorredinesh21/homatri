@@ -192,6 +192,7 @@ async def chef_dashboard(
             "dailyCapacity": chef.daily_capacity,
             "fssaiLicenseNumber": chef.fssai_license_number,
             "acceptingOrders": chef.accepting_orders,
+            "isVerified": chef.is_verified,
         },
         "publicKitchen": kitchen,
         "windowInfo": {

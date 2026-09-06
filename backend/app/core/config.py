@@ -64,6 +64,18 @@ class Settings(BaseSettings):
     jwt_refresh_ttl_seconds: int = 60 * 60 * 24 * 30
     msg91_widget_id: str = "3668776a6f65313935373431"
     msg91_widget_token: str = "563549TIHmC7w7bhL6a8acd1aP1"
+
+    # ---- Password reset OTP delivery (fill when ready; both optional) ----
+    # Email: any SMTP provider (Resend/Brevo/Zoho ZeptoMail/Gmail) or Resend HTTP API
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_pass: str = ""
+    smtp_from: str = "Homatri <no-reply@homatri.com>"
+    resend_api_key: str = ""
+    # SMS fallback: MSG91 OTP API (authkey + template_id from your MSG91 account)
+    msg91_authkey: str = ""
+    msg91_otp_template_id: str = ""
     google_oauth_client_id: str = (
         "195132182954-ooatsl0i96re4hcd8fvm95s4g2g6lf8d.apps.googleusercontent.com"
     )
