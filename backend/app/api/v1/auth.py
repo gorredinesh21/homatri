@@ -84,6 +84,7 @@ class ChefOnboardingIn(BaseModel):
     longitude: float
     payout_upi_id: str
     avatar_url: str | None = "avatar_chef_cartoon_1.png"
+    password: str | None = None  # optional at signup; chefs without one can't log back in
 
 
 class RiderOnboardingIn(BaseModel):
@@ -646,6 +647,19 @@ async def onboard_chef(payload: ChefOnboardingIn, request: Request, response: Re
         raise HTTPException(status_code=400, detail="Invalid latitude/longitude")
 
     async with SessionFactory() as db:
+        # A password here lets the chef log back in after the session ends.
+        if payload.password and len(payload.password) >= 4:
+            login_user = await db.get(CustomerProfile, phone)
+            if login_user is None:
+                login_user = CustomerProfile(
+                    customer_phone=phone,
+                    name=payload.chef_name.strip(),
+                    full_name=payload.chef_name.strip(),
+                    delivery_address="Set during first order",
+                    is_registered=True,
+                )
+                db.add(login_user)
+            login_user.password_hash = _hash_pwd(payload.password)
         chef = await db.get(ChefProfile, phone)
         if chef is None:
             chef = ChefProfile(
