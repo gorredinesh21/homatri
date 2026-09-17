@@ -14,4 +14,4 @@ echo "⚡ Running Database Auto-Seeding & Schema Setup..."
 PORT="${PORT:-8000}"
 
 echo "🟢 Launching Production ASGI Gunicorn Server on Port ${PORT}..."
-exec gunicorn -w 2 -k uvicorn.workers.UvicornWorker backend.app.api.server:app --bind "0.0.0.0:${PORT}" --timeout 120 --log-level info
+exec gunicorn -w 1 -k uvicorn.workers.UvicornWorker backend.app.api.server:app --bind "0.0.0.0:${PORT}" --timeout 120 --log-level info

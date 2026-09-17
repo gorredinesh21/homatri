@@ -57,6 +57,12 @@ class Settings(BaseSettings):
     # ---- Meta WhatsApp Cloud API ----
     meta_phone_number_id: str = ""
     meta_whatsapp_token: str = ""
+    webhook_verify_token: str = "homatri_verify"
+    # Optional: when set, POST /webhook verifies Meta's X-Hub-Signature-256
+    # (HMAC-SHA256 of the raw body with the Meta App Secret).
+    meta_app_secret: str = ""
+    # Public base URL of this deployment (used by payment callback links).
+    base_url: str = "http://localhost:8000"
 
     # ---- Auth / MSG91 OTP Widget / Google OAuth ----
     jwt_secret: str = "homatri-dev-jwt-secret-change-in-production"

@@ -10,6 +10,7 @@ Stateless REST API backend servicing:
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sys
@@ -59,7 +60,7 @@ from backend.app.api.v1.chef_ops import router as chef_ops_router
 from backend.app.api.v1.rider_ops import router as rider_ops_router
 
 logger = logging.getLogger("homatri_server")
-WEBHOOK_VERIFY_TOKEN = getattr(settings, "webhook_verify_token", "homatri_verify")
+WEBHOOK_VERIFY_TOKEN = settings.webhook_verify_token
 
 from contextlib import asynccontextmanager
 
@@ -276,7 +277,22 @@ async def _process_inbound_message(msg: dict[str, Any]):
 @app.post("/webhook")
 async def webhook(req: Request):
     """Inbound message webhook (Meta Cloud API JSON shape) → parse → instant 200 OK → background process."""
-    raw_payload = await req.json()
+    raw_body = await req.body()
+
+    # Optional Meta signature verification: only enforced when META_APP_SECRET is
+    # configured (X-Hub-Signature-256 = HMAC-SHA256 of the raw body, sha256= prefix).
+    if settings.meta_app_secret:
+        import hashlib
+        import hmac as _hmac
+        sig = req.headers.get("x-hub-signature-256", "")
+        expected = "sha256=" + _hmac.new(
+            settings.meta_app_secret.encode(), raw_body, hashlib.sha256
+        ).hexdigest()
+        if not _hmac.compare_digest(sig, expected):
+            logger.warning("⚠️ Webhook rejected: X-Hub-Signature-256 mismatch")
+            return JSONResponse({"status": "invalid_signature"}, status_code=403)
+
+    raw_payload = json.loads(raw_body)
     msg = parse_webhook(raw_payload)
 
     if msg is None:
@@ -405,19 +421,59 @@ def _agent_runner_factory(role: str, phone: str):
         )
 
         t0 = time.perf_counter()
-        from langchain_core.messages import SystemMessage, HumanMessage
+        from langchain_core.messages import SystemMessage, HumanMessage, ToolMessage
+        from backend.app.agents.llm import shared_llm
+        from backend.app.tools.pause import Pause
 
         # Fetch recent chat history from database
         history_msgs = await _fetch_recent_history(clean_phone, limit=6)
-        messages = [SystemMessage(content=system_ctx), *history_msgs, HumanMessage(content=prompt)]
+        messages = [
+            SystemMessage(content=f"{agent.system_prompt}\n\n{system_ctx}"),
+            *history_msgs,
+            HumanMessage(content=prompt),
+        ]
 
-        from backend.app.tools.pause import Pause
+        llm = shared_llm()
+        if agent.tools:
+            llm = llm.bind_tools(list(agent.tools))
+
+        # Tool-execution loop (port of dev_server.py::run_agent): call the LLM,
+        # execute any tool_calls against this agent's tool_map, feed results back,
+        # repeat (bounded) until the model returns a plain text reply. A Pause
+        # raised inside a tool unwinds the turn and its message becomes the reply.
+        MAX_TURNS = 6
+        reply_text = ""
         try:
-            res = await agent.ainvoke(messages)
-            reply_text = getattr(res, "content", "")
-            if isinstance(reply_text, list):
-                reply_text = " ".join([str(item) for item in reply_text])
-            reply_text = str(reply_text).strip()
+            for _turn in range(MAX_TURNS):
+                res = await llm.ainvoke(messages)
+                tool_calls = getattr(res, "tool_calls", None)
+                if not tool_calls:
+                    reply_text = getattr(res, "content", "")
+                    if isinstance(reply_text, list):
+                        reply_text = " ".join([str(item) for item in reply_text])
+                    reply_text = str(reply_text).strip()
+                    break
+                messages.append(res)
+                for tc in tool_calls:
+                    tc_name = tc.get("name", "")
+                    tc_id = tc.get("id", "") or ""
+                    tool = agent.tool_map.get(tc_name)
+                    if tool is None:
+                        messages.append(ToolMessage(
+                            content=f"Error: unknown tool '{tc_name}'",
+                            tool_call_id=tc_id,
+                        ))
+                        continue
+                    try:
+                        out = await tool.ainvoke(tc.get("args", {}))
+                        logger.info(f"🔧 [{clean_phone}:{role}] TOOL {tc_name} -> {str(out)[:120]}")
+                    except Pause as p:
+                        logger.info(f"⏸️ Agent paused turn for {clean_phone}: {p.message}")
+                        return p.message
+                    except Exception as te:
+                        logger.error(f"🔴 Tool {tc_name} failed for {clean_phone}: {te}", exc_info=True)
+                        out = f"Error executing {tc_name}: {te}"
+                    messages.append(ToolMessage(content=str(out), tool_call_id=tc_id))
         except Pause as p:
             logger.info(f"⏸️ Agent paused turn for {clean_phone}: {p.message}")
             return p.message

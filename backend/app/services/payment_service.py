@@ -126,13 +126,14 @@ class RazorpayPaymentService:
         customer_phone: str,
         customer_name: Optional[str] = None,
         description: Optional[str] = None,
-        base_url: str = "http://localhost:8000",
+        base_url: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create a Razorpay Payment Link for customer order payment.
 
         In Real Mode: Invokes POST https://api.razorpay.com/v1/payment_links.
         In Mock Mode: Generates local simulator link /static/mock_payment.html.
         """
+        base_url = base_url or settings.base_url
         amount_paise = int(round(amount_in_rupees * 100))
         description_text = description or f"Homaatri Food Order Payment [{order_id}]"
         cust_name = customer_name or "Homaatri Customer"
