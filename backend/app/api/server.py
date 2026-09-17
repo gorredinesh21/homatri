@@ -524,7 +524,7 @@ async def get_outbox(phone: str):
         from sqlalchemy import select
         res = await session.execute(
             select(ConversationMessage)
-            .where(ConversationMessage.actor_phone == phone)
+            .where(ConversationMessage.phone == phone)
             .order_by(ConversationMessage.created_at.asc())
         )
         messages = res.scalars().all()
@@ -532,7 +532,7 @@ async def get_outbox(phone: str):
         for m in messages:
             out.append({
                 "from": "user" if m.direction == "INBOUND" else "agent",
-                "text": m.content_text,
+                "text": m.message_text,
                 "created_at": m.created_at.isoformat() if m.created_at else ""
             })
         return JSONResponse(out)
