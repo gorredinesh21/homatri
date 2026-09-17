@@ -352,7 +352,7 @@ async def _build_user_db_summary(phone: str, role: str) -> str:
             )
             latest_order = res.scalar_one_or_none()
             order_info = (
-                f"Latest Order ID: {latest_order.order_id}, Status: {latest_order.order_status}, Amount: ₹{latest_order.total_amount}"
+                f"Latest Order ID: {latest_order.order_id}, Status: {latest_order.status}, Amount: ₹{latest_order.total_amount}"
                 if latest_order else "No active orders."
             )
             return (
