@@ -18,12 +18,17 @@ def get_llm(model: str | None = None, temperature: float = 0.2) -> Any:
     target_model = model or settings.gemini_model or "gemini-2.5-flash-lite"
     if "3.6" in target_model or "3.5" in target_model:
         target_model = "gemini-2.5-flash-lite"
+    # Gemini 2.5 models "think" by default — 5-30s of hidden reasoning per call,
+    # which made WhatsApp replies painfully slow. A zero budget keeps 2.5-flash's
+    # language + tool-calling quality at interactive latency (measured 6.4s -> 1.0s).
+    extra = {"model_kwargs": {"thinking_budget": 0}} if "2.5" in target_model else {}
     return ChatVertexAI(
         model_name=target_model,
         project=settings.gcp_project,
         location="us-central1",
         temperature=temperature,
         max_retries=0,
+        **extra,
     )
 
 
