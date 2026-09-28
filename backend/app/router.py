@@ -18,14 +18,14 @@ from backend.app.tools.pause import RESUME_HANDLERS, clear_pending, get_pending,
 
 RunAgent = Callable[[str, str], Awaitable[dict[str, Any]]]
 
-# Awaits resumed by an EXTERNAL callback (e.g. the payment webhook), not by the
-# customer's next WhatsApp message. These must survive off-topic chatter — a
+# Awaits resumed by an EXTERNAL callback (e.g. the payment webhook / poller), not by
+# the customer's next WhatsApp message. These must survive off-topic chatter — a
 # customer asking "did it go through?" must NOT cancel a pending payment.
 OUT_OF_BAND_AWAITS = {"PAYMENT_CONFIRM"}
 
-# Awaits resumed by the user's next TEXT reply (not a location pin). e.g. the
-# customer answering yes/no to a chef's dietary counter-offer, or to a top-up counter.
-TEXT_RESUMABLE_AWAITS = {"CUSTOMER_DIETARY_DECISION", "CUSTOMER_TOPUP_DECISION"}
+# Awaits resumed by the user's next TEXT reply (not a location pin). None today —
+# the dietary/topup counter-offer flows were retired with the multi-agent system.
+TEXT_RESUMABLE_AWAITS: set[str] = set()
 
 
 async def route(msg: dict[str, Any], run_agent: RunAgent) -> dict[str, Any]:

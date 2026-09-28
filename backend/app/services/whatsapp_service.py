@@ -1,8 +1,7 @@
 """WhatsApp Cloud API outbound integration service.
 
-Sends outbound text messages, interactive payment templates, and location prompts
-directly to users via Meta's Graph API:
-POST https://graph.facebook.com/v18.0/{phone_number_id}/messages
+Sends outbound text messages directly to users via Meta's Graph API:
+POST https://graph.facebook.com/v21.0/{phone_number_id}/messages
 """
 
 from __future__ import annotations
@@ -53,7 +52,7 @@ async def send_whatsapp_text_message(
     else:
         recipient = f"91{digits[-10:]}"
 
-    url = f"https://graph.facebook.com/v18.0/{pid}/messages"
+    url = f"https://graph.facebook.com/v21.0/{pid}/messages"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",

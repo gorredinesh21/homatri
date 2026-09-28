@@ -137,9 +137,9 @@ async def _find_nearby_kitchens(
     window = resolve_time_pool(now)["window"]  # LUNCH or DINNER
     window_phrase = describe_meal_window(now)   # e.g. "tomorrow's lunch (today's dinner ordering has closed)"
 
-    # active chefs with at least one available dish for this meal window (or fallback to any available dish)
+    # active chefs with at least one available dish for this meal window (or "BOTH" windows)
     serving = select(ChefMenuItem.chef_phone).where(
-        ChefMenuItem.meal_type == window,
+        ChefMenuItem.meal_type.in_((window, "BOTH")),
         ChefMenuItem.is_available.is_(True),
     )
     chefs = (
@@ -373,7 +373,7 @@ async def _resolve_dish(
         await session.execute(
             select(ChefMenuItem).where(
                 ChefMenuItem.chef_phone == chef_phone,
-                ChefMenuItem.meal_type == meal_type,
+                ChefMenuItem.meal_type.in_((meal_type, "BOTH")),
                 ChefMenuItem.is_available.is_(True),
             )
         )
@@ -424,7 +424,7 @@ async def _view_chef_menu(
         await session.execute(
             select(ChefMenuItem).where(
                 ChefMenuItem.chef_phone == chef.chef_phone,
-                ChefMenuItem.meal_type == meal_type,
+                ChefMenuItem.meal_type.in_((meal_type, "BOTH")),
                 ChefMenuItem.is_available.is_(True),
             )
         )
@@ -916,7 +916,8 @@ async def _request_payment(session: AsyncSession, *, customer_phone: str) -> dic
     if order.total_amount is None or float(order.total_amount) <= 0:
         return {"status": "EMPTY_CART", "message": "Your cart is empty — add a dish before paying."}
 
-    # Deterministic relay to Master — Master owns minting (and the webhook).
+    # Deterministic relay to the payments engine — minting + confirmation are
+    # deterministic (see services/payment_confirmation.py), no agent in between.
     mint = await _mint_payment_link(session, order_id=order.order_id)
     if mint["status"] != "MINTED":
         return {"status": mint["status"], "message": mint.get("message", "Couldn't start payment right now.")}
@@ -929,7 +930,10 @@ async def _request_payment(session: AsyncSession, *, customer_phone: str) -> dic
         "link": mint["link"],
         "message": (
             f"💳 Please pay ₹{mint['amount']:.0f} to confirm order {order.order_id}:\n"
-            f"{mint['link']}\n\nI'll confirm the moment your payment goes through."
+            f"{mint['link']}\n\n"
+            f"(Secure Razorpay link — UPI, cards & netbanking accepted.)\n"
+            f"I'll confirm right here the moment your payment goes through. "
+            f"If you've already paid, just tell me and I'll check."
         ),
         "ctx": {"order_id": order.order_id, "payment_id": mint["payment_id"]},
     }
@@ -1034,4 +1038,106 @@ async def submit_order_review(customer_phone: str, chef_rating: int,
         res = await _submit_order_review(
             session, customer_phone=customer_phone, chef_rating=chef_rating,
             driver_rating=driver_rating, comment=comment)
+        return res["message"]
+
+
+# =============================================================================
+# TOOL: check_my_payment  (same-domain · READ + settle via gateway truth)
+# =============================================================================
+class CheckMyPaymentInput(BaseModel):
+    customer_phone: str = Field(..., description="Normalized 10-digit customer phone.")
+
+
+async def _check_my_payment(session: AsyncSession, *, customer_phone: str) -> dict[str, Any]:
+    """Verify a customer's payment claim against the Razorpay gateway.
+
+    Finds the newest PENDING payment on their active order, fetches the link
+    status server-side, and — if paid — settles it right here (payment PAID ->
+    order CONFIRMED). Guards: no active order / no pending payment.
+    """
+    from backend.app.services.payment_confirmation import check_payment_for_order
+
+    order = (
+        await session.execute(
+            select(CustomerOrder).where(
+                CustomerOrder.customer_phone == customer_phone,
+                CustomerOrder.status.in_(ACTIVE_ORDER_STATUSES),
+            )
+        )
+    ).scalars().first()
+    if order is None:
+        return {
+            "status": "NO_ACTIVE_ORDER",
+            "message": "There's no order waiting on payment. Call create_order to start one, or view_cart to review.",
+        }
+    if order.status != "PENDING_PAYMENT":
+        return {"status": "NOT_PAYABLE",
+                "message": f"Order {order.order_id} is already {order.status.lower()} — nothing to check."}
+
+    res = await check_payment_for_order(order)
+    if res.get("settled"):
+        return {
+            "status": "PAID",
+            "message": (
+                f"✅ Payment verified — order {order.order_id} is CONFIRMED! "
+                f"The kitchen has been notified. I'll update you here as it progresses. 🍽️"
+            ),
+        }
+    reason = res.get("reason", "pending")
+    if reason == "no_pending_payment":
+        return {"status": "NO_PENDING", "message": "No pending payment found. Call request_payment to get a fresh link."}
+    return {
+        "status": "STILL_PENDING",
+        "message": (
+            f"I checked with the payment gateway — the payment for order {order.order_id} hasn't "
+            f"come through yet. If you just paid, give it a minute and tell me to check again. "
+            f"The link is still open if you'd like to retry."
+        ),
+    }
+
+
+@tool("check_my_payment", args_schema=CheckMyPaymentInput)
+async def check_my_payment(customer_phone: str) -> str:
+    """Verify with the payment gateway whether the customer's payment went through; confirms the order if it did."""
+    async with SessionFactory() as session:
+        res = await _check_my_payment(session, customer_phone=customer_phone)
+        return res["message"]
+
+
+# =============================================================================
+# TOOL: add_special_instructions  (same-domain · WRITE)
+# =============================================================================
+class AddSpecialInstructionsInput(BaseModel):
+    customer_phone: str = Field(..., description="Normalized 10-digit customer phone.")
+    instructions: str = Field(..., description="The note to attach to the order, e.g. 'less spicy, no onion, ring the bell'.")
+
+
+async def _add_special_instructions(session: AsyncSession, *, customer_phone: str, instructions: str) -> dict[str, Any]:
+    """Attach a note to the customer's active order. Guards: no active order; empty note."""
+    from backend.app.executors.customer import execute_order_special_instructions_update
+
+    order = (
+        await session.execute(
+            select(CustomerOrder).where(
+                CustomerOrder.customer_phone == customer_phone,
+                CustomerOrder.status.in_(ACTIVE_ORDER_STATUSES + ("CONFIRMED",)),
+            )
+        )
+    ).scalars().first()
+    if order is None:
+        return {"status": "NO_ACTIVE_ORDER",
+                "message": "You don't have an active order to add instructions to. Start one with create_order first."}
+    note = (instructions or "").strip()
+    if not note:
+        return {"status": "INVALID", "message": "Tell me what note to add (e.g. 'less spicy, no onion')."}
+    await execute_order_special_instructions_update(session, order_id=order.order_id, special_instructions=note)
+    return {"status": "SAVED",
+            "message": f"📝 Noted for order {order.order_id}: \"{note}\". The kitchen will see it."}
+
+
+@tool("add_special_instructions", args_schema=AddSpecialInstructionsInput)
+async def add_special_instructions(customer_phone: str, instructions: str) -> str:
+    """Attach a special request note (spice level, allergies, delivery notes) to the customer's active order."""
+    async with transaction() as session:
+        res = await _add_special_instructions(session, customer_phone=customer_phone, instructions=instructions)
         return res["message"]

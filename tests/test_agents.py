@@ -1,47 +1,29 @@
-"""Agent tool-binding tests — each agent holds only its own tools."""
+"""Single customer agent tool-binding tests — one agent owns the whole conversation."""
 
-from app.agents.agents import (
-    chef_agent,
-    customer_agent,
-    driver_agent,
-    master_agent,
-)
+from app.agents.agents import customer_agent
 
 
 def test_customer_agent_bindings():
     names = set(customer_agent.tool_map)
-    for t in ("request_payment", "create_order", "get_order_status", "request_dietary_change",
-              "request_order_topup", "cancel_order", "submit_order_review"):
-        assert t in names
-    # customer must NOT own the gateway tools or the chef-side responders
+    for t in ("get_customer_profile", "register_customer", "find_nearby_kitchens", "view_chef_menu",
+              "create_order", "add_item_to_order", "add_special_instructions", "view_cart",
+              "request_payment", "check_my_payment", "get_order_status", "cancel_order",
+              "submit_order_review", "escalate_to_admin"):
+        assert t in names, f"missing tool: {t}"
+    # The gateway minting tool and the chef-side responders must NOT be agent-facing anymore
     assert "mint_payment_link" not in names
     assert "respond_to_dietary_request" not in names
     assert "respond_to_cancellation" not in names
+    # Multi-agent relays are retired
+    assert "request_dietary_change" not in names
+    assert "request_order_topup" not in names
 
 
-def test_master_agent_bindings():
-    names = set(master_agent.tool_map)
-    assert names == {"mint_payment_link", "mint_topup_payment_link", "process_payment_webhook",
-                     "relay_dietary_request", "relay_topup_request", "escalate_to_admin",
-                     "get_kitchen_availability_summary", "get_order_pipeline_summary"}
+def test_escalate_bound_to_agent():
+    assert "escalate_to_admin" in set(customer_agent.tool_map)
 
 
-def test_escalate_bound_to_every_agent():
-    for a in (customer_agent, chef_agent, driver_agent, master_agent):
-        assert "escalate_to_admin" in a.tool_map
-
-
-def test_chef_agent_bindings():
-    names = set(chef_agent.tool_map)
-    assert names == {"get_chef_profile", "get_chef_batch", "toggle_dish_stock",
-                     "set_daily_capacity", "mark_order_ready", "respond_to_dietary_request",
-                     "respond_to_cancellation", "respond_to_driver_query", "respond_to_topup_request",
-                     "escalate_to_admin"}
-
-
-def test_driver_agent_bindings():
-    names = set(driver_agent.tool_map)
-    assert names == {"get_driver_profile", "update_duty_status", "get_driver_route",
-                     "confirm_pickup", "confirm_delivery", "ask_chef_status", "report_address_issue",
-                     "escalate_to_admin"}
-    assert "register_driver" not in names   # drivers are admin/seed-onboarded
+def test_single_agent_no_multi_persona():
+    import app.agents as pkg
+    for legacy in ("chef_agent", "driver_agent", "master_agent", "AGENTS"):
+        assert not hasattr(pkg, legacy), f"legacy persona {legacy} still exported"

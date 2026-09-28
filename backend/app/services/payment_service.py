@@ -156,9 +156,9 @@ class RazorpayPaymentService:
                 "reminder_enable": True,
                 "notes": {
                     "order_id": order_id,
-                    "platform": "Homaatri Multi-Agent Engine",
+                    "platform": "Homaatri",
                 },
-                "callback_url": f"{base_url}/static/mock_payment.html?status=success&order_id={order_id}",
+                "callback_url": f"{base_url}/pay/thanks?order_id={order_id}",
                 "callback_method": "get",
             }
             async with httpx.AsyncClient() as client:
@@ -202,6 +202,38 @@ class RazorpayPaymentService:
             "status": "created",
             "order_id": order_id,
         }
+
+    async def fetch_payment_link(self, payment_link_id: str) -> Dict[str, Any]:
+        """Fetch a payment link's current status from Razorpay.
+
+        GET https://api.razorpay.com/v1/payment_links/{id} — the authoritative
+        source of truth used to confirm WhatsApp order payments (poller + webhook
+        both settle only against this response, never against client claims).
+        Returns {"mode": "REAL", "status": ..., "payments": [...]} or {"mode": "ERROR", ...}.
+        """
+        if not payment_link_id or "mock" in str(payment_link_id).lower():
+            return {"mode": "MOCK", "status": "mock", "payments": []}
+        url = f"https://api.razorpay.com/v1/payment_links/{payment_link_id}"
+        try:
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(
+                    url,
+                    auth=(self.key_id, self.key_secret),
+                    timeout=10.0,
+                )
+            if resp.status_code == 200:
+                data = resp.json()
+                pay_ids = [p.get("payment_id") for p in (data.get("payments") or []) if p.get("payment_id")]
+                return {
+                    "mode": "REAL",
+                    "status": data.get("status"),          # created / issued / paid / cancelled / expired
+                    "amount_rupees": (data.get("amount") or 0) / 100,
+                    "payment_link_id": data.get("id"),
+                    "transaction_id": pay_ids[0] if pay_ids else None,
+                }
+            return {"mode": "ERROR", "error": f"HTTP {resp.status_code}: {resp.text[:300]}"}
+        except Exception as exc:
+            return {"mode": "ERROR", "error": f"Razorpay unreachable: {exc}"}
 
     def verify_webhook_signature(
         self,

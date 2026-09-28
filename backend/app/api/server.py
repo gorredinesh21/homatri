@@ -29,24 +29,21 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from backend.app.agents.agents import chef_agent, customer_agent, driver_agent
-from backend.app.agents.llm import get_llm
+from backend.app.agents.agents import customer_agent
 from backend.app.api.whatsapp import normalize_phone, parse_webhook, verify_challenge
 from backend.app.core.config import settings
 from backend.app.db.session import SessionFactory
 from backend.app.executors.master import execute_conversation_message_insert
-from backend.app.models.chef import ChefProfile
 from backend.app.models.customer import CustomerOrder, CustomerProfile
-from backend.app.models.driver import DriverProfile
 from backend.app.models.shared import ConversationMessage
-from backend.app.models.system import SystemOutboundQueue
 from backend.app.router import route
+from backend.app.services.payment_confirmation import payment_poller_loop, settle_payment_if_paid
+from backend.app.services.whatsapp_outbox import outbox_dispatcher_loop
 from backend.app.services.whatsapp_service import send_whatsapp_text_message
 from backend.app.tools.pause import RESUME_HANDLERS, get_pending
 
 # Register pause & resume handlers
 import backend.app.tools.customer_tools  # noqa: F401
-import backend.app.tools.topup  # noqa: F401
 
 from backend.app.api.admin import router as admin_router
 from backend.app.api.v1.auth import router as auth_router
@@ -64,9 +61,11 @@ WEBHOOK_VERIFY_TOKEN = settings.webhook_verify_token
 
 from contextlib import asynccontextmanager
 
+_BACKGROUND_LOOPS: dict[str, asyncio.Task] = {}
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Lifespan event ensuring all database tables are created on startup."""
+    """Startup: verify DB tables + launch the payment poller and outbox dispatcher."""
     try:
         from backend.app.db.base import Base
         from backend.app.db.session import engine
@@ -76,12 +75,22 @@ async def lifespan(app: FastAPI):
         logger.info("🟢 Database tables verified/created successfully on startup!")
     except Exception as e:
         logger.error(f"🔴 Database table creation on startup notice: {e}")
-    yield
+
+    stop = asyncio.Event()
+    _BACKGROUND_LOOPS["payments"] = asyncio.create_task(payment_poller_loop(stop))
+    _BACKGROUND_LOOPS["outbox"] = asyncio.create_task(outbox_dispatcher_loop(stop))
+    try:
+        yield
+    finally:
+        stop.set()
+        for name, task in _BACKGROUND_LOOPS.items():
+            task.cancel()
+        logger.info("Background loops stopped.")
 
 app = FastAPI(
-    title="Homaatri Agentic Backend Engine",
-    description="Stateless agentic multi-role WhatsApp concierges powered by GCP Vertex AI",
-    version="1.0.0",
+    title="Homaatri Backend",
+    description="Single customer WhatsApp AI concierge + web portals API (chefs & riders on web, customers on WhatsApp)",
+    version="2.0.0",
     lifespan=lifespan
 )
 
@@ -238,24 +247,23 @@ _BACKGROUND_TASKS: set[asyncio.Task] = set()
 
 
 async def _process_inbound_message(msg: dict[str, Any]):
-    """Background worker: Log inbound -> Route & Run Gemini AI -> Log outbound -> Dispatch to WhatsApp."""
+    """Background worker: Log inbound -> Route & Run the customer agent -> Log outbound -> Dispatch to WhatsApp."""
     try:
         phone = msg["phone"]
-        role = await _determine_role(phone)
 
         # 1. Log inbound message to conversation history
         intext = msg.get("text") or f"(shared location: {msg.get('location')})"
         await _log_message(
-            phone, actor_role=role, direction="INBOUND",
+            phone, actor_role="CUSTOMER", direction="INBOUND",
             source="WHATSAPP", text=intext,
             message_type="LOCATION" if msg.get("type") == "location" else "TEXT"
         )
 
-        # 2. Pass normalized message through check-first router
+        # 2. Pass normalized message through check-first router -> single customer agent
         t0 = time.perf_counter()
-        result = await route(msg, _agent_runner_factory(role, phone))
+        result = await route(msg, _agent_runner_factory(phone))
         dt_ms = (time.perf_counter() - t0) * 1000.0
-        logger.info(f"⏱️ [TOTAL-TIMING] {phone} ({role}): {dt_ms:.2f} ms")
+        logger.info(f"⏱️ [TOTAL-TIMING] {phone}: {dt_ms:.2f} ms")
 
         # 3. Log outbound reply
         if isinstance(result, dict):
@@ -264,11 +272,11 @@ async def _process_inbound_message(msg: dict[str, Any]):
             outtext = str(result)
 
         await _log_message(
-            phone, actor_role=role, direction="OUTBOUND",
+            phone, actor_role="CUSTOMER", direction="OUTBOUND",
             source="WHATSAPP", text=outtext
         )
 
-        # 4. Dispatch outbound reply to real Meta WhatsApp if API credentials configured
+        # 4. Dispatch outbound reply to real Meta WhatsApp (credentials configured)
         await send_whatsapp_text_message(phone, outtext)
     except Exception as e:
         logger.error(f"🔴 Exception inside _process_inbound_message: {e}", exc_info=True)
@@ -321,52 +329,134 @@ async def webhook(req: Request):
 
 
 # ==============================================================================
+# 2b. RAZORPAY PAYMENT WEBHOOK (server-to-server confirmation path)
+# ==============================================================================
+@app.post("/payments/razorpay")
+async def razorpay_webhook(req: Request):
+    """Razorpay server-to-server webhook (payment_link.paid etc.).
+
+    Security: if a real webhook secret is configured, the X-Razorpay-Signature
+    HMAC is verified; regardless, settlement only ever happens after the
+    payment link status is re-fetched from the Razorpay API server-side — a
+    spoofed body alone can never confirm an order.
+    """
+    import hashlib
+    import hmac as _hmac
+    from sqlalchemy import select as _select
+    from backend.app.models.customer import CustomerPayment as _CustomerPayment
+
+    raw = await req.body()
+    secret = (settings.razorpay_webhook_secret or "").strip()
+    if secret and "mock" not in secret.lower():
+        sig = req.headers.get("x-razorpay-signature", "")
+        expected = _hmac.new(secret.encode(), raw, hashlib.sha256).hexdigest()
+        if not _hmac.compare_digest(expected, sig.strip()):
+            logger.warning("⚠️ Razorpay webhook signature mismatch — rejected")
+            return JSONResponse({"status": "invalid_signature"}, status_code=403)
+
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        return JSONResponse({"status": "ignored"})
+
+    event = payload.get("event", "")
+    link_id = None
+    try:
+        link_id = payload["payload"]["payment_link"]["entity"]["id"]
+    except (KeyError, TypeError):
+        pass
+
+    if not link_id:
+        logger.info(f"ℹ️ Razorpay webhook {event or 'unknown'} without payment_link — ignored")
+        return JSONResponse({"status": "ignored"})
+
+    async with SessionFactory() as session:
+        payment = (
+            await session.execute(
+                _select(_CustomerPayment).where(
+                    _CustomerPayment.gateway_order_id == link_id,
+                    _CustomerPayment.status == "PENDING",
+                )
+            )
+        ).scalars().first()
+
+    if payment is None:
+        logger.info(f"ℹ️ Razorpay webhook for unknown/settled link {link_id} — ignored")
+        return JSONResponse({"status": "ok"})
+
+    res = await settle_payment_if_paid(payment)
+    logger.info(f"💳 Razorpay webhook {event} -> settle {payment.payment_id}: {res}")
+    return JSONResponse({"status": "ok"})
+
+
+@app.get("/pay/thanks", response_class=HTMLResponse)
+async def serve_payment_thanks(order_id: str = ""):
+    """Post-payment landing page (Razorpay redirects here after a successful pay)."""
+    thanks_path = "frontend/payment/thanks.html"
+    if os.path.exists(thanks_path):
+        with open(thanks_path, "r", encoding="utf-8") as f:
+            return HTMLResponse(content=f.read())
+    return HTMLResponse(content="<h1>Payment received</h1><p>Check WhatsApp for your order confirmation.</p>")
+
+
+@app.get("/payments/check")
+async def payments_check(payment_link_id: str = ""):
+    """Settle-on-demand: verify a payment link with the gateway and settle if paid.
+
+    Called by the /pay/thanks page right after the customer pays (this also
+    wakes a cold Cloud Run instance so the WhatsApp confirmation goes out
+    within seconds). Trusts only the server-side Razorpay fetch.
+    """
+    from sqlalchemy import select as _select
+    from backend.app.models.customer import CustomerPayment as _CustomerPayment
+
+    link_id = (payment_link_id or "").strip()
+    if not link_id:
+        return JSONResponse({"status": "ignored"})
+    async with SessionFactory() as session:
+        payment = (
+            await session.execute(
+                _select(_CustomerPayment).where(
+                    _CustomerPayment.gateway_order_id == link_id,
+                    _CustomerPayment.status == "PENDING",
+                ).order_by(_CustomerPayment.created_at.desc())
+            )
+        ).scalars().first()
+    if payment is None:
+        return JSONResponse({"status": "unknown_link"})
+    res = await settle_payment_if_paid(payment)
+    return JSONResponse({"status": res.get("reason", "checked"), "settled": res.get("settled", False)})
+
+
+# ==============================================================================
 # 3. HELPER FUNCTIONS & AGENT RUNNER
 # ==============================================================================
-async def _determine_role(phone: str) -> str:
-    """Determine role based on seeded database profile."""
-    async with SessionFactory() as session:
-        if await session.get(ChefProfile, phone) is not None:
-            return "CHEF"
-        if await session.get(DriverProfile, phone) is not None:
-            return "DRIVER"
-    return "CUSTOMER"
-
-
-async def _build_user_db_summary(phone: str, role: str) -> str:
-    """Query Cloud SQL Postgres DB for live profile & active order state."""
+async def _build_user_db_summary(phone: str) -> str:
+    """Query Cloud SQL Postgres DB for live customer profile & active order state."""
     from sqlalchemy import select
     clean_phone = phone[-10:] if len(phone) >= 10 else phone
     async with SessionFactory() as session:
-        if role == "CUSTOMER":
-            profile = await session.get(CustomerProfile, clean_phone)
-            if profile is None:
-                return f"[LIVE DB STATE]: Customer ({clean_phone}) is NEW (Not registered in database)."
+        profile = await session.get(CustomerProfile, clean_phone)
+        if profile is None:
+            return f"[LIVE DB STATE]: Customer ({clean_phone}) is NEW (Not registered in database)."
 
-            # Check active orders
-            res = await session.execute(
-                select(CustomerOrder)
-                .where(CustomerOrder.customer_phone == clean_phone)
-                .order_by(CustomerOrder.created_at.desc())
-                .limit(1)
-            )
-            latest_order = res.scalar_one_or_none()
-            order_info = (
-                f"Latest Order ID: {latest_order.order_id}, Status: {latest_order.status}, Amount: ₹{latest_order.total_amount}"
-                if latest_order else "No active orders."
-            )
-            return (
-                f"[LIVE DB STATE]: Customer Name: '{profile.name}', Address: '{profile.delivery_address}', "
-                f"Is Registered: {profile.is_registered}, Location Pin: ({profile.latitude}, {profile.longitude}), "
-                f"{order_info}"
-            )
-        elif role == "CHEF":
-            chef = await session.get(ChefProfile, clean_phone)
-            return f"[LIVE DB STATE]: Chef Kitchen: '{chef.kitchen_name if chef else 'Unknown'}', Phone: {clean_phone}."
-        elif role == "DRIVER":
-            driver = await session.get(DriverProfile, clean_phone)
-            return f"[LIVE DB STATE]: Driver Name: '{driver.name if driver else 'Unknown'}', Duty: {driver.duty_status if driver else 'OFF'}."
-        return f"[LIVE DB STATE]: Role: {role}, Phone: {clean_phone}."
+        # Check active orders
+        res = await session.execute(
+            select(CustomerOrder)
+            .where(CustomerOrder.customer_phone == clean_phone)
+            .order_by(CustomerOrder.created_at.desc())
+            .limit(1)
+        )
+        latest_order = res.scalar_one_or_none()
+        order_info = (
+            f"Latest Order ID: {latest_order.order_id}, Status: {latest_order.status}, Amount: ₹{latest_order.total_amount}"
+            if latest_order else "No active orders."
+        )
+        return (
+            f"[LIVE DB STATE]: Customer Name: '{profile.name}', Address: '{profile.delivery_address}', "
+            f"Is Registered: {profile.is_registered}, Location Pin: ({profile.latitude}, {profile.longitude}), "
+            f"{order_info}"
+        )
 
 
 async def _fetch_recent_history(phone: str, limit: int = 6) -> list[Any]:
@@ -395,22 +485,16 @@ async def _fetch_recent_history(phone: str, limit: int = 6) -> list[Any]:
     return msgs
 
 
-def _agent_runner_factory(role: str, phone: str):
-    """Factory creating the specific agent runner for a phone/role turn."""
+def _agent_runner_factory(phone: str):
+    """Factory creating the single customer agent runner for a phone's turn."""
     async def _run_agent(user_phone: str, prompt: str) -> str:
-        # Select active persona agent
-        if role == "CHEF":
-            agent = chef_agent
-        elif role == "DRIVER":
-            agent = driver_agent
-        else:
-            agent = customer_agent
+        agent = customer_agent
 
         # Normalize phone to 10 digits
         clean_phone = user_phone[-10:] if len(user_phone) >= 10 else user_phone
 
         # Fetch live database user summary
-        db_summary = await _build_user_db_summary(clean_phone, role)
+        db_summary = await _build_user_db_summary(clean_phone)
 
         # Inject system context so LLM never asks for phone number & knows user DB state
         system_ctx = (
@@ -437,10 +521,10 @@ def _agent_runner_factory(role: str, phone: str):
         if agent.tools:
             llm = llm.bind_tools(list(agent.tools))
 
-        # Tool-execution loop (port of dev_server.py::run_agent): call the LLM,
-        # execute any tool_calls against this agent's tool_map, feed results back,
-        # repeat (bounded) until the model returns a plain text reply. A Pause
-        # raised inside a tool unwinds the turn and its message becomes the reply.
+        # Tool-execution loop: call the LLM, execute any tool_calls against the
+        # agent's tool_map, feed results back, repeat (bounded) until the model
+        # returns a plain text reply. A Pause raised inside a tool unwinds the
+        # turn and its message becomes the reply.
         MAX_TURNS = 6
         reply_text = ""
         try:
@@ -466,7 +550,7 @@ def _agent_runner_factory(role: str, phone: str):
                         continue
                     try:
                         out = await tool.ainvoke(tc.get("args", {}))
-                        logger.info(f"🔧 [{clean_phone}:{role}] TOOL {tc_name} -> {str(out)[:120]}")
+                        logger.info(f"🔧 [{clean_phone}] TOOL {tc_name} -> {str(out)[:120]}")
                     except Pause as p:
                         logger.info(f"⏸️ Agent paused turn for {clean_phone}: {p.message}")
                         return p.message
@@ -489,7 +573,7 @@ def _agent_runner_factory(role: str, phone: str):
             reply_text = "How can I help you with your order today?"
 
         dt_ms = (time.perf_counter() - t0) * 1000.0
-        logger.info(f"⏱️ [LLM-TIMING] {role} agent call for {clean_phone}: {dt_ms:.2f} ms")
+        logger.info(f"⏱️ [LLM-TIMING] customer agent call for {clean_phone}: {dt_ms:.2f} ms")
 
         return reply_text
 
