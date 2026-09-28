@@ -527,15 +527,32 @@ def _agent_runner_factory(phone: str):
         # turn and its message becomes the reply.
         MAX_TURNS = 6
         reply_text = ""
+
+        def _content_to_text(content: Any) -> str:
+            """Flatten an LLM content payload (str | list of parts) into plain text.
+
+            Gemini thinking models return list-content parts as dicts
+            ({'type': 'text', 'text': ..., 'thought_signature': ...}) — keep the
+            text, drop signatures and everything else.
+            """
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                out = []
+                for item in content:
+                    if isinstance(item, dict):
+                        out.append(str(item.get("text") or item.get("content") or ""))
+                    else:
+                        out.append(str(item))
+                return "".join(out)
+            return str(content)
+
         try:
             for _turn in range(MAX_TURNS):
                 res = await llm.ainvoke(messages)
                 tool_calls = getattr(res, "tool_calls", None)
                 if not tool_calls:
-                    reply_text = getattr(res, "content", "")
-                    if isinstance(reply_text, list):
-                        reply_text = " ".join([str(item) for item in reply_text])
-                    reply_text = str(reply_text).strip()
+                    reply_text = _content_to_text(getattr(res, "content", "")).strip()
                     break
                 messages.append(res)
                 for tc in tool_calls:
