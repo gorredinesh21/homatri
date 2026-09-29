@@ -38,6 +38,17 @@ def parse_webhook(payload: dict[str, Any]) -> dict[str, Any] | None:
 
     if mtype == "text":
         return {"phone": phone, "type": "text", "text": msg["text"]["body"], "wamid": wamid}
+    if mtype == "audio":
+        aud = msg.get("audio", {}) or {}
+        return {
+            "phone": phone,
+            "type": "audio",
+            "audio_id": aud.get("id"),
+            # Meta sends `mime_type` (e.g. "audio/ogg; codecs=opus"); some payloads use `mimetype`
+            "mime_type": aud.get("mime_type") or aud.get("mimetype") or "audio/ogg",
+            "voice": bool(aud.get("voice", False)),
+            "wamid": wamid,
+        }
     if mtype == "location":
         loc = msg["location"]
         return {
@@ -46,7 +57,7 @@ def parse_webhook(payload: dict[str, Any]) -> dict[str, Any] | None:
             "location": {"latitude": float(loc["latitude"]), "longitude": float(loc["longitude"])},
             "wamid": wamid,
         }
-    # images/audio/etc. — surface as text so the agent can respond gracefully
+    # images/video/etc. — surface as text so the agent can respond gracefully
     return {"phone": phone, "type": "text", "text": f"[unsupported message type: {mtype}]", "wamid": wamid}
 
 

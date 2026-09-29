@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     gcp_project: str = "homatri-503308"
     gcp_location: str = "global"
     gemini_model: str = "gemini-2.5-flash-lite"
+    # Dedicated STT model for WhatsApp voice notes — transcription needs speed,
+    # not tool-calling quality, so flash-lite defaults even when chat uses flash.
+    gemini_stt_model: str = "gemini-2.5-flash-lite"
 
     # ---- Business config fallbacks (authoritative values live in system_settings) ----
     default_delivery_fee: float = 11.00

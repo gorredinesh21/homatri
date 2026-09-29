@@ -38,6 +38,7 @@ from backend.app.models.customer import CustomerOrder, CustomerProfile
 from backend.app.models.shared import ConversationMessage
 from backend.app.router import route
 from backend.app.services.payment_confirmation import payment_poller_loop, settle_payment_if_paid
+from backend.app.services.voice import voice_note_to_text
 from backend.app.services.whatsapp_outbox import outbox_dispatcher_loop
 from backend.app.services.whatsapp_service import send_whatsapp_text_message
 from backend.app.tools.pause import RESUME_HANDLERS, get_pending
@@ -251,12 +252,37 @@ async def _process_inbound_message(msg: dict[str, Any]):
     try:
         phone = msg["phone"]
 
+        # 0. Voice notes: download + transcribe → from here on it's plain text.
+        #    The agent never knows it was audio; the router's pause/resume logic
+        #    treats a spoken reply exactly like a typed one.
+        message_type = "TEXT"
+        if msg.get("type") == "audio":
+            transcript = ""
+            try:
+                transcript = await voice_note_to_text(msg.get("audio_id") or "")
+            except Exception as e:
+                logger.warning(f"🎙️ Voice transcription failed for {phone}: {e}")
+            if not transcript.strip():
+                await _log_message(
+                    phone, actor_role="CUSTOMER", direction="INBOUND",
+                    source="WHATSAPP", text="(voice note — could not transcribe)",
+                    message_type="VOICE"
+                )
+                await send_whatsapp_text_message(
+                    phone,
+                    "Sorry, I couldn't hear that voice note clearly 🙏 Could you type it or send it again?",
+                )
+                return
+            logger.info(f"🎙️ {phone} voice -> '{transcript[:120]}'")
+            msg = {**msg, "type": "text", "text": transcript}
+            message_type = "VOICE"
+
         # 1. Log inbound message to conversation history
         intext = msg.get("text") or f"(shared location: {msg.get('location')})"
         await _log_message(
             phone, actor_role="CUSTOMER", direction="INBOUND",
             source="WHATSAPP", text=intext,
-            message_type="LOCATION" if msg.get("type") == "location" else "TEXT"
+            message_type="LOCATION" if msg.get("type") == "location" else message_type
         )
 
         # 2. Pass normalized message through check-first router -> single customer agent
