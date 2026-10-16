@@ -499,3 +499,48 @@ async def put_content_day(
         row.scene_states = {str(i): bool(done) for i, done in enumerate(body.scenes)}
     await db.commit()
     return {"day": day, "completed": row.completed, "scenes": row.scene_states or {}}
+
+
+@router.get("/me/earnings/history")
+async def chef_earnings_history(
+    payload: dict = Depends(require_role("CHEF")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delivered-order ledger behind the Earnings page: per-order payouts + daily totals."""
+    phone = _chef_phone(payload)
+    chef = await _require_chef(db, phone)
+    rows = (
+        await db.execute(
+            select(CustomerOrder)
+            .where(CustomerOrder.chef_phone == phone, CustomerOrder.status == "DELIVERED")
+            .order_by(CustomerOrder.service_date.desc(), CustomerOrder.created_at.desc())
+            .limit(100)
+        )
+    ).scalars().all()
+    daily: dict[str, float] = {}
+    ledger = []
+    for o in rows:
+        payout = float(o.total_amount) - float(o.delivery_fee)
+        day = o.service_date.isoformat() if o.service_date else None
+        if day:
+            daily[day] = round(daily.get(day, 0.0) + payout, 2)
+        customer = await db.get(CustomerProfile, o.customer_phone)
+        ledger.append(
+            {
+                "orderId": o.order_id,
+                "serviceDate": day,
+                "mealWindow": o.meal_window,
+                "customerName": customer.name if customer else o.customer_phone,
+                "kitchenIncome": round(payout, 2),
+                "deliveryFee": float(o.delivery_fee),
+                "orderTotal": float(o.total_amount),
+                "paymentMethod": o.payment_method,
+                "paymentStatus": o.payment_status,
+            }
+        )
+    return {
+        "kitchen": {"kitchenName": chef.kitchen_name, "chefName": chef.chef_name},
+        "summary": await chef_earnings(db, phone),
+        "dailyIncome": [{"date": d, "income": v} for d, v in sorted(daily.items(), reverse=True)],
+        "orders": ledger,
+    }

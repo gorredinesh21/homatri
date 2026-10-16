@@ -1,0 +1,28 @@
+# Keep the Cloud Build context small — only backend/, frontend/ and scripts/
+# are needed inside the image (see Dockerfile).
+.git
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+chef_photos
+chef_photo_pipeline
+tally_import_2026-10-16
+Homaatri_Chef_Personas_120.xlsx
+poc.db
+*.db
+.env
+.env.prod
+.env.dev.example
+.env.prod.example
+.env.stage.example
+node_modules
+tests
+docs
+markdowns
+dev_server.py
+dev_seed.py
+dev_reset.py
+dev_batch.py
+seed_real_chefs.py
+seed_menu_photos.py

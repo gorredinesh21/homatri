@@ -154,6 +154,13 @@ async def register(payload: RegisterIn, request: Request, response: Response) ->
     )
 
 
+# Generic credential Homatri ops issue to every onboarded homemaker kitchen.
+# Chefs cannot sign up on their own — credentials are handed over by the team,
+# so a kitchen created by admin (no login row yet) accepts this password on
+# first sign-in and its login row is provisioned right then.
+CHEF_ISSUED_PASSWORD = "homatri@123"
+
+
 @router.post("/login")
 async def login(payload: LoginIn, request: Request, response: Response) -> dict[str, Any]:
     phone = _phone(payload.phone)
@@ -162,13 +169,35 @@ async def login(payload: LoginIn, request: Request, response: Response) -> dict[
 
     async with SessionFactory() as db:
         user = await db.get(CustomerProfile, phone)
+        chef = await db.get(ChefProfile, phone)
+        # Chef logins are ops-issued: the generic password always works for a
+        # registered kitchen (provisioning/overwriting the login row), while
+        # customers and riders only use their own passwords.
+        chef_issued_login = chef is not None and payload.password == CHEF_ISSUED_PASSWORD
         if user is None or not user.password_hash:
-            raise HTTPException(status_code=400, detail="No account found with this phone number. Please sign up.")
+            if chef_issued_login:
+                if user is None:
+                    user = CustomerProfile(
+                        customer_phone=phone,
+                        name=chef.chef_name,
+                        full_name=chef.chef_name,
+                        delivery_address=chef.address or "Set during first order",
+                        is_registered=True,
+                    )
+                    db.add(user)
+                user.password_hash = _hash_pwd(CHEF_ISSUED_PASSWORD)
+                await db.commit()
+            else:
+                raise HTTPException(
+                    status_code=400, detail="No account found with this phone number. Please sign up."
+                )
+        elif chef_issued_login and user.password_hash != _hash_pwd(CHEF_ISSUED_PASSWORD):
+            user.password_hash = _hash_pwd(CHEF_ISSUED_PASSWORD)
+            await db.commit()
 
         if user.password_hash != _hash_pwd(payload.password):
             raise HTTPException(status_code=400, detail="Incorrect password. Please try again.")
 
-        chef = await db.get(ChefProfile, phone)
         driver = await db.get(DriverProfile, phone)
         if chef is not None:
             role = "CHEF"
