@@ -37,7 +37,11 @@ async def _resolve_chef_dish(
 ) -> tuple[ChefMenuItem | None, str | None]:
     """Typo-tolerant match of a dish name against THIS chef's menu (any window / availability)."""
     rows = (
-        await session.execute(select(ChefMenuItem).where(ChefMenuItem.chef_phone == chef_phone))
+        await session.execute(
+            select(ChefMenuItem).where(
+                ChefMenuItem.chef_phone == chef_phone, ChefMenuItem.is_archived.is_(False)
+            )
+        )
     ).scalars().all()
     return _fuzzy_match(ref, list(rows), [lambda d: d.dish_name])
 

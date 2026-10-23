@@ -95,7 +95,7 @@ async def serialize_kitchen(
         (
             await session.execute(
                 select(ChefMenuItem)
-                .where(ChefMenuItem.chef_phone == chef.chef_phone)
+                .where(ChefMenuItem.chef_phone == chef.chef_phone, ChefMenuItem.is_archived.is_(False))
                 .order_by(ChefMenuItem.meal_type, ChefMenuItem.dish_name)
             )
         )

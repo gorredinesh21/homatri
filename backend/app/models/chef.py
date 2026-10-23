@@ -80,6 +80,12 @@ class ChefMenuItem(Base, TimestampMixin):
     image_url: Mapped[str | None] = mapped_column(Text)
     max_availability: Mapped[int | None] = mapped_column(Integer, default=10)
     is_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
+    # Soft delete: dishes with past orders can't be hard-deleted (order items hold
+    # an FK), so they are archived instead — hidden from every menu surface while
+    # order history stays intact.
+    is_archived: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
 
 
 class ChefDailyInventory(Base, TimestampMixin):

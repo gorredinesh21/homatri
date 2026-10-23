@@ -375,6 +375,7 @@ async def _resolve_dish(
                 ChefMenuItem.chef_phone == chef_phone,
                 ChefMenuItem.meal_type.in_((meal_type, "BOTH")),
                 ChefMenuItem.is_available.is_(True),
+                ChefMenuItem.is_archived.is_(False),
             )
         )
     ).scalars().all()
@@ -426,6 +427,7 @@ async def _view_chef_menu(
                 ChefMenuItem.chef_phone == chef.chef_phone,
                 ChefMenuItem.meal_type.in_((meal_type, "BOTH")),
                 ChefMenuItem.is_available.is_(True),
+                ChefMenuItem.is_archived.is_(False),
             )
         )
     ).scalars().all()

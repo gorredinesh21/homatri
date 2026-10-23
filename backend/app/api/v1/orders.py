@@ -97,7 +97,14 @@ async def checkout_order(
 
     menu_ids = [i.menu_item_id for i in req.items]
     menu_rows = (
-        (await db.execute(select(ChefMenuItem).where(ChefMenuItem.menu_item_id.in_(menu_ids))))
+        (
+            await db.execute(
+                select(ChefMenuItem).where(
+                    ChefMenuItem.menu_item_id.in_(menu_ids),
+                    ChefMenuItem.is_archived.is_(False),
+                )
+            )
+        )
         .scalars()
         .all()
     )

@@ -8,13 +8,18 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.deps import require_role
 from backend.app.core.ids import generate_id
 from backend.app.db.session import get_db
-from backend.app.models.chef import ChefDietaryRequest, ChefMenuItem, ChefProfile
+from backend.app.models.chef import (
+    ChefDailyInventory,
+    ChefDietaryRequest,
+    ChefMenuItem,
+    ChefProfile,
+)
 from backend.app.models.customer import CustomerOrder, CustomerOrderItem, CustomerProfile
 from backend.app.models.driver import DriverProfile
 from backend.app.models.social import ChefContentProgress, ChefReel
@@ -157,7 +162,7 @@ async def chef_dashboard(
         (
             await db.execute(
                 select(ChefMenuItem)
-                .where(ChefMenuItem.chef_phone == phone)
+                .where(ChefMenuItem.chef_phone == phone, ChefMenuItem.is_archived.is_(False))
                 .order_by(ChefMenuItem.created_at.desc())
             )
         )
@@ -217,6 +222,7 @@ async def chef_dashboard(
                 "description": m.description,
                 "unitPrice": float(m.unit_price),
                 "mealWindow": m.meal_type,
+                "dietaryTag": m.dietary_tag,
                 "availability": "IN_STOCK" if m.is_available else "SOLD_OUT",
             }
             for m in menu_items
@@ -381,7 +387,7 @@ async def patch_menu(
     db: AsyncSession = Depends(get_db),
 ):
     item = await db.get(ChefMenuItem, menu_item_id)
-    if item is None or item.chef_phone != payload["sub"]:
+    if item is None or item.chef_phone != payload["sub"] or item.is_archived:
         raise HTTPException(status_code=404, detail="Menu item not found")
     data = body.model_dump(exclude_unset=True)
     if "dish_name" in data:
@@ -409,11 +415,53 @@ async def toggle_stock(
     db: AsyncSession = Depends(get_db),
 ):
     item = await db.get(ChefMenuItem, menu_item_id)
-    if item is None or item.chef_phone != payload["sub"]:
+    if item is None or item.chef_phone != payload["sub"] or item.is_archived:
         raise HTTPException(status_code=404, detail="Menu item not found")
     item.is_available = not item.is_available
     await db.commit()
     return menu_card(item)
+
+
+@router.delete("/me/menu/{menu_item_id}")
+async def delete_menu(
+    menu_item_id: str,
+    payload: dict = Depends(require_role("CHEF")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Remove a dish from the kitchen menu.
+
+    Dishes that were never ordered are hard-deleted (row gone). Dishes with past
+    order items hold a foreign key from customer_order_items, so they are
+    archived instead: hidden from the chef dashboard and every customer-facing
+    menu while order history keeps pointing at the row.
+    """
+    item = await db.get(ChefMenuItem, menu_item_id)
+    if item is None or item.chef_phone != payload["sub"] or item.is_archived:
+        raise HTTPException(status_code=404, detail="Menu item not found")
+
+    order_refs = (
+        await db.execute(
+            select(func.count())
+            .select_from(CustomerOrderItem)
+            .where(CustomerOrderItem.menu_item_id == menu_item_id)
+        )
+    ).scalar_one()
+
+    if order_refs == 0:
+        await db.execute(
+            delete(ChefDailyInventory).where(ChefDailyInventory.menu_item_id == menu_item_id)
+        )
+        await db.delete(item)
+        await db.commit()
+        return {"deleted": True, "archived": False}
+
+    item.is_archived = True
+    item.is_available = False
+    await db.execute(
+        delete(ChefDailyInventory).where(ChefDailyInventory.menu_item_id == menu_item_id)
+    )
+    await db.commit()
+    return {"deleted": True, "archived": True}
 
 
 @router.patch("/me/kitchen")
