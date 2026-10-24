@@ -40,6 +40,7 @@ class MenuIn(BaseModel):
     dietary_tag: Optional[str] = "VEG"
     is_available: bool = True
     image_url: Optional[str] = None
+    max_availability: int = Field(default=10, ge=0)
 
 
 class MenuPatch(BaseModel):
@@ -50,6 +51,7 @@ class MenuPatch(BaseModel):
     dietary_tag: Optional[str] = None
     is_available: Optional[bool] = None
     image_url: Optional[str] = None
+    max_availability: Optional[int] = Field(default=None, ge=0)
 
 
 class KitchenPatch(BaseModel):
@@ -223,6 +225,7 @@ async def chef_dashboard(
                 "unitPrice": float(m.unit_price),
                 "mealWindow": m.meal_type,
                 "dietaryTag": m.dietary_tag,
+                "maxAvailability": m.max_availability if m.max_availability is not None else 0,
                 "availability": "IN_STOCK" if m.is_available else "SOLD_OUT",
             }
             for m in menu_items
@@ -372,6 +375,7 @@ async def create_menu(
         dietary_tag=body.dietary_tag,
         is_available=body.is_available,
         image_url=body.image_url,
+        max_availability=body.max_availability,
     )
     db.add(item)
     await db.commit()
@@ -404,6 +408,8 @@ async def patch_menu(
         item.is_available = data["is_available"]
     if "image_url" in data:
         item.image_url = data["image_url"]
+    if "max_availability" in data and data["max_availability"] is not None:
+        item.max_availability = data["max_availability"]
     await db.commit()
     return menu_card(item)
 

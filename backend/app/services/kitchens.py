@@ -58,6 +58,7 @@ def menu_card(item: ChefMenuItem) -> dict[str, Any]:
         "mealWindow": item.meal_type,
         "meal_type": item.meal_type,
         "dietaryTag": item.dietary_tag,
+        "maxAvailability": item.max_availability if item.max_availability is not None else 0,
         "imageUrl": item.image_url,
         "supportsCustomization": True,
     }
