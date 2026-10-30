@@ -447,5 +447,11 @@ async def execute_payment_status_update(
             actor_role="PAYMENT_WEBHOOK",
             reason=f"Payment {payment_id} marked PAID via gateway transaction {gateway_transaction_id}",
         )
+        # Settled payments must also show PAID on the order row — the WhatsApp
+        # poller path never touches order.payment_status otherwise (the REST
+        # verify-payment endpoint sets it explicitly).
+        order = await session.get(CustomerOrder, payment.order_id)
+        if order is not None:
+            order.payment_status = "PAID"
 
     return payment

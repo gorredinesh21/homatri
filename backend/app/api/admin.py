@@ -422,6 +422,165 @@ async def get_chat_feed(
         ]
 
 
+@router.get("/orders")
+async def list_orders(
+    status_filter: str | None = None,
+    chef_phone: str | None = None,
+    service_date_from: str | None = None,
+    service_date_to: str | None = None,
+    q: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+    current_admin: dict[str, Any] = Depends(get_current_admin),
+):
+    """Order history for the admin portal: all statuses (incl. CANCELLED),
+    with items and payment summary. Supports filters + simple search."""
+    from backend.app.models.customer import (
+        CustomerOrderItem,
+        CustomerPayment,
+        CustomerProfile,
+    )
+
+    async with SessionFactory() as session:
+        query = select(CustomerOrder).order_by(CustomerOrder.created_at.desc())
+        total_query = select(func.count(CustomerOrder.order_id))
+
+        if status_filter:
+            query = query.where(CustomerOrder.status == status_filter.upper())
+            total_query = total_query.where(CustomerOrder.status == status_filter.upper())
+        if chef_phone:
+            query = query.where(CustomerOrder.chef_phone == chef_phone)
+            total_query = total_query.where(CustomerOrder.chef_phone == chef_phone)
+        if service_date_from:
+            d_from = date.fromisoformat(service_date_from)
+            query = query.where(CustomerOrder.service_date >= d_from)
+            total_query = total_query.where(CustomerOrder.service_date >= d_from)
+        if service_date_to:
+            d_to = date.fromisoformat(service_date_to)
+            query = query.where(CustomerOrder.service_date <= d_to)
+            total_query = total_query.where(CustomerOrder.service_date <= d_to)
+        if q:
+            like = f"%{q.lower()}%"
+            query = query.where(
+                func.lower(CustomerOrder.customer_phone).like(like)
+                | func.lower(CustomerOrder.kitchen_name).like(like)
+                | func.lower(CustomerOrder.order_id).like(like)
+            )
+            total_query = total_query.where(
+                func.lower(CustomerOrder.customer_phone).like(like)
+                | func.lower(CustomerOrder.kitchen_name).like(like)
+                | func.lower(CustomerOrder.order_id).like(like)
+            )
+
+        limit = min(max(limit, 1), 500)
+        offset = max(offset, 0)
+        orders = (await session.execute(query.limit(limit).offset(offset))).scalars().all()
+        total = (await session.execute(total_query)).scalar_one()
+
+        order_ids = [o.order_id for o in orders]
+        items_by_order: dict[str, list] = {}
+        payments_by_order: dict[str, list] = {}
+        customer_phones = {o.customer_phone for o in orders}
+
+        if order_ids:
+            items_res = await session.execute(
+                select(CustomerOrderItem).where(CustomerOrderItem.order_id.in_(order_ids))
+            )
+            for it in items_res.scalars():
+                items_by_order.setdefault(it.order_id, []).append(
+                    {
+                        "dish_name": it.dish_name,
+                        "quantity": it.quantity,
+                        "unit_price": float(it.unit_price),
+                        "item_subtotal": float(it.item_subtotal),
+                    }
+                )
+            pay_res = await session.execute(
+                select(CustomerPayment).where(CustomerPayment.order_id.in_(order_ids))
+            )
+            for p in pay_res.scalars():
+                payments_by_order.setdefault(p.order_id, []).append(
+                    {
+                        "payment_type": p.payment_type,
+                        "amount_due": float(p.amount_due),
+                        "amount_paid": float(p.amount_paid or 0),
+                        "status": p.status,
+                        "gateway": p.gateway,
+                        "gateway_payment_id": p.gateway_payment_id,
+                        "payment_link_url": p.payment_link_url,
+                        "paid_at": p.paid_at.isoformat() if p.paid_at else None,
+                        "refund_reason": p.refund_reason,
+                    }
+                )
+        customers_res = await session.execute(
+            select(CustomerProfile).where(CustomerProfile.customer_phone.in_(customer_phones))
+        )
+        customer_names = {c.customer_phone: (c.full_name or c.name) for c in customers_res.scalars()}
+
+        rows = []
+        for o in orders:
+            rows.append(
+                {
+                    "order_id": o.order_id,
+                    "customer_phone": o.customer_phone,
+                    "customer_name": customer_names.get(o.customer_phone, ""),
+                    "kitchen_name": o.kitchen_name,
+                    "chef_phone": o.chef_phone,
+                    "meal_window": o.meal_window,
+                    "service_date": str(o.service_date),
+                    "status": o.status,
+                    "payment_status": o.payment_status,
+                    "payment_method": o.payment_method,
+                    "cart_subtotal": float(o.cart_subtotal),
+                    "delivery_fee": float(o.delivery_fee),
+                    "total_amount": float(o.total_amount),
+                    "delivery_address": o.delivery_address,
+                    "special_instructions": o.special_instructions,
+                    "cancellation_reason": o.cancellation_reason,
+                    "cancelled_at": o.cancelled_at.isoformat() if o.cancelled_at else None,
+                    "created_at": o.created_at.isoformat(),
+                    "items": items_by_order.get(o.order_id, []),
+                    "payments": payments_by_order.get(o.order_id, []),
+                }
+            )
+
+        return {"total": total, "count": len(rows), "offset": offset, "orders": rows}
+
+
+@router.get("/chefs/{chef_phone}/menu")
+async def get_chef_menu(chef_phone: str, current_admin: dict[str, Any] = Depends(get_current_admin)):
+    """Full menu of a chef for the admin portal, incl. archived items."""
+    from backend.app.models.chef import ChefMenuItem
+
+    async with SessionFactory() as session:
+        chef = await session.get(ChefProfile, chef_phone)
+        if chef is None or chef.deleted_at is not None:
+            raise HTTPException(status_code=404, detail="Chef not found")
+        res = await session.execute(
+            select(ChefMenuItem)
+            .where(ChefMenuItem.chef_phone == chef_phone)
+            .order_by(ChefMenuItem.is_archived, ChefMenuItem.dish_name)
+        )
+        return {
+            "kitchen_name": chef.kitchen_name,
+            "items": [
+                {
+                    "menu_item_id": m.menu_item_id,
+                    "dish_name": m.dish_name,
+                    "description": m.description,
+                    "unit_price": float(m.unit_price),
+                    "meal_type": m.meal_type,
+                    "dietary_tag": m.dietary_tag,
+                    "spice_level": m.spice_level,
+                    "max_availability": m.max_availability,
+                    "is_available": m.is_available,
+                    "is_archived": m.is_archived,
+                }
+                for m in res.scalars()
+            ],
+        }
+
+
 @router.post("/clear-all-data")
 async def clear_all_admin_data(
     current_admin: dict[str, Any] = Depends(get_current_admin)
