@@ -13,3 +13,8 @@ def haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     dl = math.radians(lon2 - lon1)
     a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
     return 2 * r * math.asin(math.sqrt(a))
+
+
+# Delivery is hyperlocal by design (Dinesh, Oct 30 2026): customers only see
+# and order from kitchens within this radius of their delivery location.
+MAX_DELIVERY_RADIUS_KM = 5.0

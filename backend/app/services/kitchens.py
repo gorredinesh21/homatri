@@ -8,6 +8,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.app.core.geo import MAX_DELIVERY_RADIUS_KM, haversine_km
 from backend.app.models.chef import ChefMenuItem, ChefProfile
 from backend.app.models.customer import CustomerOrder, CustomerOrderItem
 from backend.app.models.social import ChefReel
@@ -189,7 +190,12 @@ async def serialize_kitchen(
 
 
 async def list_kitchens(
-    session: AsyncSession, *, cluster: str | None = None, meal_window: str | None = None
+    session: AsyncSession,
+    *,
+    cluster: str | None = None,
+    meal_window: str | None = None,
+    latitude: float | None = None,
+    longitude: float | None = None,
 ) -> list[dict[str, Any]]:
     q = select(ChefProfile).where(ChefProfile.active_status.is_(True), ChefProfile.deleted_at.is_(None))
     # Featured kitchens pin to the top of every feed (cards, reels, public site).
@@ -197,6 +203,7 @@ async def list_kitchens(
         await session.execute(q.order_by(ChefProfile.is_featured.desc(), ChefProfile.kitchen_name))
     ).scalars().all()
     cluster_l = (cluster or "").strip().lower()
+    geo_filter = latitude is not None and longitude is not None
     out = []
     for chef in chefs:
         blob = " ".join(
@@ -214,5 +221,15 @@ async def list_kitchens(
             # Ghansoli launch: include kitchens with no locality yet.
             if chef.apartment_or_locality:
                 continue
-        out.append(await serialize_kitchen(session, chef, meal_window=meal_window))
+        item = await serialize_kitchen(session, chef, meal_window=meal_window)
+        if geo_filter:
+            distance_km = haversine_km(
+                latitude, longitude, float(chef.latitude), float(chef.longitude)
+            )
+            if distance_km > MAX_DELIVERY_RADIUS_KM:
+                continue  # hyperlocal: hide kitchens beyond the delivery radius
+            item["distance_km"] = round(distance_km, 1)
+        out.append(item)
+    if geo_filter:
+        out.sort(key=lambda k: k["distance_km"])
     return out

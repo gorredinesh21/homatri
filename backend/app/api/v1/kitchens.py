@@ -19,12 +19,18 @@ router = APIRouter(tags=["Kitchens"])
 async def get_kitchens(
     cluster: str | None = Query(default="Ghansoli"),
     meal_window: str | None = Query(default=None),
+    latitude: float | None = Query(default=None, ge=-90, le=90),
+    longitude: float | None = Query(default=None, ge=-180, le=180),
     db: AsyncSession = Depends(get_db),
 ):
     window = (meal_window or "").upper() or None
     if window and window not in {"LUNCH", "DINNER"}:
         raise HTTPException(status_code=400, detail="meal_window must be LUNCH or DINNER")
-    return await list_kitchens(db, cluster=cluster, meal_window=window)
+    if (latitude is None) != (longitude is None):
+        raise HTTPException(status_code=400, detail="latitude and longitude must be sent together")
+    return await list_kitchens(
+        db, cluster=cluster, meal_window=window, latitude=latitude, longitude=longitude
+    )
 
 
 @router.get("/kitchens/{chef_phone}")

@@ -43,6 +43,7 @@ from backend.app.models.system import (
     SystemDeliveryStopOrder,
     SystemSetting,
 )
+from backend.app.core.geo import MAX_DELIVERY_RADIUS_KM
 from backend.app.tools.common import describe_meal_window, haversine_km, resolve_time_pool
 from backend.app.tools.master_tools import LEG_MINUTES, _mint_payment_link, _process_payment_webhook
 from backend.app.tools.pause import resume_handler, send_and_await_reply
@@ -201,6 +202,17 @@ async def _find_nearby_kitchens(
         for c in chefs
     ]
     kitchens.sort(key=lambda k: k["distance_km"])   # sort FIRST, then cut
+    kitchens = [k for k in kitchens if k["distance_km"] <= MAX_DELIVERY_RADIUS_KM]
+    if not kitchens:
+        return {
+            "status": "NONE_NEARBY",
+            "window": window,
+            "kitchens": [],
+            "message": (
+                f"Sorry — none of our home kitchens are within {MAX_DELIVERY_RADIUS_KM:.0f} km of that "
+                f"location right now. We're adding new kitchens every week!"
+            ),
+        }
     kitchens = kitchens[:limit]
 
     lines = []
@@ -525,6 +537,30 @@ async def _create_order(
         return {"status": "AMBIGUOUS", "message": f"Several kitchens match '{kitchen}'. Ask the customer which one."}
     if chef is None:
         return {"status": "NOT_FOUND", "message": f"No kitchen matches '{kitchen}'. Show the nearby list and ask them to pick."}
+
+    # Hyperlocal guard: the customer's saved location pin must be within the
+    # delivery radius of the kitchen they named.
+    cust = await session.get(CustomerProfile, customer_phone)
+    if (
+        cust is not None
+        and cust.latitude is not None
+        and cust.longitude is not None
+        and chef.latitude is not None
+        and chef.longitude is not None
+    ):
+        distance_km = haversine_km(
+            float(cust.latitude), float(cust.longitude), float(chef.latitude), float(chef.longitude)
+        )
+        if distance_km > MAX_DELIVERY_RADIUS_KM:
+            return {
+                "status": "TOO_FAR",
+                "message": (
+                    f"{chef.kitchen_name} is {distance_km:.1f} km away from the customer's location — "
+                    f"outside our {MAX_DELIVERY_RADIUS_KM:.0f} km home-delivery radius. "
+                    "Politely explain we deliver within 5 km only, and show the nearest kitchens instead "
+                    "(find_nearby_kitchens)."
+                ),
+            }
 
     if not items:
         return {"status": "INVALID_ITEM", "message": "No dishes selected to order."}

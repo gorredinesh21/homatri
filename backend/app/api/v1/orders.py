@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.deps import require_phone, require_user
 from backend.app.core.config import settings
+from backend.app.core.geo import MAX_DELIVERY_RADIUS_KM, haversine_km
 from backend.app.core.ids import generate_id
 from backend.app.db.session import SessionFactory, get_db
 from backend.app.models.chef import ChefMenuItem, ChefProfile
@@ -174,6 +175,16 @@ async def checkout_order(
     lng = addr.longitude if addr and addr.longitude is not None else (float(profile.longitude) if profile.longitude is not None else None)
     if lat is None or lng is None:
         raise HTTPException(status_code=400, detail="Delivery pin (lat/lng) is required so the rider can be routed.")
+
+    distance_km = haversine_km(lat, lng, float(chef.latitude), float(chef.longitude))
+    if distance_km > MAX_DELIVERY_RADIUS_KM:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{chef.kitchen_name} is {distance_km:.1f} km away — outside our "
+                f"{MAX_DELIVERY_RADIUS_KM:.0f} km home-delivery radius. Please pick a kitchen near you."
+            ),
+        )
 
     payment_method = (req.payment_method or "RAZORPAY").upper()
     if payment_method not in {"RAZORPAY", "COD"}:
