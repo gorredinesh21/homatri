@@ -9,9 +9,10 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.geo import MAX_DELIVERY_RADIUS_KM, haversine_km
-from backend.app.models.chef import ChefMenuItem, ChefProfile
+from backend.app.models.chef import ChefMenuCategory, ChefMenuItem, ChefProfile
 from backend.app.models.customer import CustomerOrder, CustomerOrderItem
 from backend.app.models.social import ChefReel
+from backend.app.services import menu as menu_service
 from backend.app.services.meal_clock import active_window
 
 COOKING_STATUSES = ("CONFIRMED", "BATCHED", "COOKING", "PACKED", "PICKED_UP")
@@ -45,10 +46,14 @@ def _dietary_tags(chef: ChefProfile, items: list[ChefMenuItem]) -> list[str]:
     return sorted(tags)
 
 
-def menu_card(item: ChefMenuItem) -> dict[str, Any]:
+def menu_card(item: ChefMenuItem, category: ChefMenuCategory | None = None) -> dict[str, Any]:
     return {
         "menuItemId": item.menu_item_id,
         "menu_item_id": item.menu_item_id,
+        "categoryId": item.category_id,
+        "category_id": item.category_id,
+        "categoryName": category.name if category is not None else None,
+        "category_name": category.name if category is not None else None,
         "itemName": item.dish_name,
         "dish_name": item.dish_name,
         "description": item.description,
@@ -93,6 +98,11 @@ async def serialize_kitchen(
     from datetime import date as date_cls
 
     sd = date_cls.fromisoformat(service_date)
+    categories = await menu_service.assigned_categories(session, chef.chef_phone)
+    categories_by_id = {c.category_id: c for c in categories}
+    # Uncategorised legacy dishes stay visible in a trailing "More dishes" section
+    # until the kitchen files them under a category.
+    fallback_order = len(categories)
     items = (
         (
             await session.execute(
@@ -104,12 +114,23 @@ async def serialize_kitchen(
         .scalars()
         .all()
     )
+    for i, item in enumerate(items):
+        cat = categories_by_id.get(item.category_id) if item.category_id else None
+        # Dishes filed under a category that is no longer assigned/active to this
+        # chef keep rendering in the fallback section instead of disappearing.
+        item._category = cat  # type: ignore[attr-defined]
+
+    def _category_rank(item: ChefMenuItem) -> int:
+        cat = getattr(item, "_category", None)
+        return categories.index(cat) if cat in categories else fallback_order
+
+    items.sort(key=lambda i: (_category_rank(i), i.display_order, i.dish_name))
     if meal_window:
         visible = [i for i in items if i.meal_type in {meal_window, "BOTH"}]
     else:
         visible = items
-    lunch = [menu_card(i) for i in visible if i.meal_type in {"LUNCH", "BOTH"}]
-    dinner = [menu_card(i) for i in visible if i.meal_type in {"DINNER", "BOTH"}]
+    lunch = [menu_card(i, getattr(i, "_category", None)) for i in visible if i.meal_type in {"LUNCH", "BOTH"}]
+    dinner = [menu_card(i, getattr(i, "_category", None)) for i in visible if i.meal_type in {"DINNER", "BOTH"}]
     prices = [float(i.unit_price) for i in visible if i.is_available]
     used = await committed_meals(session, chef.chef_phone, sd, meal_window or window["meal_window"])
     remaining = max(0, int(chef.daily_capacity) - used)
@@ -132,6 +153,43 @@ async def serialize_kitchen(
     )
     locality = chef.apartment_or_locality or chef.city or "Ghansoli"
     fssai = chef.fssai_license_number or ""
+    # Category-grouped menu: one entry per assigned category (in display order),
+    # each with its dishes; combo categories describe their pick-two pricing and
+    # carry no dishes of their own (the pair is chosen from the standard categories).
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for i in visible:
+        cat = getattr(i, "_category", None)
+        key = cat.category_id if cat is not None else "__fallback__"
+        grouped.setdefault(key, []).append(menu_card(i, cat))
+    category_cards = []
+    for cat in categories:
+        card = menu_service.serialize_category(cat, chef_phone=chef.chef_phone)
+        if cat.pricing_type == menu_service.STANDARD:
+            cat_prices = [d["price"] for d in grouped.get(cat.category_id, []) if d["is_available"]]
+            card["startingPrice"] = min(cat_prices) if cat_prices else None
+            card["dishCount"] = len(grouped.get(cat.category_id, []))
+            card["dishes"] = grouped.get(cat.category_id, [])
+        category_cards.append(card)
+    fallback_dishes = grouped.get("__fallback__", [])
+    if fallback_dishes:
+        category_cards.append(
+            {
+                "categoryId": None,
+                "category_id": None,
+                "name": "More dishes",
+                "description": None,
+                "imageUrl": None,
+                "displayOrder": fallback_order,
+                "isActive": True,
+                "pricingType": "STANDARD",
+                "comboDiscount": None,
+                "comboServes": None,
+                "chefPhone": chef.chef_phone,
+                "startingPrice": min((d["price"] for d in fallback_dishes if d["is_available"]), default=None),
+                "dishCount": len(fallback_dishes),
+                "dishes": fallback_dishes,
+            }
+        )
     hygiene = []
     if fssai and fssai != "PENDING":
         hygiene.append(f"FSSAI registered {fssai}")
@@ -171,7 +229,8 @@ async def serialize_kitchen(
         "longitude": _float(chef.longitude),
         "lunchMenu": lunch,
         "dinnerMenu": dinner,
-        "menuItems": [menu_card(i) for i in visible],
+        "menuItems": [menu_card(i, getattr(i, "_category", None)) for i in visible],
+        "categories": category_cards,
         "reels": [
             {
                 "reelId": str(r.reel_id),

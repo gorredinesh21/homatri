@@ -451,16 +451,52 @@ async def _view_chef_menu(
             "message": f"{chef.kitchen_name} has nothing available for {window_phrase} right now.",
         }
 
+    # Category-grouped menu: dishes render under their category headings, and
+    # pick-two combo categories (Bhookh Buddies / Pocket Friendly Feast) are
+    # advertised with their rule so the agent can steer the pair selection.
+    from backend.app.models.chef import ChefMenuCategory
+    from backend.app.services import menu as menu_service
+
+    categories = await menu_service.assigned_categories(session, chef.chef_phone)
+    categories_by_id = {c.category_id: c for c in categories}
+    cat_by_dish = {
+        d.menu_item_id: categories_by_id.get(d.category_id) if d.category_id else None for d in rows
+    }
+    std_categories = [c for c in categories if c.pricing_type == "STANDARD"]
+    grouped: dict[str, list] = {}
+    for d in rows:
+        cat = cat_by_dish[d.menu_item_id]
+        key = cat.name if cat is not None else "More dishes"
+        grouped.setdefault(key, []).append(
+            {"name": d.dish_name, "price": float(d.unit_price),
+             "dietary": d.dietary_tag, "spice": d.spice_level}
+        )
+    dish_counter = 0
+    section_lines = []
+    for cat in std_categories:
+        group = grouped.pop(cat.name, None)
+        if not group:
+            continue
+        section_lines.append(f"*{cat.name}*")
+        for d in group:
+            dish_counter += 1
+            section_lines.append(f"{dish_counter}. {d['name']} — ₹{d['price']:.0f} ({d['dietary']}, {d['spice']} spice)")
+    for label, group in grouped.items():
+        section_lines.append(f"*{label}*")
+        for d in group:
+            dish_counter += 1
+            section_lines.append(f"{dish_counter}. {d['name']} — ₹{d['price']:.0f} ({d['dietary']}, {d['spice']} spice)")
+    for c in categories:
+        if c.pricing_type == "PAIR_COMBO" and c.combo_discount:
+            serves = f", serves {c.combo_serves}" if c.combo_serves else ""
+            section_lines.append(f"*{c.name}*{serves}: pick any two dishes above — ₹{float(c.combo_discount):.0f} off the pair")
     dishes = [
         {"name": d.dish_name, "price": float(d.unit_price),
-         "dietary": d.dietary_tag, "spice": d.spice_level}
+         "dietary": d.dietary_tag, "spice": d.spice_level,
+         "category": cat_by_dish[d.menu_item_id].name if cat_by_dish[d.menu_item_id] else "More dishes"}
         for d in rows
     ]
-    lines = [
-        f"{i}. {d['name']} — ₹{d['price']:.0f} ({d['dietary']}, {d['spice']} spice)"
-        for i, d in enumerate(dishes, 1)
-    ]
-    msg = f"Menu at {chef.kitchen_name} ({chef.chef_name}) — {window_phrase}:\n" + "\n".join(lines)
+    msg = f"Menu at {chef.kitchen_name} ({chef.chef_name}) — {window_phrase}:\n" + "\n".join(section_lines)
     return {"status": "OK", "kitchen_name": chef.kitchen_name, "window": meal_type, "dishes": dishes, "message": msg}
 
 

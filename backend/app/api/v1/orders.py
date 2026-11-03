@@ -30,6 +30,7 @@ from backend.app.models.customer import (
     CustomerReview,
 )
 from backend.app.services.fulfillment import serialize_order
+from backend.app.services import menu as menu_service
 from backend.app.services.kitchens import committed_meals
 from backend.app.services.live_hub import hub
 from backend.app.services.meal_clock import active_window, is_past_cutoff
@@ -44,6 +45,9 @@ class OrderItemSchema(BaseModel):
     chef_id: str | None = None
     quantity: int = Field(gt=0)
     customer_note: Optional[str] = None
+    # Set on lines that are one half of a pair-combo (Bhookh Buddies /
+    # Pocket Friendly Feast): the combo category the pair belongs to.
+    combo_category_id: Optional[str] = None
 
 
 class DeliveryAddressSchema(BaseModel):
@@ -153,6 +157,17 @@ async def checkout_order(
                 detail=f"{dish.dish_name} is not on the {meal_window.lower()} menu.",
             )
 
+    # Pair-combo pricing (Bhookh Buddies ₹10/pair, Pocket Friendly Feast ₹20/pair):
+    # the discount is derived server-side from the category config — a tampered
+    # client price never reaches the order.
+    combo_lines = [line.model_dump() for line in req.items]
+    try:
+        combo_discount, _combo_groups = await menu_service.validate_combo_lines(
+            db, chef_phone, combo_lines, by_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
     addr = req.delivery_address
     if addr and addr.address_id:
         try:
@@ -231,13 +246,15 @@ async def checkout_order(
                 unit_price=dish.unit_price,
                 quantity=line.quantity,
                 item_subtotal=line_total,
+                combo_category_id=line.combo_category_id,
                 service_date=service_date,
                 special_instructions=line.customer_note,
             )
         )
 
     order.cart_subtotal = subtotal
-    order.total_amount = subtotal + fee
+    order.combo_discount = combo_discount
+    order.total_amount = subtotal + fee - combo_discount
     await db.flush()
 
     payment_info: dict[str, Any] | None = None

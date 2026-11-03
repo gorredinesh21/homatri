@@ -74,6 +74,11 @@ class CustomerOrder(Base, TimestampMixin):
     delivery_otp_verified_at: Mapped[datetime | None] = mapped_column(TS)
     payment_method: Mapped[str] = mapped_column(String(20), nullable=False, default="RAZORPAY")  # RAZORPAY | COD
     payment_status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")  # PENDING | PAID | COD_PENDING | COD_COLLECTED
+    # Sum of pair-combo discounts (Bhookh Buddies ₹10/pair, Pocket Friendly Feast ₹20/pair).
+    # total_amount = cart_subtotal + delivery_fee - combo_discount.
+    combo_discount: Mapped[Decimal] = mapped_column(
+        Numeric(10, 2), nullable=False, default=Decimal("0.00"), server_default="0"
+    )
 
 
 class CustomerOrderItem(Base):
@@ -91,6 +96,9 @@ class CustomerOrderItem(Base):
     unit_price: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)  # snapshot
     quantity: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     item_subtotal: Mapped[Decimal] = mapped_column(Numeric(10, 2), nullable=False)
+    # When this line is one half of a pair-combo (Bhookh Buddies etc.), the combo
+    # category id — preserved so order history can re-group the pair and show the discount.
+    combo_category_id: Mapped[str | None] = mapped_column(String(36), index=True)
     service_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)  # snapshot
     special_instructions: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(TS, nullable=False, server_default=func.now())

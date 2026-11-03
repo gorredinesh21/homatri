@@ -90,6 +90,7 @@ async def serialize_order(session: AsyncSession, order: CustomerOrder) -> dict[s
         "service_date": order.service_date.isoformat() if order.service_date else None,
         "cart_subtotal": float(order.cart_subtotal),
         "delivery_fee": float(order.delivery_fee),
+        "combo_discount": float(order.combo_discount) if getattr(order, "combo_discount", None) is not None else 0.0,
         "total_amount": float(order.total_amount),
         "payment_method": order.payment_method,
         "payment_status": order.payment_status,
@@ -103,6 +104,7 @@ async def serialize_order(session: AsyncSession, order: CustomerOrder) -> dict[s
                 "quantity": it.quantity,
                 "unit_price": float(it.unit_price),
                 "item_subtotal": float(it.item_subtotal),
+                "combo_category_id": it.combo_category_id,
                 "special_instructions": it.special_instructions,
             }
             for it in items

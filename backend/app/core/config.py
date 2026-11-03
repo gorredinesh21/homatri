@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     default_delivery_fee: float = 11.00
     ops_phone: str = ""
     uploads_dir: str = "backend/uploads"
+    # When set, dish images upload to this GCS bucket (public-read) instead of the
+    # container-local uploads dir, surviving Cloud Run restarts. Empty = local.
+    media_gcs_bucket: str = ""
 
     # ---- Razorpay Payment Gateway ----
     razorpay_key_id: str = "rzp_test_mock_12345"

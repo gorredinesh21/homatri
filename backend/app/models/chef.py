@@ -61,12 +61,60 @@ class ChefProfile(Base, TimestampMixin):
     deleted_at: Mapped[datetime | None] = mapped_column(TS)
 
 
+class ChefMenuCategory(Base, TimestampMixin):
+    """Admin-managed menu category (e.g. Mini Rice Bowls, Bhole Chature).
+
+    Categories are global definitions; chefs get them through
+    ChefCategoryAssignment and organise their dishes inside them.
+    pricing_type=PAIR_COMBO marks the pick-any-two combo categories
+    (Bhookh Buddies / Pocket Friendly Feast) whose price is computed
+    dynamically as meal1 + meal2 - combo_discount.
+    """
+
+    __tablename__ = "chef_menu_categories"
+
+    category_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=id_factory("cat"))
+    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True, index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    image_url: Mapped[str | None] = mapped_column(Text)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true", index=True)
+    pricing_type: Mapped[str] = mapped_column(String(20), nullable=False, default="STANDARD", server_default="STANDARD")
+    combo_discount: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    combo_serves: Mapped[int | None] = mapped_column(Integer)
+
+
+class ChefCategoryAssignment(Base, TimestampMixin):
+    """Which categories a chef offers on their menu (admin-controlled)."""
+
+    __tablename__ = "chef_category_assignments"
+    __table_args__ = (
+        UniqueConstraint("chef_phone", "category_id", name="uq_chef_category"),
+    )
+
+    assignment_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=id_factory("cas"))
+    chef_phone: Mapped[str] = mapped_column(
+        String(15), ForeignKey("chef_profiles.chef_phone"), nullable=False, index=True
+    )
+    category_id: Mapped[str] = mapped_column(
+        String(36), ForeignKey("chef_menu_categories.category_id"), nullable=False, index=True
+    )
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+
+
 class ChefMenuItem(Base, TimestampMixin):
     __tablename__ = "chef_menu_items"
 
     menu_item_id: Mapped[str] = mapped_column(String(36), primary_key=True, default=id_factory("itm"))
     chef_phone: Mapped[str] = mapped_column(
         String(15), ForeignKey("chef_profiles.chef_phone"), nullable=False, index=True
+    )
+    category_id: Mapped[str | None] = mapped_column(
+        String(36),
+        ForeignKey("chef_menu_categories.category_id"),
+        nullable=True,
+        index=True,
     )
     dish_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     description: Mapped[str | None] = mapped_column(Text)
@@ -79,6 +127,7 @@ class ChefMenuItem(Base, TimestampMixin):
     packaging_type: Mapped[str | None] = mapped_column(String(50), default="3_COMPARTMENT_BOX")
     image_url: Mapped[str | None] = mapped_column(Text)
     max_availability: Mapped[int | None] = mapped_column(Integer, default=10)
+    display_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
     is_available: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, index=True)
     # Soft delete: dishes with past orders can't be hard-deleted (order items hold
     # an FK), so they are archived instead — hidden from every menu surface while

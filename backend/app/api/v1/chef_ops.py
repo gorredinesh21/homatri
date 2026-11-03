@@ -6,7 +6,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -15,8 +15,10 @@ from backend.app.api.deps import require_role
 from backend.app.core.ids import generate_id
 from backend.app.db.session import get_db
 from backend.app.models.chef import (
+    ChefCategoryAssignment,
     ChefDailyInventory,
     ChefDietaryRequest,
+    ChefMenuCategory,
     ChefMenuItem,
     ChefProfile,
 )
@@ -25,7 +27,9 @@ from backend.app.models.driver import DriverProfile
 from backend.app.models.social import ChefContentProgress, ChefReel
 from backend.app.models.system import SystemDeliveryRoute, SystemDeliveryStop, SystemDeliveryStopOrder
 from backend.app.services.fulfillment import chef_earnings, mark_kitchen_packed
+from backend.app.services import menu as menu_service
 from backend.app.services.kitchens import committed_meals, menu_card, serialize_kitchen
+from backend.app.services.media_storage import save_dish_image
 from backend.app.services.meal_clock import active_window
 from backend.app.tools.master_tools import _run_cutoff_batch
 
@@ -36,6 +40,7 @@ class MenuIn(BaseModel):
     dish_name: str
     description: Optional[str] = None
     unit_price: float = Field(gt=0)
+    category_id: str = Field(..., description="Category this dish belongs to (required).")
     meal_type: str = "LUNCH"
     dietary_tag: Optional[str] = "VEG"
     is_available: bool = True
@@ -47,6 +52,7 @@ class MenuPatch(BaseModel):
     dish_name: Optional[str] = None
     description: Optional[str] = None
     unit_price: Optional[float] = None
+    category_id: Optional[str] = None
     meal_type: Optional[str] = None
     dietary_tag: Optional[str] = None
     is_available: Optional[bool] = None
@@ -160,6 +166,9 @@ async def chef_dashboard(
                                 "vehicleNumber": driver.vehicle_number,
                                 "phone": driver.driver_phone,
                             }
+    chef_categories = await menu_service.assigned_categories(db, phone)
+    categories_by_id = {c.category_id: c for c in chef_categories}
+    category_counts = await menu_service.category_dish_counts(db, phone)
     menu_items = (
         (
             await db.execute(
@@ -225,10 +234,22 @@ async def chef_dashboard(
                 "unitPrice": float(m.unit_price),
                 "mealWindow": m.meal_type,
                 "dietaryTag": m.dietary_tag,
+                "categoryId": m.category_id,
+                "categoryName": categories_by_id[m.category_id].name
+                if m.category_id in categories_by_id
+                else None,
+                "imageUrl": m.image_url,
                 "maxAvailability": m.max_availability if m.max_availability is not None else 0,
                 "availability": "IN_STOCK" if m.is_available else "SOLD_OUT",
             }
             for m in menu_items
+        ],
+        "categories": [
+            {
+                **menu_service.serialize_category(c, chef_phone=phone),
+                "dishCount": category_counts.get(c.category_id, 0),
+            }
+            for c in chef_categories
         ],
         "rider": rider,
         "earnings": await chef_earnings(db, phone),
@@ -355,19 +376,59 @@ async def packed(
     return result
 
 
+@router.get("/me/categories")
+async def chef_categories(
+    payload: dict = Depends(require_role("CHEF")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Categories assigned to this kitchen, with live dish counts, in display order."""
+    phone = _chef_phone(payload)
+    await _require_chef(db, phone)
+    cats = await menu_service.assigned_categories(db, phone)
+    counts = await menu_service.category_dish_counts(db, phone)
+    out = []
+    for cat in cats:
+        card = menu_service.serialize_category(cat, chef_phone=phone)
+        live_prices = []
+        if cat.pricing_type == menu_service.STANDARD:
+            dishes = (
+                (
+                    await db.execute(
+                        select(ChefMenuItem).where(
+                            ChefMenuItem.chef_phone == phone,
+                            ChefMenuItem.category_id == cat.category_id,
+                            ChefMenuItem.is_archived.is_(False),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            live_prices = [float(d.unit_price) for d in dishes if d.is_available]
+        card["dishCount"] = counts.get(cat.category_id, 0)
+        card["startingPrice"] = min(live_prices) if live_prices else None
+        out.append(card)
+    return {"categories": out}
+
+
 @router.post("/me/menu")
 async def create_menu(
     body: MenuIn,
     payload: dict = Depends(require_role("CHEF")),
     db: AsyncSession = Depends(get_db),
 ):
-    await _require_chef(db, payload["sub"])
+    chef = await _require_chef(db, payload["sub"])
+    try:
+        category = await menu_service.require_assigned_category(db, chef.chef_phone, body.category_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     meal = body.meal_type.upper()
     if meal not in {"LUNCH", "DINNER", "BOTH"}:
         raise HTTPException(status_code=400, detail="meal_type must be LUNCH, DINNER, or BOTH")
     item = ChefMenuItem(
         menu_item_id=generate_id("itm"),
         chef_phone=payload["sub"],
+        category_id=category.category_id,
         dish_name=body.dish_name.strip(),
         description=body.description,
         unit_price=Decimal(str(body.unit_price)),
@@ -380,7 +441,7 @@ async def create_menu(
     db.add(item)
     await db.commit()
     await db.refresh(item)
-    return menu_card(item)
+    return menu_card(item, category)
 
 
 @router.patch("/me/menu/{menu_item_id}")
@@ -393,6 +454,15 @@ async def patch_menu(
     item = await db.get(ChefMenuItem, menu_item_id)
     if item is None or item.chef_phone != payload["sub"] or item.is_archived:
         raise HTTPException(status_code=404, detail="Menu item not found")
+    category = None
+    if body.category_id is not None and body.category_id != item.category_id:
+        try:
+            category = await menu_service.require_assigned_category(db, payload["sub"], body.category_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        item.category_id = category.category_id
+    elif item.category_id:
+        category = await db.get(ChefMenuCategory, item.category_id)
     data = body.model_dump(exclude_unset=True)
     if "dish_name" in data:
         item.dish_name = data["dish_name"]
@@ -411,7 +481,7 @@ async def patch_menu(
     if "max_availability" in data and data["max_availability"] is not None:
         item.max_availability = data["max_availability"]
     await db.commit()
-    return menu_card(item)
+    return menu_card(item, category)
 
 
 @router.patch("/me/menu/{menu_item_id}/stock")
@@ -468,6 +538,45 @@ async def delete_menu(
     )
     await db.commit()
     return {"deleted": True, "archived": True}
+
+
+async def _store_dish_photo(db: AsyncSession, chef_phone: str, upload: UploadFile, menu_item_id: str | None):
+    data = await upload.read()
+    try:
+        url = await save_dish_image(chef_phone, data, upload.content_type, upload.filename)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if menu_item_id:
+        item = await db.get(ChefMenuItem, menu_item_id)
+        if item is None or item.chef_phone != chef_phone or item.is_archived:
+            raise HTTPException(status_code=404, detail="Menu item not found")
+        item.image_url = url
+        await db.commit()
+        return {"imageUrl": url, "menuItemId": menu_item_id, "menu": menu_card(item)}
+    return {"imageUrl": url, "menuItemId": None, "menu": None}
+
+
+@router.post("/me/menu/image")
+async def upload_menu_image(
+    file: UploadFile = File(...),
+    payload: dict = Depends(require_role("CHEF")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stage a dish photo before the dish exists (add-dish flow) — returns the URL."""
+    chef = await _require_chef(db, payload["sub"])
+    return await _store_dish_photo(db, chef.chef_phone, file, None)
+
+
+@router.post("/me/menu/{menu_item_id}/image")
+async def replace_menu_image(
+    menu_item_id: str,
+    file: UploadFile = File(...),
+    payload: dict = Depends(require_role("CHEF")),
+    db: AsyncSession = Depends(get_db),
+):
+    """Attach/replace the photograph on one of this kitchen's dishes."""
+    chef = await _require_chef(db, payload["sub"])
+    return await _store_dish_photo(db, chef.chef_phone, file, menu_item_id)
 
 
 @router.patch("/me/kitchen")

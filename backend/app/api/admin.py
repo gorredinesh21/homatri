@@ -18,14 +18,24 @@ import hashlib
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Response, status
+from fastapi import APIRouter, Cookie, Depends, File, Header, HTTPException, Response, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy import func, select, update
 
+from backend.app.core.ids import generate_id
 from backend.app.db.session import SessionFactory
 from backend.app.executors.master import execute_meal_window_lock_and_creation
 from backend.app.models.admin import AdminActivityLog, AdminUser
-from backend.app.models.chef import ChefProfile
+from backend.app.models.chef import (
+    ChefCategoryAssignment,
+    ChefDailyInventory,
+    ChefMenuCategory,
+    ChefMenuItem,
+    ChefProfile,
+)
+from backend.app.services import menu as menu_service
+from backend.app.services.kitchens import menu_card
+from backend.app.services.media_storage import save_dish_image
 from backend.app.models.customer import CustomerOrder
 from backend.app.models.driver import DriverProfile
 from backend.app.models.shared import ConversationMessage
@@ -549,36 +559,535 @@ async def list_orders(
 
 @router.get("/chefs/{chef_phone}/menu")
 async def get_chef_menu(chef_phone: str, current_admin: dict[str, Any] = Depends(get_current_admin)):
-    """Full menu of a chef for the admin portal, incl. archived items."""
-    from backend.app.models.chef import ChefMenuItem
-
+    """Full menu of a chef for the admin portal, incl. archived items, grouped by category."""
     async with SessionFactory() as session:
         chef = await session.get(ChefProfile, chef_phone)
         if chef is None or chef.deleted_at is not None:
             raise HTTPException(status_code=404, detail="Chef not found")
+        categories = await menu_service.assigned_categories(session, chef_phone, include_inactive=True)
+        categories_by_id = {c.category_id: c for c in categories}
         res = await session.execute(
             select(ChefMenuItem)
             .where(ChefMenuItem.chef_phone == chef_phone)
             .order_by(ChefMenuItem.is_archived, ChefMenuItem.dish_name)
         )
-        return {
-            "kitchen_name": chef.kitchen_name,
-            "items": [
+        items = []
+        for m in res.scalars():
+            cat = categories_by_id.get(m.category_id) if m.category_id else None
+            items.append(
                 {
                     "menu_item_id": m.menu_item_id,
                     "dish_name": m.dish_name,
                     "description": m.description,
                     "unit_price": float(m.unit_price),
+                    "category_id": m.category_id,
+                    "category_name": cat.name if cat else None,
                     "meal_type": m.meal_type,
                     "dietary_tag": m.dietary_tag,
                     "spice_level": m.spice_level,
                     "max_availability": m.max_availability,
+                    "image_url": m.image_url,
                     "is_available": m.is_available,
                     "is_archived": m.is_archived,
                 }
-                for m in res.scalars()
+            )
+        return {
+            "kitchen_name": chef.kitchen_name,
+            "categories": [
+                {**menu_service.serialize_category(c, chef_phone=chef_phone), "is_assigned": True}
+                for c in categories
             ],
+            "items": items,
         }
+
+
+# =============================================================================
+# MENU CATEGORY MANAGEMENT (admin-controlled catalog)
+# =============================================================================
+
+class CategoryIn(BaseModel):
+    name: str
+    description: str | None = None
+    image_url: str | None = None
+    display_order: int = 0
+    is_active: bool = True
+    pricing_type: str = "STANDARD"
+    combo_discount: float | None = None
+    combo_serves: int | None = None
+
+
+class CategoryPatch(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    image_url: str | None = None
+    display_order: int | None = None
+    is_active: bool | None = None
+    pricing_type: str | None = None
+    combo_discount: float | None = None
+    combo_serves: int | None = None
+
+
+def _validate_combo_fields(pricing_type: str, combo_discount, combo_serves) -> None:
+    if pricing_type not in {"STANDARD", "PAIR_COMBO"}:
+        raise HTTPException(status_code=400, detail="pricing_type must be STANDARD or PAIR_COMBO")
+    if pricing_type == "PAIR_COMBO":
+        if combo_discount is None or combo_discount <= 0:
+            raise HTTPException(status_code=400, detail="A PAIR_COMBO category needs a positive combo_discount")
+        if combo_serves is None or combo_serves < 2:
+            raise HTTPException(status_code=400, detail="A PAIR_COMBO category needs combo_serves (>= 2)")
+
+
+@router.get("/categories")
+async def list_categories(current_admin: dict[str, Any] = Depends(get_current_admin)):
+    """Every menu category with dish counts and chef-assignment counts."""
+    from decimal import Decimal
+
+    async with SessionFactory() as session:
+        cats = (
+            await session.execute(select(ChefMenuCategory).order_by(ChefMenuCategory.display_order, ChefMenuCategory.name))
+        ).scalars().all()
+        dish_counts = dict(
+            (
+                await session.execute(
+                    select(ChefMenuItem.category_id, func.count())
+                    .where(ChefMenuItem.is_archived.is_(False), ChefMenuItem.category_id.is_not(None))
+                    .group_by(ChefMenuItem.category_id)
+                )
+            ).all()
+        )
+        assignment_counts = dict(
+            (
+                await session.execute(
+                    select(ChefCategoryAssignment.category_id, func.count())
+                    .where(ChefCategoryAssignment.is_active.is_(True))
+                    .group_by(ChefCategoryAssignment.category_id)
+                )
+            ).all()
+        )
+        out = []
+        for c in cats:
+            card = menu_service.serialize_category(c)
+            card["dishCount"] = int(dish_counts.get(c.category_id, 0))
+            card["chefCount"] = int(assignment_counts.get(c.category_id, 0))
+            out.append(card)
+        return {"categories": out}
+
+
+@router.post("/categories")
+async def create_category(body: CategoryIn, current_admin: dict[str, Any] = Depends(get_current_admin)):
+    from decimal import Decimal
+
+    async with SessionFactory() as session:
+        existing = (
+            await session.execute(select(ChefMenuCategory).where(ChefMenuCategory.name == body.name.strip()))
+        ).scalar_one_or_none()
+        if existing:
+            raise HTTPException(status_code=400, detail="A category with this name already exists.")
+        _validate_combo_fields(body.pricing_type, body.combo_discount, body.combo_serves)
+        cat = ChefMenuCategory(
+            category_id=generate_id("cat"),
+            name=body.name.strip(),
+            description=body.description,
+            image_url=body.image_url,
+            display_order=body.display_order,
+            is_active=body.is_active,
+            pricing_type=body.pricing_type,
+            combo_discount=Decimal(str(body.combo_discount)) if body.combo_discount is not None else None,
+            combo_serves=body.combo_serves,
+        )
+        session.add(cat)
+        await session.commit()
+        await session.refresh(cat)
+        return menu_service.serialize_category(cat)
+
+
+@router.patch("/categories/{category_id}")
+async def update_category(
+    category_id: str, body: CategoryPatch, current_admin: dict[str, Any] = Depends(get_current_admin)
+):
+    from decimal import Decimal
+
+    async with SessionFactory() as session:
+        cat = await session.get(ChefMenuCategory, category_id)
+        if cat is None:
+            raise HTTPException(status_code=404, detail="Category not found")
+        data = body.model_dump(exclude_unset=True)
+        if "name" in data and data["name"]:
+            clash = (
+                await session.execute(
+                    select(ChefMenuCategory).where(
+                        ChefMenuCategory.name == data["name"].strip(),
+                        ChefMenuCategory.category_id != category_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if clash:
+                raise HTTPException(status_code=400, detail="Another category with this name already exists.")
+            cat.name = data["name"].strip()
+        for field in ("description", "image_url"):
+            if field in data:
+                setattr(cat, field, data[field])
+        if "display_order" in data and data["display_order"] is not None:
+            cat.display_order = data["display_order"]
+        if "is_active" in data and data["is_active"] is not None:
+            cat.is_active = data["is_active"]
+        pricing_type = data.get("pricing_type", cat.pricing_type)
+        combo_discount = data.get("combo_discount", float(cat.combo_discount) if cat.combo_discount is not None else None)
+        combo_serves = data.get("combo_serves", cat.combo_serves)
+        _validate_combo_fields(pricing_type, combo_discount, combo_serves)
+        cat.pricing_type = pricing_type
+        cat.combo_discount = Decimal(str(combo_discount)) if combo_discount is not None else None
+        cat.combo_serves = combo_serves
+        await session.commit()
+        await session.refresh(cat)
+        return menu_service.serialize_category(cat)
+
+
+@router.delete("/categories/{category_id}")
+async def delete_category(
+    category_id: str,
+    mode: str | None = None,
+    reassign_to: str | None = None,
+    current_admin: dict[str, Any] = Depends(get_current_admin),
+):
+    """Delete a category safely — its dishes are never silently destroyed.
+
+    If the category still has live (non-archived) dishes, the caller must pick:
+      ?mode=reassign&reassign_to=<category_id>  -> move dishes to another category
+      ?mode=archive                             -> archive the dishes (hidden, history kept)
+    Without a mode the call returns 409 with the blocking dish count.
+    """
+    async with SessionFactory() as session:
+        cat = await session.get(ChefMenuCategory, category_id)
+        if cat is None:
+            raise HTTPException(status_code=404, detail="Category not found")
+        live_dishes = (
+            (await session.execute(
+                select(ChefMenuItem).where(
+                    ChefMenuItem.category_id == category_id, ChefMenuItem.is_archived.is_(False)
+                )
+            ))
+            .scalars()
+            .all()
+        )
+        if live_dishes:
+            if mode == "reassign":
+                target = await session.get(ChefMenuCategory, reassign_to or "")
+                if target is None or not target.is_active or target.pricing_type != "STANDARD":
+                    raise HTTPException(status_code=400, detail="reassign_to must be an active STANDARD category")
+                for d in live_dishes:
+                    d.category_id = target.category_id
+            elif mode == "archive":
+                for d in live_dishes:
+                    d.is_archived = True
+                    d.is_available = False
+            else:
+                return {
+                    "deleted": False,
+                    "blocked": True,
+                    "liveDishCount": len(live_dishes),
+                    "detail": (
+                        f"{cat.name} still has {len(live_dishes)} live dish(es). "
+                        "Pass mode=reassign&reassign_to=<categoryId> to move them, or mode=archive to archive them."
+                    ),
+                }
+        from sqlalchemy import delete as sa_delete
+
+        await session.execute(
+            sa_delete(ChefCategoryAssignment).where(ChefCategoryAssignment.category_id == category_id)
+        )
+        await session.delete(cat)
+        await session.commit()
+        return {"deleted": True, "blocked": False, "reassignedTo": reassign_to if mode == "reassign" else None}
+
+
+class AssignIn(BaseModel):
+    chef_phones: list[str]
+
+
+@router.post("/categories/{category_id}/chefs")
+async def assign_category(
+    category_id: str, body: AssignIn, current_admin: dict[str, Any] = Depends(get_current_admin)
+):
+    """Assign a category to one or more chefs (idempotent for existing pairs)."""
+    async with SessionFactory() as session:
+        cat = await session.get(ChefMenuCategory, category_id)
+        if cat is None:
+            raise HTTPException(status_code=404, detail="Category not found")
+        assigned = 0
+        skipped: list[str] = []
+        for phone in body.chef_phones:
+            chef = await session.get(ChefProfile, phone)
+            if chef is None or chef.deleted_at is not None:
+                raise HTTPException(status_code=404, detail=f"Chef {phone} not found")
+            existing = (
+                await session.execute(
+                    select(ChefCategoryAssignment).where(
+                        ChefCategoryAssignment.chef_phone == phone,
+                        ChefCategoryAssignment.category_id == category_id,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing:
+                if not existing.is_active:
+                    existing.is_active = True
+                    assigned += 1
+                else:
+                    skipped.append(phone)
+                continue
+            session.add(ChefCategoryAssignment(chef_phone=phone, category_id=category_id))
+            assigned += 1
+        await session.commit()
+        return {"assigned": assigned, "alreadyAssigned": skipped}
+
+
+@router.delete("/categories/{category_id}/chefs/{chef_phone}")
+async def unassign_category(
+    category_id: str,
+    chef_phone: str,
+    mode: str | None = None,
+    reassign_to: str | None = None,
+    current_admin: dict[str, Any] = Depends(get_current_admin),
+):
+    """Remove a category from a chef's menu. If the chef still has live dishes in
+    it, the same safe-delete rules as category deletion apply (409 unless the
+    dishes are reassigned or archived)."""
+    async with SessionFactory() as session:
+        assignment = (
+            await session.execute(
+                select(ChefCategoryAssignment).where(
+                    ChefCategoryAssignment.chef_phone == chef_phone,
+                    ChefCategoryAssignment.category_id == category_id,
+                )
+            )
+        ).scalar_one_or_none()
+        if assignment is None:
+            raise HTTPException(status_code=404, detail="This category is not assigned to that chef")
+        live_dishes = (
+            (await session.execute(
+                select(ChefMenuItem).where(
+                    ChefMenuItem.chef_phone == chef_phone,
+                    ChefMenuItem.category_id == category_id,
+                    ChefMenuItem.is_archived.is_(False),
+                )
+            ))
+            .scalars()
+            .all()
+        )
+        if live_dishes:
+            if mode == "reassign":
+                target = await session.get(ChefMenuCategory, reassign_to or "")
+                if target is None or not target.is_active or target.pricing_type != "STANDARD":
+                    raise HTTPException(status_code=400, detail="reassign_to must be an active STANDARD category")
+                for d in live_dishes:
+                    d.category_id = target.category_id
+            elif mode == "archive":
+                for d in live_dishes:
+                    d.is_archived = True
+                    d.is_available = False
+            else:
+                return {
+                    "deleted": False,
+                    "blocked": True,
+                    "liveDishCount": len(live_dishes),
+                    "detail": (
+                        f"This chef still has {len(live_dishes)} live dish(es) in the category. "
+                        "Pass mode=reassign&reassign_to=<categoryId> to move them, or mode=archive."
+                    ),
+                }
+        await session.delete(assignment)
+        await session.commit()
+        return {"deleted": True, "blocked": False}
+
+
+# =============================================================================
+# ADMIN DISH MANAGEMENT (any chef's menu, incl. images)
+# =============================================================================
+
+class AdminMenuIn(BaseModel):
+    dish_name: str
+    category_id: str
+    description: str | None = None
+    unit_price: float
+    meal_type: str = "LUNCH"
+    dietary_tag: str | None = "VEG"
+    is_available: bool = True
+    image_url: str | None = None
+    max_availability: int = 10
+
+
+class AdminMenuPatch(BaseModel):
+    dish_name: str | None = None
+    category_id: str | None = None
+    description: str | None = None
+    unit_price: float | None = None
+    meal_type: str | None = None
+    dietary_tag: str | None = None
+    is_available: bool | None = None
+    image_url: str | None = None
+    max_availability: int | None = None
+
+
+async def _admin_require_chef(session, chef_phone: str) -> ChefProfile:
+    chef = await session.get(ChefProfile, chef_phone)
+    if chef is None or chef.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Chef not found")
+    return chef
+
+
+@router.post("/chefs/{chef_phone}/menu")
+async def admin_create_menu_item(
+    chef_phone: str, body: AdminMenuIn, current_admin: dict[str, Any] = Depends(get_current_admin)
+):
+    """Add a dish to any chef's menu (admin). Category must be assigned to that chef."""
+    from decimal import Decimal
+
+    async with SessionFactory() as session:
+        await _admin_require_chef(session, chef_phone)
+        try:
+            category = await menu_service.require_assigned_category(session, chef_phone, body.category_id)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        meal = body.meal_type.upper()
+        if meal not in {"LUNCH", "DINNER", "BOTH"}:
+            raise HTTPException(status_code=400, detail="meal_type must be LUNCH, DINNER, or BOTH")
+        item = ChefMenuItem(
+            menu_item_id=generate_id("itm"),
+            chef_phone=chef_phone,
+            category_id=category.category_id,
+            dish_name=body.dish_name.strip(),
+            description=body.description,
+            unit_price=Decimal(str(body.unit_price)),
+            meal_type=meal,
+            dietary_tag=body.dietary_tag,
+            is_available=body.is_available,
+            image_url=body.image_url,
+            max_availability=body.max_availability,
+        )
+        session.add(item)
+        await session.commit()
+        await session.refresh(item)
+        return {"item": menu_card(item, category), "status": "SUCCESS"}
+
+
+@router.patch("/menu/{menu_item_id}")
+async def admin_patch_menu_item(
+    menu_item_id: str, body: AdminMenuPatch, current_admin: dict[str, Any] = Depends(get_current_admin)
+):
+    from decimal import Decimal
+
+    async with SessionFactory() as session:
+        item = await session.get(ChefMenuItem, menu_item_id)
+        if item is None:
+            raise HTTPException(status_code=404, detail="Menu item not found")
+        category = None
+        if body.category_id is not None and body.category_id != item.category_id:
+            try:
+                category = await menu_service.require_assigned_category(session, item.chef_phone, body.category_id)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
+            item.category_id = category.category_id
+        elif item.category_id:
+            category = await session.get(ChefMenuCategory, item.category_id)
+        data = body.model_dump(exclude_unset=True)
+        if "dish_name" in data and data["dish_name"]:
+            item.dish_name = data["dish_name"].strip()
+        if "description" in data:
+            item.description = data["description"]
+        if "unit_price" in data and data["unit_price"] is not None:
+            item.unit_price = Decimal(str(data["unit_price"]))
+        if "meal_type" in data and data["meal_type"]:
+            item.meal_type = data["meal_type"].upper()
+        if "dietary_tag" in data:
+            item.dietary_tag = data["dietary_tag"]
+        if "is_available" in data and data["is_available"] is not None:
+            item.is_available = data["is_available"]
+        if "image_url" in data:
+            item.image_url = data["image_url"]
+        if "max_availability" in data and data["max_availability"] is not None:
+            item.max_availability = data["max_availability"]
+        await session.commit()
+        return {"item": menu_card(item, category), "status": "SUCCESS"}
+
+
+@router.delete("/menu/{menu_item_id}")
+async def admin_delete_menu_item(
+    menu_item_id: str,
+    mode: str | None = None,
+    current_admin: dict[str, Any] = Depends(get_current_admin),
+):
+    """Delete/archive a dish on any chef's menu (same rules as the chef's own delete)."""
+    from backend.app.models.customer import CustomerOrderItem
+
+    async with SessionFactory() as session:
+        item = await session.get(ChefMenuItem, menu_item_id)
+        if item is None or item.is_archived:
+            raise HTTPException(status_code=404, detail="Menu item not found")
+        order_refs = (
+            await session.execute(
+                select(func.count())
+                .select_from(CustomerOrderItem)
+                .where(CustomerOrderItem.menu_item_id == menu_item_id)
+            )
+        ).scalar_one()
+        if order_refs == 0:
+            from sqlalchemy import delete as sa_delete
+
+            await session.execute(
+                sa_delete(ChefDailyInventory).where(ChefDailyInventory.menu_item_id == menu_item_id)
+            )
+            await session.delete(item)
+            await session.commit()
+            return {"deleted": True, "archived": False}
+        item.is_archived = True
+        item.is_available = False
+        from sqlalchemy import delete as sa_delete
+
+        await session.execute(
+            sa_delete(ChefDailyInventory).where(ChefDailyInventory.menu_item_id == menu_item_id)
+        )
+        await session.commit()
+        return {"deleted": True, "archived": True}
+
+
+@router.post("/chefs/{chef_phone}/menu/image")
+async def admin_upload_dish_image(
+    chef_phone: str,
+    file: UploadFile = File(...),
+    current_admin: dict[str, Any] = Depends(get_current_admin),
+):
+    """Stage a dish photo for a chef's menu (admin add-dish flow)."""
+    async with SessionFactory() as session:
+        await _admin_require_chef(session, chef_phone)
+        data = await file.read()
+        try:
+            url = await save_dish_image(chef_phone, data, file.content_type, file.filename)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        return {"imageUrl": url, "menuItemId": None}
+
+
+@router.post("/chefs/{chef_phone}/menu/{menu_item_id}/image")
+async def admin_replace_dish_image(
+    chef_phone: str,
+    menu_item_id: str,
+    file: UploadFile = File(...),
+    current_admin: dict[str, Any] = Depends(get_current_admin),
+):
+    """Attach/replace the photo on one dish (admin)."""
+    async with SessionFactory() as session:
+        await _admin_require_chef(session, chef_phone)
+        item = await session.get(ChefMenuItem, menu_item_id)
+        if item is None or item.chef_phone != chef_phone:
+            raise HTTPException(status_code=404, detail="Menu item not found")
+        data = await file.read()
+        try:
+            url = await save_dish_image(chef_phone, data, file.content_type, file.filename)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        item.image_url = url
+        await session.commit()
+        return {"imageUrl": url, "menuItemId": menu_item_id}
 
 
 @router.post("/clear-all-data")
