@@ -54,7 +54,7 @@ def _save_local(chef_phone: str, ext: str, data: bytes) -> str:
     return f"/media/dishes/{chef_phone}/{name}"
 
 
-async def _save_gcs(chef_phone: str, ext: str, data: bytes) -> str:
+async def _save_gcs(chef_phone: str, ext: str, data: bytes, content_type: str | None = None) -> str:
     bucket = settings.media_gcs_bucket
     object_name = f"dishes/{chef_phone}/{uuid.uuid4().hex}{ext}"
     # Import lazily: google-auth is a hard dep, httpx powers the WhatsApp calls.
@@ -75,7 +75,7 @@ async def _save_gcs(chef_phone: str, ext: str, data: bytes) -> str:
             content=data,
             headers={
                 "Authorization": f"Bearer {creds.token}",
-                "Content-Type": "application/octet-stream",
+                "Content-Type": content_type or "application/octet-stream",
             },
         )
     if resp.status_code not in (200, 201):
@@ -88,7 +88,7 @@ async def save_dish_image(chef_phone: str, data: bytes, content_type: str | None
     ext = validate_image(data, content_type, filename)
     if settings.media_gcs_bucket:
         try:
-            return await _save_gcs(chef_phone, ext, data)
+            return await _save_gcs(chef_phone, ext, data, content_type=(content_type or "").split(";")[0].strip() or None)
         except Exception:
             # A misconfigured bucket must not take dish saving down — fall back to
             # local storage and log loudly so ops sees it.
